@@ -1,0 +1,16 @@
+{
+  "name": "nas-bridge-storage-client",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@roamhq/wrtc": "^0.9.1",
+    "dotenv": "^16.4.7",
+    "mime-types": "^2.1.35",
+    "ws": "^8.18.1"
+  }
+}

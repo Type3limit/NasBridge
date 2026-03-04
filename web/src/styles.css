@@ -1,0 +1,449 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: var(--colorNeutralBackground2);
+}
+
+.page {
+  min-height: 100%;
+  padding: 20px;
+}
+
+.shell {
+  max-width: 1380px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.authShell {
+  max-width: 460px;
+}
+
+.surfaceCard {
+  border: 1px solid var(--colorNeutralStroke2);
+  background: var(--colorNeutralBackground1);
+  border-radius: 14px;
+}
+
+.panelCard {
+  padding: 12px;
+}
+
+.modernHeader {
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: 14px;
+  background: var(--colorNeutralBackground1);
+  padding: 14px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.onlineBadgeBtn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+}
+
+.contentLayout {
+  display: block;
+}
+
+.filePanel {
+  min-width: 0;
+}
+
+.fileCenterHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.uploadRow {
+  background: var(--colorNeutralBackground2);
+  border-style: dashed;
+}
+
+.uploadProgressBar {
+  width: 100%;
+  height: 7px;
+  border-radius: 99px;
+  background: var(--colorNeutralBackground4);
+  overflow: hidden;
+}
+
+.uploadProgressInner {
+  height: 100%;
+  background: var(--colorBrandBackground);
+  transition: width 0.2s ease;
+}
+
+.fileList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+  max-height: 640px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.fileRow {
+  display: grid;
+  grid-template-columns: 110px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: 10px;
+  padding: 10px;
+  background: var(--colorNeutralBackground1);
+}
+
+.fileMeta {
+  min-width: 0;
+}
+
+.fileName {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fileSub {
+  color: var(--colorNeutralForeground3);
+  font-size: 12px;
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.thumbButton,
+.gridThumb {
+  border: 1px solid var(--colorNeutralStroke2);
+  background: var(--colorNeutralBackground3);
+  border-radius: 8px;
+  cursor: pointer;
+  padding: 0;
+  overflow: hidden;
+}
+
+.thumbButton {
+  width: 110px;
+  height: 70px;
+}
+
+.gridThumb {
+  width: 100%;
+  height: 120px;
+}
+
+.thumbImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.thumbFallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--colorNeutralForeground3);
+}
+
+.fileGrid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.gridItem {
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.uploadGridItem {
+  border-style: dashed;
+}
+
+.gridName {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hiddenInput {
+  display: none;
+}
+
+.uploadChooser {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: 8px;
+  background: var(--colorNeutralBackground2);
+}
+
+.diagRow {
+  margin-top: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.diagList {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.diagItem {
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.diagHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.preview {
+  width: 100%;
+  max-height: 72vh;
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: 8px;
+  object-fit: contain;
+  background: var(--colorNeutralBackground6);
+}
+
+.previewAudio {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.previewFrame {
+  width: 100%;
+  height: 72vh;
+  margin-top: 8px;
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: 8px;
+}
+
+.unsupportedPreview {
+  margin-top: 10px;
+  border: 1px dashed var(--colorNeutralStroke2);
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--colorNeutralBackground2);
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+  padding: 20px;
+}
+
+.modalWindow {
+  width: min(900px, 100%);
+  max-height: 85vh;
+  overflow: auto;
+  background: var(--colorNeutralBackground1);
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.uploadModal {
+  width: min(560px, 100%);
+}
+
+.dangerModal {
+  width: min(560px, 100%);
+  border-color: var(--colorPaletteRedBorderActive);
+}
+
+.previewModal {
+  width: min(1220px, 100%);
+  padding: 0;
+  overflow: hidden;
+}
+
+.previewTopBar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--colorNeutralStroke2);
+  background: var(--colorNeutralBackground2);
+}
+
+.playerSurface {
+  min-height: 420px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  background: var(--colorNeutralBackground6);
+}
+
+.previewMetaBar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px 14px;
+  border-top: 1px solid var(--colorNeutralStroke2);
+  background: var(--colorNeutralBackground2);
+}
+
+.previewMetaBar .fui-Caption1 {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.previewDebugPanel {
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: 10px;
+  background: var(--colorNeutralBackground2);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.previewDebugRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.modalHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.adminGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.simpleRow {
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: 10px;
+  padding: 10px;
+  margin-top: 8px;
+}
+
+.withActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+@media (max-width: 1120px) {
+  .adminGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .page {
+    padding: 12px;
+  }
+
+  .modernHeader {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .fileRow {
+    grid-template-columns: 1fr;
+  }
+
+  .thumbButton {
+    width: 100%;
+    height: 130px;
+  }
+
+  .actions {
+    justify-content: flex-start;
+  }
+
+  .fileCenterHeader {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .unsupportedPreview {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .playerSurface {
+    min-height: 280px;
+  }
+
+  .previewMetaBar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

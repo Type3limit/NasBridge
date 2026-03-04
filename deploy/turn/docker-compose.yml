@@ -1,0 +1,26 @@
+services:
+  coturn:
+    image: coturn/coturn:4.6.3
+    container_name: nas-bridge-coturn
+    restart: unless-stopped
+    # On Linux: network_mode: host is ideal (no NAT between container and host).
+    # On Windows/Docker Desktop: host networking does NOT bind to the Windows NIC,
+    # only to the WSL2 VM loopback.  Use explicit port mappings instead so that
+    # Docker Desktop's port-forwarding exposes the ports on the Windows LAN IP.
+    ports:
+      - "${TURN_PORT:-3478}:${TURN_PORT:-3478}/udp"
+      - "${TURN_PORT:-3478}:${TURN_PORT:-3478}/tcp"
+      # Relay port range – must match --min-port/--max-port below
+      - "49152-49200:49152-49200/udp"
+    command:
+      - -n
+      - --log-file=stdout
+      - --realm=${TURN_REALM:-nas-bridge.local}
+      - --lt-cred-mech
+      - --user=${TURN_USERNAME:-nasuser}:${TURN_PASSWORD:-naspass123}
+      - --fingerprint
+      - --no-multicast-peers
+      - --external-ip=${TURN_EXTERNAL_IP}
+      - --listening-port=${TURN_PORT:-3478}
+      - --min-port=49152
+      - --max-port=49200
