@@ -56,6 +56,7 @@ require_cmd npm
 
 # ---- Detect LAN IP ----
 LAN_IP="${LAN_IP:-}"
+PUBLIC_IP="${PUBLIC_IP:-}"
 if [[ -z "$LAN_IP" ]]; then
   LAN_IP=$(hostname -I | tr ' ' '\n' | grep -v '^127\.' | head -1 || true)
 fi
@@ -64,6 +65,9 @@ if [[ -z "$LAN_IP" ]]; then
   exit 1
 fi
 log "Using LAN IP: $LAN_IP"
+if [[ -n "$PUBLIC_IP" ]]; then
+  log "Using PUBLIC IP: $PUBLIC_IP"
+fi
 
 # ---- Prepare env files ----
 log "Preparing .env files..."
@@ -79,18 +83,26 @@ sed -i "s#^SERVER_BASE_URL=.*#SERVER_BASE_URL=http://localhost:${SERVER_PORT}#" 
 sed -i "s#^VITE_SERVER_BASE_URL=.*#VITE_SERVER_BASE_URL=http://${LAN_IP}:${SERVER_PORT}#" "$WEB_ENV" || true
 
 # TURN envs
-sed -i "s#^TURN_EXTERNAL_IP=.*#TURN_EXTERNAL_IP=${LAN_IP}#" "$TURN_ENV" || true
+TURN_EXTERNAL_IP_VALUE="$LAN_IP"
+if [[ -n "$PUBLIC_IP" ]]; then
+  TURN_EXTERNAL_IP_VALUE="$PUBLIC_IP"
+fi
+sed -i "s#^TURN_EXTERNAL_IP=.*#TURN_EXTERNAL_IP=${TURN_EXTERNAL_IP_VALUE}#" "$TURN_ENV" || true
 sed -i "s#^TURN_REALM=.*#TURN_REALM=${TURN_REALM}#" "$TURN_ENV" || true
 sed -i "s#^TURN_USERNAME=.*#TURN_USERNAME=${TURN_USERNAME}#" "$TURN_ENV" || true
 sed -i "s#^TURN_PASSWORD=.*#TURN_PASSWORD=${TURN_PASSWORD}#" "$TURN_ENV" || true
 sed -i "s#^TURN_PORT=.*#TURN_PORT=${TURN_PORT}#" "$TURN_ENV" || true
 
-sed -i "s#^VITE_TURN_URL=.*#VITE_TURN_URL=turn:${LAN_IP}:${TURN_PORT}#" "$WEB_ENV" || true
+TURN_URL_HOST="$LAN_IP"
+if [[ -n "$PUBLIC_IP" ]]; then
+  TURN_URL_HOST="$PUBLIC_IP"
+fi
+sed -i "s#^VITE_TURN_URL=.*#VITE_TURN_URL=turn:${TURN_URL_HOST}:${TURN_PORT}#" "$WEB_ENV" || true
 sed -i "s#^VITE_TURN_USERNAME=.*#VITE_TURN_USERNAME=${TURN_USERNAME}#" "$WEB_ENV" || true
 sed -i "s#^VITE_TURN_CREDENTIAL=.*#VITE_TURN_CREDENTIAL=${TURN_PASSWORD}#" "$WEB_ENV" || true
 
 if [[ "$START_STORAGE_CLIENT" == "true" ]]; then
-  sed -i "s#^TURN_URL=.*#TURN_URL=turn:${LAN_IP}:${TURN_PORT}#" "$CLIENT_ENV" || true
+  sed -i "s#^TURN_URL=.*#TURN_URL=turn:${TURN_URL_HOST}:${TURN_PORT}#" "$CLIENT_ENV" || true
   sed -i "s#^TURN_USERNAME=.*#TURN_USERNAME=${TURN_USERNAME}#" "$CLIENT_ENV" || true
   sed -i "s#^TURN_CREDENTIAL=.*#TURN_CREDENTIAL=${TURN_PASSWORD}#" "$CLIENT_ENV" || true
 fi
@@ -144,8 +156,12 @@ if [[ "$START_STORAGE_CLIENT" == "true" ]]; then
 fi
 
 log "Done."
-log "Server: http://${LAN_IP}:${SERVER_PORT}"
-log "TURN: turn:${LAN_IP}:${TURN_PORT} (relay ${TURN_MIN_PORT}-${TURN_MAX_PORT})"
+SERVER_HOST="$LAN_IP"
+if [[ -n "$PUBLIC_IP" ]]; then
+  SERVER_HOST="$PUBLIC_IP"
+fi
+log "Server: http://${SERVER_HOST}:${SERVER_PORT}"
+log "TURN: turn:${TURN_URL_HOST}:${TURN_PORT} (relay ${TURN_MIN_PORT}-${TURN_MAX_PORT})"
 if [[ "$START_STORAGE_CLIENT" == "true" ]]; then
   log "PIDs: server=${SERVER_PID} client=${CLIENT_PID}"
   log "Logs: .run/server.log .run/storage-client.log"
