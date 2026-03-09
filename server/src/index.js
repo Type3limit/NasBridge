@@ -1,5 +1,6 @@
 import "dotenv/config";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
 import bcrypt from "bcryptjs";
@@ -16,6 +17,10 @@ import {
   setClientStatus,
   replaceClientFiles,
   listFiles,
+  listColumns,
+  createColumn,
+  upsertFileMeta,
+  getFileMetaMap,
   listFavoritesByUser,
   toggleFavorite,
   listUploadJobs,
@@ -101,8 +106,30 @@ app.get("/api/me", requireAuth, (req, res) => {
 app.get("/api/files", requireAuth, (req, res) => {
   const files = listFiles();
   const favorites = new Set(listFavoritesByUser(req.auth.sub));
-  const enriched = files.map((file) => ({ ...file, favorite: favorites.has(file.id) }));
+  const metaMap = getFileMetaMap();
+  const enriched = files.map((file) => {
+    const meta = metaMap.get(file.id) || {};
+    return {
+      ...file,
+      favorite: favorites.has(file.id),
+      columnId: meta.columnId || "",
+      folderPath: meta.folderPath || ""
+    };
+  });
   return res.json({ files: enriched });
+});
+
+app.get("/api/columns", requireAuth, (req, res) => {
+  return res.json({ columns: listColumns() });
+});
+
+app.post("/api/columns", requireAuth, (req, res) => {
+  try {
+    const column = createColumn({ name: req.body?.name });
+    return res.json({ column });
+  } catch (error) {
+    return res.status(400).json({ message: error.message || "invalid column" });
+  }
 });
 
 app.get("/api/clients", requireAuth, (_, res) => {
@@ -145,9 +172,13 @@ app.get("/api/upload-jobs", requireAuth, (req, res) => {
 });
 
 app.post("/api/upload-jobs/start", requireAuth, (req, res) => {
-  const { clientId, fileName, relativePath, size, mimeType } = req.body || {};
+  const { clientId, fileName, relativePath, size, mimeType, columnId, folderPath } = req.body || {};
   if (!clientId || !relativePath || !fileName) {
     return res.status(400).json({ message: "clientId/fileName/relativePath required" });
+  }
+  const fileId = `${clientId}:${relativePath}`;
+  if (columnId || folderPath) {
+    upsertFileMeta(fileId, { columnId: columnId || "", folderPath: folderPath || "" });
   }
   const job = createUploadJob({
     createdByUserId: req.auth.sub,
@@ -265,7 +296,9 @@ app.post("/api/dev/upload-relay", requireAuth, upload.single("file"), (req, res)
   });
 });
 
-const webDist = path.resolve(process.cwd(), "web/dist");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const webDist = path.resolve(__dirname, "..", "..", "web", "dist");
 app.use(express.static(webDist));
 app.get("*", (req, res, next) => {
   if (req.path.startsWith("/api/")) {

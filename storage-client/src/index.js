@@ -106,21 +106,22 @@ function buildCodecArgs(codec, quality = "preview") {
   const isFull = quality === "full";
   const isHls = quality === "hls";
   if (codec === "h264_nvenc") {
+    const targetBitrate = isHls ? "2200k" : "1800k";
+    const maxrate = isHls ? "3000k" : "2200k";
+    const bufsize = isHls ? "6000k" : "4400k";
     return [
       "-c:v",
       "h264_nvenc",
       "-preset",
-      "p5",
+      "p4",
       "-rc",
       "vbr",
-      "-cq",
-      isFull ? "23" : "28",
       "-b:v",
-      isHls ? "2200k" : "1800k",
+      targetBitrate,
       "-maxrate",
-      isHls ? "3000k" : "2200k",
+      maxrate,
       "-bufsize",
-      isHls ? "6000k" : "4400k"
+      bufsize
     ];
   }
   if (codec === "h264_qsv") {
@@ -1003,6 +1004,18 @@ function wireDataChannel(channel) {
     }
   }
 
+  function findUploadCtxByRequestId(requestId) {
+    if (!requestId) {
+      return null;
+    }
+    for (const [label, ctx] of state.uploads.entries()) {
+      if (ctx?.requestId === requestId) {
+        return { label, ctx };
+      }
+    }
+    return null;
+  }
+
   async function waitForDrain(context = "drain") {
     const highWaterMark = 4 * 1024 * 1024;
     const lowWaterMark = 512 * 1024;
@@ -1053,6 +1066,28 @@ function wireDataChannel(channel) {
 
     if (message.type === "ping") {
       safeSend(JSON.stringify({ type: "pong", ts: message.ts }), "pong");
+      return;
+    }
+
+    if (message.type === "put-file-cancel") {
+      const entry = findUploadCtxByRequestId(message.requestId) || (state.uploads.has(channel.label)
+        ? { label: channel.label, ctx: state.uploads.get(channel.label) }
+        : null);
+      if (!entry?.ctx) {
+        return;
+      }
+      try {
+        entry.ctx.stream?.destroy();
+      } catch {
+      }
+      state.uploads.delete(entry.label);
+      if (entry.ctx.path) {
+        fs.promises.rm(entry.ctx.path, { force: true }).catch(() => {});
+      }
+      safeSend(
+        JSON.stringify({ type: "put-file-cancelled", requestId: entry.ctx.requestId, path: message.path || "" }),
+        "put-file-cancelled"
+      );
       return;
     }
 
@@ -1296,12 +1331,22 @@ function wireDataChannel(channel) {
         const absolute = safeJoin(storageRoot, message.path);
         await fs.promises.mkdir(path.dirname(absolute), { recursive: true });
         const stream = fs.createWriteStream(absolute);
-        state.uploads.set(channel.label, {
+        const ctx = {
           requestId: message.requestId,
           path: absolute,
           stream,
           expected: Number(message.size || 0),
           received: 0
+        };
+        state.uploads.set(channel.label, ctx);
+        stream.once("error", (error) => {
+          logWarn("upload-stream-error", message.requestId, error.message || error);
+          state.uploads.delete(channel.label);
+          safeSend(
+            JSON.stringify({ type: "error", requestId: message.requestId, message: error.message }),
+            "put-file-stream-error"
+          );
+          fs.promises.rm(absolute, { force: true }).catch(() => {});
         });
         safeSend(JSON.stringify({ type: "put-file-ack", requestId: message.requestId, path: message.path }), "put-file-ack");
       } catch (error) {
@@ -1348,6 +1393,10 @@ function wireDataChannel(channel) {
       logInfo("[dc] recv delete-file", channel.label, message.requestId, message.path);
       try {
         const absolute = safeJoin(storageRoot, message.path);
+        const uploading = [...state.uploads.values()].some((ctx) => ctx?.path === absolute);
+        if (uploading) {
+          throw new Error("file is uploading");
+        }
         await fs.promises.rm(absolute, { force: true });
         await syncFiles();
         safeSend(JSON.stringify({ type: "delete-file-result", requestId: message.requestId, ok: true }), "delete-file-ok");

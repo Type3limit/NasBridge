@@ -409,6 +409,159 @@ export class P2PBridge {
     }
   }
 
+  startStatsTimer(clientId, pc) {
+    this.collectRouteDiagnostics(clientId, pc);
+    if (this.statsTimers.has(clientId)) {
+      return;
+    }
+    const timer = setInterval(() => {
+      const livePeer = this.peers.get(clientId);
+      if (!livePeer) {
+        clearInterval(timer);
+        this.statsTimers.delete(clientId);
+        return;
+      }
+      this.collectRouteDiagnostics(clientId, livePeer.pc);
+    }, 3000);
+    this.statsTimers.set(clientId, timer);
+  }
+
+  maybeClosePeerAfterChannelStateChange(clientId) {
+    const livePeer = this.peers.get(clientId);
+    if (!livePeer) {
+      return;
+    }
+    const states = Object.values(livePeer.channels || {}).map((ch) => ch?.readyState || "closed");
+    const hasOpenOrConnecting = states.some((state) => state === "open" || state === "connecting");
+    if (hasOpenOrConnecting) {
+      return;
+    }
+    const connState = livePeer.pc?.connectionState;
+    if (connState === "failed" || connState === "closed") {
+      this.closePeer(clientId, true);
+    }
+  }
+
+  bindPeerEvents(clientId, peer) {
+    const pc = peer.pc;
+    let disconnectTimer = null;
+    let restartTimer = null;
+
+    const armRestartTimer = () => {
+      if (!peer.initiator || peer.restartAttempts >= 2) {
+        return;
+      }
+      if (restartTimer) {
+        clearTimeout(restartTimer);
+      }
+      restartTimer = setTimeout(() => {
+        if (pc.connectionState === "connected" || pc.connectionState === "closed" || pc.connectionState === "failed") {
+          return;
+        }
+        this.restartIceAndOffer(clientId, peer).catch(() => {});
+      }, 15000);
+    };
+
+    pc.onicecandidate = (event) => {
+      if (!event.candidate) {
+        this.logInfo("ice-gathering-complete", clientId);
+        return;
+      }
+      const c = event.candidate;
+      this.logInfo("ice-candidate", clientId, c.type, c.protocol, c.address || c.ip || "?", c.port);
+      this.sendSignal(clientId, { kind: "ice", candidate: c }).catch(() => {});
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      this.logInfo("ice-state", clientId, pc.iceConnectionState);
+      this.updateClientDiagnostics(clientId, { iceState: pc.iceConnectionState });
+      if (pc.iceConnectionState === "checking") {
+        armRestartTimer();
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      this.logInfo("conn-state", clientId, pc.connectionState);
+      this.updateClientDiagnostics(clientId, { connectionState: pc.connectionState });
+      if (pc.connectionState === "connected") {
+        if (disconnectTimer) {
+          clearTimeout(disconnectTimer);
+          disconnectTimer = null;
+        }
+        if (restartTimer) {
+          clearTimeout(restartTimer);
+          restartTimer = null;
+        }
+        return;
+      }
+      if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+        this.closePeer(clientId, true);
+        return;
+      }
+      if (pc.connectionState === "disconnected") {
+        if (disconnectTimer) {
+          clearTimeout(disconnectTimer);
+        }
+        disconnectTimer = setTimeout(() => {
+          const livePeer = this.peers.get(clientId);
+          if (livePeer?.pc?.connectionState === "disconnected") {
+            this.closePeer(clientId, true);
+          }
+        }, 8000);
+        armRestartTimer();
+      }
+    };
+
+    this.startStatsTimer(clientId, pc);
+    armRestartTimer();
+  }
+
+  async restartIceAndOffer(clientId, peer) {
+    if (!peer?.pc || peer.pc.connectionState === "closed" || peer.pc.connectionState === "failed") {
+      return;
+    }
+    peer.restartAttempts = (peer.restartAttempts || 0) + 1;
+    this.updateClientDiagnostics(clientId, { lastError: "ICE restart" });
+    this.log("ice-restart", clientId, `attempt=${peer.restartAttempts}`);
+    const offer = await peer.pc.createOffer({ iceRestart: true });
+    await peer.pc.setLocalDescription(offer);
+    await this.sendSignal(clientId, { kind: "offer", sdp: peer.pc.localDescription });
+  }
+
+  initPeer(clientId, { initiator }) {
+    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
+    this.logInfo("peer-create", clientId, "iceServers:", this.iceServers.map((s) => s.urls).flat().join(","));
+    const channels = {};
+    const peer = {
+      pc,
+      channels,
+      ready: Promise.resolve(),
+      createdAt: Date.now(),
+      initiator: Boolean(initiator),
+      restartAttempts: 0
+    };
+    this.peers.set(clientId, peer);
+    this.updateClientDiagnostics(clientId, { iceState: "connecting" });
+    this.bindPeerEvents(clientId, peer);
+
+    if (initiator) {
+      for (const name of this.channelNames) {
+        channels[name] = pc.createDataChannel(`nas-${name}`);
+      }
+      for (const [name, channel] of Object.entries(channels)) {
+        this.wireChannel(clientId, name, channel);
+      }
+    } else {
+      pc.ondatachannel = (event) => {
+        const name = String(event.channel?.label || "").replace(/^nas-/, "") || "control";
+        channels[name] = event.channel;
+        this.wireChannel(clientId, name, event.channel);
+      };
+    }
+
+    return peer;
+  }
+
   generateRequestId() {
     return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
   }
@@ -571,8 +724,14 @@ export class P2PBridge {
           (ch) => ch && (ch.readyState === "open" || ch.readyState === "connecting")
         );
         if (hasLiveChannel) {
-          this.logInfo("peer-cache-hit", clientId, `conn=${connState}`, channelStates.join(","));
-          return peer;
+          const ageMs = Date.now() - (peer.createdAt || 0);
+          if (connState === "connecting" && ageMs > 25000) {
+            this.log("peer-stale-connecting", clientId, `age=${ageMs}ms`, channelStates.join(","));
+            this.closePeer(clientId, true);
+          } else {
+            this.logInfo("peer-cache-hit", clientId, `conn=${connState}`, channelStates.join(","));
+            return peer;
+          }
         }
         this.log("peer-stale-channels", clientId, connState);
       }
@@ -597,119 +756,14 @@ export class P2PBridge {
   }
 
   async _connectPeer(clientId) {
-    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
-    this.logInfo("peer-create", clientId, "iceServers:", this.iceServers.map((s) => s.urls).flat().join(","));
-    const channels = {};
-    let disconnectTimer = null;
-    for (const name of this.channelNames) {
-      channels[name] = pc.createDataChannel(`nas-${name}`);
-    }
-
-    this.updateClientDiagnostics(clientId, { iceState: "connecting" });
-
-    pc.onicecandidate = (event) => {
-      if (!event.candidate) {
-        this.logInfo("ice-gathering-complete", clientId);
-        return;
-      }
-      const c = event.candidate;
-      this.logInfo("ice-candidate", clientId, c.type, c.protocol, c.address || c.ip || "?", c.port);
-      this.sendSignal(clientId, { kind: "ice", candidate: c }).catch(() => {});
-    };
-
-    const maybeClosePeerAfterChannelStateChange = () => {
-      const livePeer = this.peers.get(clientId);
-      if (!livePeer) {
-        return;
-      }
-      const states = Object.values(livePeer.channels || {}).map((ch) => ch?.readyState || "closed");
-      const hasOpenOrConnecting = states.some((state) => state === "open" || state === "connecting");
-      if (hasOpenOrConnecting) {
-        return;
-      }
-      const connState = livePeer.pc?.connectionState;
-      // "disconnected" is transient - ICE may recover on its own.
-      // Let the explicit disconnectTimer (8s) decide. Only act on terminal states.
-      if (connState === "failed" || connState === "closed") {
-        this.closePeer(clientId, true);
-      }
-    };
-
-    for (const [name, channel] of Object.entries(channels)) {
-      channel.addEventListener("open", () => {
-        this.logInfo("channel-open", clientId, name);
-      });
-      channel.addEventListener("close", () => {
-        this.logWarn("channel-close", clientId, name);
-        this.updateClientDiagnostics(clientId, { lastError: `datachannel closed: ${name}` });
-        maybeClosePeerAfterChannelStateChange();
-      });
-      channel.addEventListener("error", (ev) => {
-        this.logWarn("channel-error", clientId, name, ev?.error?.message || "");
-        this.updateClientDiagnostics(clientId, { lastError: `datachannel error: ${name}` });
-        maybeClosePeerAfterChannelStateChange();
-      });
-      this.wireChannel(clientId, name, channel);
-    }
-
-    pc.oniceconnectionstatechange = () => {
-      this.logInfo("ice-state", clientId, pc.iceConnectionState);
-      this.updateClientDiagnostics(clientId, { iceState: pc.iceConnectionState });
-    };
-
-    pc.onconnectionstatechange = () => {
-      this.logInfo("conn-state", clientId, pc.connectionState);
-      this.updateClientDiagnostics(clientId, { connectionState: pc.connectionState });
-      if (pc.connectionState === "connected") {
-        if (disconnectTimer) {
-          clearTimeout(disconnectTimer);
-          disconnectTimer = null;
-        }
-        return;
-      }
-      if (pc.connectionState === "failed" || pc.connectionState === "closed") {
-        this.closePeer(clientId, true);
-        return;
-      }
-      if (pc.connectionState === "disconnected") {
-        if (disconnectTimer) {
-          clearTimeout(disconnectTimer);
-        }
-        disconnectTimer = setTimeout(() => {
-          const livePeer = this.peers.get(clientId);
-          if (livePeer?.pc?.connectionState === "disconnected") {
-            this.closePeer(clientId, true);
-          }
-        }, 8000);
-      }
-    };
-
-    const peer = {
-      pc,
-      channels,
-      ready: Promise.resolve()
-    };
-    this.peers.set(clientId, peer);
+    const peer = this.initPeer(clientId, { initiator: true });
+    const pc = peer.pc;
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     await this.sendSignal(clientId, { kind: "offer", sdp: pc.localDescription });
     this.logInfo("offer-sent", clientId);
     this.log("offer-sent", clientId);
-
-    this.collectRouteDiagnostics(clientId, pc);
-    if (!this.statsTimers.has(clientId)) {
-      const timer = setInterval(() => {
-        const livePeer = this.peers.get(clientId);
-        if (!livePeer) {
-          clearInterval(timer);
-          this.statsTimers.delete(clientId);
-          return;
-        }
-        this.collectRouteDiagnostics(clientId, livePeer.pc);
-      }, 3000);
-      this.statsTimers.set(clientId, timer);
-    }
 
     await this.waitPeerChannelAvailable(peer, 35000);
     this.startKeepalive(clientId);
@@ -874,6 +928,21 @@ export class P2PBridge {
     channel.binaryType = "arraybuffer";
     this.log("channel-wire", clientId, channelName);
 
+    channel.addEventListener("open", () => {
+      this.logInfo("channel-open", clientId, channelName);
+      this.startKeepalive(clientId);
+    });
+    channel.addEventListener("close", () => {
+      this.logWarn("channel-close", clientId, channelName);
+      this.updateClientDiagnostics(clientId, { lastError: `datachannel closed: ${channelName}` });
+      this.maybeClosePeerAfterChannelStateChange(clientId);
+    });
+    channel.addEventListener("error", (ev) => {
+      this.logWarn("channel-error", clientId, channelName, ev?.error?.message || "");
+      this.updateClientDiagnostics(clientId, { lastError: `datachannel error: ${channelName}` });
+      this.maybeClosePeerAfterChannelStateChange(clientId);
+    });
+
     channel.onmessage = (event) => {
       if (typeof event.data !== "string") {
         const op = this.currentOp.get(this.opKey(clientId, channelName));
@@ -923,6 +992,12 @@ export class P2PBridge {
       if (message.type === "file-end") op.onEnd?.(message);
       if (message.type === "put-file-ack") op.onAck?.(message);
       if (message.type === "put-file-finish") op.onFinish?.(message);
+      if (message.type === "put-file-cancelled") {
+        const err = new Error("上传已取消");
+        err.cancelled = true;
+        err.intentionalClose = true;
+        op.onError?.(err);
+      }
       if (message.type === "delete-file-result") op.onDeleteResult?.(message);
       if (message.type === "hls-manifest") op.onHlsManifest?.(message);
       if (message.type === "transcode-status") op.onProgress?.(message);
@@ -937,19 +1012,7 @@ export class P2PBridge {
     this.log("signal-recv", { from: clientId, kind: payload?.kind });
     let peer = this.peers.get(clientId);
     if (!peer) {
-      const pc = new RTCPeerConnection({ iceServers: this.iceServers });
-      const channels = {};
-      pc.ondatachannel = (event) => {
-        const name = String(event.channel?.label || "").replace(/^nas-/, "") || "control";
-        channels[name] = event.channel;
-        this.wireChannel(clientId, name, event.channel);
-      };
-      pc.onicecandidate = (event) => {
-        if (!event.candidate) return;
-        this.sendSignal(clientId, { kind: "ice", candidate: event.candidate }).catch(() => {});
-      };
-      peer = { pc, channels, ready: Promise.resolve() };
-      this.peers.set(clientId, peer);
+      peer = this.initPeer(clientId, { initiator: false });
     }
 
     if (payload.kind === "answer") {
@@ -1016,6 +1079,106 @@ export class P2PBridge {
             clearTimeout(timeout);
             this.currentOp.delete(opKey);
             this.log("op-error", "download", clientId, requestId, error?.message || error);
+            reject(error);
+          }
+        };
+
+        this.currentOp.set(opKey, ctx);
+        this.logInfo("op-send", "get-file", clientId, opChannelName, `ch=${channel.readyState}`, relativePath);
+        channel.send(JSON.stringify({ type: "get-file", path: relativePath, requestId }));
+      });
+    }));
+  }
+
+  async downloadFileStream(clientId, relativePath, options = {}) {
+    const writable = options.writable;
+    if (!writable) {
+      throw new Error("writable stream required");
+    }
+
+    const writer = typeof writable.getWriter === "function" ? writable.getWriter() : null;
+    const writeChunk = async (chunk) => {
+      const payload = chunk instanceof ArrayBuffer
+        ? new Uint8Array(chunk)
+        : ArrayBuffer.isView(chunk)
+          ? new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+          : chunk;
+      if (writer) {
+        return writer.write(payload);
+      }
+      return writable.write(payload);
+    };
+    const closeWriter = async () => {
+      if (writer) {
+        return writer.close();
+      }
+      if (typeof writable.close === "function") {
+        return writable.close();
+      }
+    };
+    const abortWriter = async (error) => {
+      if (writer?.abort) {
+        return writer.abort(error);
+      }
+      if (typeof writable.abort === "function") {
+        return writable.abort(error);
+      }
+      if (typeof writable.close === "function") {
+        return writable.close();
+      }
+    };
+
+    return this.enqueueClientTask(clientId, "file", async () => this.withPeerRetry(clientId, async (peer) => {
+      const { channel, opChannelName } = await this.getChannelForOp(peer, "file");
+      const requestId = this.generateRequestId();
+      this.log("op-start", "download-stream", clientId, relativePath, requestId);
+      return new Promise((resolve, reject) => {
+        let timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 120_000);
+        const refreshTimeout = () => {
+          clearTimeout(timeout);
+          timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 120_000);
+        };
+        const opKey = this.opKey(clientId, opChannelName);
+        let pending = Promise.resolve();
+        let failed = false;
+        const ctx = {
+          requestId,
+          meta: null,
+          onMeta: (message) => {
+            ctx.meta = message;
+            refreshTimeout();
+            options.onMeta?.(message);
+          },
+          onChunk: (chunk) => {
+            refreshTimeout();
+            pending = pending.then(() => writeChunk(chunk));
+            pending.catch((error) => {
+              if (failed) {
+                return;
+              }
+              failed = true;
+              ctx.onError?.(error);
+            });
+          },
+          onEnd: () => {
+            refreshTimeout();
+            pending
+              .then(() => closeWriter())
+              .then(() => {
+                clearTimeout(timeout);
+                this.currentOp.delete(opKey);
+                this.log("op-done", "download-stream", clientId, requestId);
+                resolve({ meta: ctx.meta });
+              })
+              .catch((error) => {
+                ctx.onError?.(error);
+              });
+          },
+          onError: (error) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            abortWriter(error).catch(() => {});
+            this.log("op-error", "download-stream", clientId, requestId, error?.message || error);
             reject(error);
           }
         };
@@ -1217,10 +1380,17 @@ export class P2PBridge {
           ended: false,
           fallback: false,
           fallbackChunks: [],
+          fallbackBytes: 0,
+          fallbackMaxBytes: Number(options.maxFallbackBytes || 0),
+          fallbackDisabled: false,
           resolved: false,
           finalized: false,
           finalize: () => {
             if (streamCtx.finalized) {
+              return;
+            }
+            if (streamCtx.fallback && streamCtx.fallbackDisabled) {
+              streamCtx.onError?.(new Error("preview fallback disabled due to size"));
               return;
             }
             if (streamCtx.fallback) {
@@ -1373,7 +1543,16 @@ export class P2PBridge {
               return;
             }
             refreshTimeout();
-            streamCtx.fallbackChunks.push(normalized);
+            if (!streamCtx.fallbackDisabled) {
+              const nextBytes = streamCtx.fallbackBytes + normalized.byteLength;
+              if (streamCtx.fallbackMaxBytes && nextBytes > streamCtx.fallbackMaxBytes) {
+                streamCtx.fallbackDisabled = true;
+                streamCtx.fallbackChunks = [];
+              } else {
+                streamCtx.fallbackBytes = nextBytes;
+                streamCtx.fallbackChunks.push(normalized);
+              }
+            }
             if (streamCtx.fallback) {
               return;
             }
@@ -1438,7 +1617,13 @@ export class P2PBridge {
       const abortCtrl = {
         abort: () => { aborted = true; }
       };
-      this.activeUploads.set(uploadKey, abortCtrl);
+      this.activeUploads.set(uploadKey, {
+        abort: abortCtrl.abort,
+        requestId,
+        channelName: opChannelName,
+        clientId,
+        relativePath
+      });
 
       return new Promise((resolve, reject) => {
         const cleanup = () => {
@@ -1447,13 +1632,16 @@ export class P2PBridge {
         // Phase-1 timeout: waiting for put-file-ack from the remote (30s is generous).
         // Replaced with a fresh 300s timer once ack arrives and data transfer begins.
         let timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 30_000);
+        const refreshTimeout = (ms) => {
+          clearTimeout(timeout);
+          timeout = this.createOperationTimeout(clientId, opChannelName, requestId, ms);
+        };
         const opKey = this.opKey(clientId, opChannelName);
         const ctx = {
           requestId,
           onAck: async () => {
             // Reset timer: give full 300s for the actual data transfer phase.
-            clearTimeout(timeout);
-            timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 300_000);
+            refreshTimeout(300_000);
             try {
               const chunkSize = 64 * 1024;
               const highWaterMark = 4 * 1024 * 1024;
@@ -1502,6 +1690,7 @@ export class P2PBridge {
                 const chunk = await file.slice(offset, offset + chunkSize).arrayBuffer();
                 channel.send(chunk);
                 offset += chunkSize;
+                refreshTimeout(300_000);
                 options.onProgress?.({
                   transferredBytes: offset,
                   totalBytes: file.size,
@@ -1546,13 +1735,34 @@ export class P2PBridge {
     }));
   }
 
+  async sendUploadCancel(clientId, requestId, relativePath) {
+    try {
+      const peer = this.peers.get(clientId);
+      if (!peer) {
+        return;
+      }
+      const channel = await this.getPreferredChannel(peer, "upload");
+      if (!channel || channel.readyState !== "open") {
+        return;
+      }
+      channel.send(JSON.stringify({ type: "put-file-cancel", requestId, path: relativePath }));
+    } catch {
+    }
+  }
+
   cancelUpload(clientId, relativePath) {
     const uploadKey = `${clientId}::${relativePath}`;
     const ctrl = this.activeUploads.get(uploadKey);
     if (ctrl) {
-      ctrl.abort();
+      ctrl.abort?.();
+      if (ctrl.requestId) {
+        this.sendUploadCancel(clientId, ctrl.requestId, relativePath).catch(() => {});
+      }
       this.activeUploads.delete(uploadKey);
       this.log("upload-cancelled", clientId, relativePath);
+      if (ctrl.channelName) {
+        this.cancelClientChannel(clientId, ctrl.channelName);
+      }
       return true;
     }
     this.cancelClientChannel(clientId, "upload");
@@ -1562,7 +1772,10 @@ export class P2PBridge {
   cancelAllUploads(clientId) {
     for (const [key, ctrl] of this.activeUploads.entries()) {
       if (key.startsWith(`${clientId}::`)) {
-        ctrl.abort();
+        ctrl.abort?.();
+        if (ctrl.requestId) {
+          this.sendUploadCancel(clientId, ctrl.requestId, ctrl.relativePath).catch(() => {});
+        }
         this.activeUploads.delete(key);
       }
     }

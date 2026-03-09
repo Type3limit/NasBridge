@@ -8,11 +8,12 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 # ---- Config (edit or pass via env) ----
-SERVER_PORT="${SERVER_PORT:-9000}"
+SERVER_PORT="${SERVER_PORT:-8080}"
 TURN_PORT="${TURN_PORT:-3478}"
 TURN_MIN_PORT="${TURN_MIN_PORT:-49152}"
 TURN_MAX_PORT="${TURN_MAX_PORT:-49200}"
-TURN_REALM="${TURN_REALM:-nas-bridge.local}"
+DOMAIN_NAME="${DOMAIN_NAME:-nasbridge.online}"
+TURN_REALM="${TURN_REALM:-${DOMAIN_NAME}}"
 TURN_USERNAME="${TURN_USERNAME:-nasuser}"
 TURN_PASSWORD="${TURN_PASSWORD:-naspass123}"
 START_STORAGE_CLIENT="${START_STORAGE_CLIENT:-false}"
@@ -56,7 +57,7 @@ require_cmd npm
 
 # ---- Detect LAN IP ----
 LAN_IP="${LAN_IP:-}"
-PUBLIC_IP="${PUBLIC_IP:-}"
+PUBLIC_IP="${PUBLIC_IP:-139.155.152.91}"
 if [[ -z "$LAN_IP" ]]; then
   LAN_IP=$(hostname -I | tr ' ' '\n' | grep -v '^127\.' | head -1 || true)
 fi
@@ -80,7 +81,16 @@ fi
 
 # server/.env
 sed -i "s#^SERVER_BASE_URL=.*#SERVER_BASE_URL=http://localhost:${SERVER_PORT}#" "$SERVER_ENV" || true
-sed -i "s#^VITE_SERVER_BASE_URL=.*#VITE_SERVER_BASE_URL=http://${LAN_IP}:${SERVER_PORT}#" "$WEB_ENV" || true
+if grep -q "^SERVER_PORT=" "$SERVER_ENV"; then
+  sed -i "s#^SERVER_PORT=.*#SERVER_PORT=${SERVER_PORT}#" "$SERVER_ENV" || true
+else
+  echo "SERVER_PORT=${SERVER_PORT}" >> "$SERVER_ENV"
+fi
+SERVER_HOST="$LAN_IP"
+if [[ -n "$PUBLIC_IP" ]]; then
+  SERVER_HOST="$PUBLIC_IP"
+fi
+sed -i "s#^VITE_SERVER_BASE_URL=.*#VITE_SERVER_BASE_URL=https://${DOMAIN_NAME}#" "$WEB_ENV" || true
 
 # TURN envs
 TURN_EXTERNAL_IP_VALUE="$LAN_IP"
@@ -112,7 +122,7 @@ log "Configuring coturn..."
 COTURN_CONF="/etc/turnserver.conf"
 cat > "$COTURN_CONF" <<EOF
 listening-port=${TURN_PORT}
-external-ip=${LAN_IP}
+external-ip=${PUBLIC_IP}
 realm=${TURN_REALM}
 lt-cred-mech
 user=${TURN_USERNAME}:${TURN_PASSWORD}

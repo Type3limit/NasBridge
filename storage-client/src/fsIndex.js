@@ -18,15 +18,19 @@ export async function scanFiles(rootDir) {
         await walk(absolute);
         continue;
       }
-      const stat = await fs.promises.stat(absolute);
-      const relative = path.relative(rootDir, absolute).split(path.sep).join("/");
-      output.push({
-        path: relative,
-        name: entry.name,
-        size: stat.size,
-        updatedAt: stat.mtime.toISOString(),
-        mimeType: mime.lookup(entry.name) || "application/octet-stream"
-      });
+      try {
+        const stat = await fs.promises.stat(absolute);
+        const relative = path.relative(rootDir, absolute).split(path.sep).join("/");
+        output.push({
+          path: relative,
+          name: entry.name,
+          size: stat.size,
+          updatedAt: stat.mtime.toISOString(),
+          mimeType: mime.lookup(entry.name) || "application/octet-stream"
+        });
+      } catch {
+        // Skip files that are temporarily locked or unreadable.
+      }
     }
   }
 

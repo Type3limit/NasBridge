@@ -110,6 +110,14 @@ function canBrowserPlayVideoMime(mimeType = "") {
   return result === "probably" || result === "maybe";
 }
 
+function getFileTypeGroup(mimeType = "") {
+  if (isImageMime(mimeType)) return "image";
+  if (isVideoMime(mimeType)) return "video";
+  if (isAudioMime(mimeType)) return "audio";
+  if (mimeType === "application/pdf") return "doc";
+  return "other";
+}
+
 function isGifMime(mimeType = "") {
   return mimeType === "image/gif";
 }
@@ -180,6 +188,36 @@ function createHlsLoaderStats() {
   };
 }
 
+function formatRelativeTime(value) {
+  if (!value) return "-";
+  const ts = Date.parse(value);
+  if (!Number.isFinite(ts)) return "-";
+  const diff = Date.now() - ts;
+  if (diff < 10_000) return "刚刚";
+  if (diff < 60_000) return `${Math.floor(diff / 1000)}秒前`;
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}小时前`;
+  return `${Math.floor(diff / 86_400_000)}天前`;
+}
+
+function getClientStatusColor(status) {
+  if (status === "online") return "success";
+  if (status === "disabled") return "danger";
+  return "informative";
+}
+
+async function copyText(text) {
+  if (!text) return false;
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+  }
+  return false;
+}
+
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem("nas_token") || "");
   const [user, setUser] = useState(null);
@@ -211,10 +249,21 @@ export default function App() {
   const [previewProgress, setPreviewProgress] = useState(null);
   const [previewHlsSource, setPreviewHlsSource] = useState(null);
   const [previewDebug, setPreviewDebug] = useState(emptyPreviewDebug());
+  const [previewStage, setPreviewStage] = useState("");
+
+  const [lastRefreshAt, setLastRefreshAt] = useState("");
+  const [lastPollAt, setLastPollAt] = useState("");
 
   const [uploadClientId, setUploadClientId] = useState("");
   const [uploadFolderPath, setUploadFolderPath] = useState("");
-  const [uploadFile, setUploadFile] = useState(null);
+  const [uploadFiles, setUploadFiles] = useState([]);
+  const [uploadColumnId, setUploadColumnId] = useState("");
+  const [columnDraftName, setColumnDraftName] = useState("");
+
+  const [columns, setColumns] = useState([]);
+  const [keyword, setKeyword] = useState("");
+  const [columnFilter, setColumnFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
 
   const [thumbMap, setThumbMap] = useState(() => {
     const cache = loadThumbCache();
@@ -237,6 +286,9 @@ export default function App() {
   const previewSessionIdRef = useRef(0);
   const fileInputRef = useRef(null);
   const uploadProgressReportAt = useRef({});
+  const fileListRef = useRef(null);
+  const [listHeight, setListHeight] = useState(520);
+  const [listScrollTop, setListScrollTop] = useState(0);
 
   const [p2p, setP2p] = useState(null);
 
@@ -271,10 +323,58 @@ export default function App() {
     return set;
   }, [uploadJobs]);
 
+  const onlineCount = useMemo(() => clients.filter((item) => item.status === "online").length, [clients]);
+  const relayCount = useMemo(
+    () => clients.filter((c) => (diagnostics.clients[c.id]?.route || "unknown") === "relay").length,
+    [clients, diagnostics]
+  );
+  const uploadingCount = useMemo(
+    () => uploadJobs.filter((job) => job.status === "uploading").length,
+    [uploadJobs]
+  );
+
   const onlineFiles = useMemo(() => {
     const onlineIds = new Set(clients.filter((c) => c.status === "online").map((c) => c.id));
     return files.filter((f) => onlineIds.has(f.clientId));
   }, [files, clients]);
+
+  const columnMap = useMemo(() => {
+    return new Map(columns.map((item) => [item.id, item.name]));
+  }, [columns]);
+
+  const filteredOnlineFiles = useMemo(() => {
+    const kw = keyword.trim().toLowerCase();
+    return onlineFiles.filter((file) => {
+      if (columnFilter === "none" && file.columnId) {
+        return false;
+      }
+      if (columnFilter !== "all" && columnFilter !== "none" && file.columnId !== columnFilter) {
+        return false;
+      }
+      if (typeFilter !== "all" && getFileTypeGroup(file.mimeType) !== typeFilter) {
+        return false;
+      }
+      if (kw) {
+        const hay = `${file.name} ${file.path}`.toLowerCase();
+        if (!hay.includes(kw)) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [onlineFiles, columnFilter, typeFilter, keyword]);
+
+  const detailItemHeight = 96;
+  const detailOverscan = 6;
+  const detailTotal = filteredOnlineFiles.length;
+  const detailStart = Math.max(0, Math.floor(listScrollTop / detailItemHeight) - detailOverscan);
+  const detailEnd = Math.min(
+    detailTotal,
+    Math.ceil((listScrollTop + listHeight) / detailItemHeight) + detailOverscan
+  );
+  const detailSlice = filteredOnlineFiles.slice(detailStart, detailEnd);
+  const detailPaddingTop = detailStart * detailItemHeight;
+  const detailPaddingBottom = Math.max(0, (detailTotal - detailEnd) * detailItemHeight);
 
   function isUploadingFile(file) {
     return uploadingFileKeys.has(`${file.clientId}|${file.path}`);
@@ -318,6 +418,7 @@ export default function App() {
     setPreviewProgress(null);
     setPreviewHlsSource(null);
     setPreviewDebug(emptyPreviewDebug());
+    setPreviewStage("");
     previewModeRef.current = "";
     previewFirstFrameRef.current = false;
     previewAutoFallbackRef.current = "";
@@ -739,6 +840,13 @@ export default function App() {
       setFiles(fileData.files);
       setClients(clientsData.clients);
       setUploadJobs(uploadData.jobs || []);
+      setLastRefreshAt(new Date().toISOString());
+
+      const columnData = await apiRequest("/api/columns", { token: currentToken });
+      setColumns(columnData.columns || []);
+      if (uploadColumnId && !(columnData.columns || []).some((item) => item.id === uploadColumnId)) {
+        setUploadColumnId("");
+      }
 
       if (!uploadClientId && clientsData.clients.length) {
         setUploadClientId(clientsData.clients[0].id);
@@ -775,6 +883,7 @@ export default function App() {
         ]);
         setClients(clientsData.clients);
         setUploadJobs(uploadData.jobs || []);
+        setLastPollAt(new Date().toISOString());
         consecutiveErrors = 0;
       } catch {
         consecutiveErrors++;
@@ -828,6 +937,28 @@ export default function App() {
     };
   }, [previewOpen, previewing, onlineFiles, previewPath, previewClientId]);
 
+  useEffect(() => {
+    const el = fileListRef.current;
+    if (!el) {
+      return;
+    }
+
+    const updateHeight = () => {
+      const nextHeight = el.clientHeight || 520;
+      setListHeight(nextHeight);
+    };
+
+    updateHeight();
+    if (typeof ResizeObserver === "function") {
+      const observer = new ResizeObserver(() => updateHeight());
+      observer.observe(el);
+      return () => observer.disconnect();
+    }
+
+    window.addEventListener("resize", updateHeight);
+    return () => window.removeEventListener("resize", updateHeight);
+  }, [viewMode]);
+
   // Pre-establish P2P connections to online clients
   useEffect(() => {
     if (!p2p) return;
@@ -860,6 +991,16 @@ export default function App() {
       }
     });
   }, [files, clients, p2p, previewing, thumbMap, uploadingFileKeys]);
+
+  useEffect(() => {
+    if (viewMode !== "details") {
+      return;
+    }
+    setListScrollTop(0);
+    if (fileListRef.current) {
+      fileListRef.current.scrollTop = 0;
+    }
+  }, [viewMode, onlineFiles.length]);
 
   async function login() {
     try {
@@ -895,6 +1036,29 @@ export default function App() {
       token
     });
     await refreshAll();
+  }
+
+  async function createColumn() {
+    const name = columnDraftName.trim();
+    if (!name) {
+      setMessage("请输入栏目名称");
+      return;
+    }
+    try {
+      const result = await apiRequest("/api/columns", {
+        method: "POST",
+        token,
+        body: { name }
+      });
+      const next = result.column;
+      if (next?.id) {
+        setColumns((prev) => [next, ...prev.filter((item) => item.id !== next.id)]);
+        setUploadColumnId(next.id);
+        setColumnDraftName("");
+      }
+    } catch (error) {
+      setMessage(`创建栏目失败: ${error.message}`);
+    }
   }
 
   async function ensureThumbnail(file) {
@@ -970,6 +1134,23 @@ export default function App() {
     if (!p2p || !ensureClientOnline(file.clientId)) return;
     if (!(await ensureSignalingReady())) return;
     try {
+      const canStream = typeof window.showSaveFilePicker === "function" && typeof p2p.downloadFileStream === "function";
+      if (canStream) {
+        try {
+          const handle = await window.showSaveFilePicker({ suggestedName: file.name });
+          const writable = await handle.createWritable();
+          setMessage("正在建立P2P连接并下载...");
+          await p2p.downloadFileStream(file.clientId, file.path, { writable });
+          setMessage("下载完成（P2P）");
+          return;
+        } catch (error) {
+          if (error?.name === "AbortError") {
+            setMessage("已取消保存");
+            return;
+          }
+        }
+      }
+
       setMessage("正在建立P2P连接并下载...");
       const result = await p2p.downloadFile(file.clientId, file.path);
       const url = URL.createObjectURL(result.blob);
@@ -1016,6 +1197,7 @@ export default function App() {
       setPreviewOpen(true);
       setPreviewProgress(null);
       setPreviewStatusText("");
+      setPreviewStage("连接终端");
       setMessage("正在获取预览...");
       previewFirstFrameRef.current = false;
       previewModeRef.current = "";
@@ -1039,6 +1221,7 @@ export default function App() {
       if (isVideoMime(file.mimeType) || isAudioMime(file.mimeType)) {
         if (isVideoMime(file.mimeType) && !options.forceTranscode && !options.skipHls && Hls.isSupported()) {
           try {
+            setPreviewStage("准备 HLS");
             setPreviewStatusText("正在准备 HLS 预览...");
             const hlsResult = await withTimeout(
               p2p.getHlsManifest(file.clientId, file.path, {
@@ -1075,6 +1258,7 @@ export default function App() {
               hlsId: hlsResult.hlsId || "",
               codec: hlsResult.codec || prev.codec || ""
             }));
+            setPreviewStage("HLS 就绪");
             setMessage("HLS 预览已就绪");
             return;
           } catch (error) {
@@ -1088,10 +1272,12 @@ export default function App() {
 
         try {
           if (needTranscode) {
+            setPreviewStage("转码准备");
             setPreviewStatusText("正在请求客户端转码...");
             setPreviewProgress(0);
             setMessage("视频格式不兼容，正在请求客户端 ffmpeg 转码预览...");
           } else {
+            setPreviewStage("加载媒体");
             setPreviewStatusText("正在加载媒体，完成后可拖动进度条...");
           }
           const forceBlobPreview = Number(file.size || 0) <= PREVIEW_FORCE_BLOB_MAX_SIZE;
@@ -1115,12 +1301,14 @@ export default function App() {
               previewModeRef.current = needTranscode ? "transcode-stream" : "direct-stream";
               setPreviewDebug((prev) => ({ ...prev, mode: needTranscode ? "transcode-stream" : "direct-stream" }));
               previewFirstFrameRef.current = false;
+              setPreviewStage(needTranscode ? "转码预览" : "流式预览");
               setPreviewing(false);
               setMessage("流式预览已开始");
             }, {
               ...(needTranscode ? { transcode: "mp4" } : {}),
               ...(isVideoMime(file.mimeType) ? { previewProfile: "fast" } : {}),
               forceBlob: forceBlobPreview,
+              maxFallbackBytes: PREVIEW_FORCE_BLOB_MAX_SIZE,
               timeoutMs: needTranscode ? Math.max(240000, sizeBasedTimeoutMs) : sizeBasedTimeoutMs,
               onProgress: (status) => {
                 if (!status) return;
@@ -1138,6 +1326,7 @@ export default function App() {
             streamResult = await streamOnce();
           } catch (firstError) {
             if (previewSessionIdRef.current !== sessionId) return;
+            setPreviewStage("重试连接");
             setPreviewStatusText("连接抖动，正在重试预览...");
             streamResult = await streamOnce();
             if (!streamResult) {
@@ -1156,6 +1345,7 @@ export default function App() {
               if (import.meta.env.VITE_P2P_DEBUG === "1") {
                 console.log("[web-p2p] preview-retry", "transcode");
               }
+              setPreviewStage("转码重试");
               setPreviewStatusText("原格式流失败，正在转码重试...");
               setPreviewProgress(0);
               const transcodeResult = await withTimeout(
@@ -1170,12 +1360,14 @@ export default function App() {
                   previewModeRef.current = "transcode-stream";
                   setPreviewDebug((prev) => ({ ...prev, mode: "transcode-stream" }));
                   previewFirstFrameRef.current = false;
+                  setPreviewStage("转码预览");
                   setPreviewing(false);
                   setMessage("流式预览已开始（转码）");
                 }, {
                   transcode: "mp4",
                   previewProfile: "fast",
                   forceBlob: Number(file.size || 0) <= PREVIEW_FORCE_BLOB_MAX_SIZE,
+                  maxFallbackBytes: PREVIEW_FORCE_BLOB_MAX_SIZE,
                   timeoutMs: Math.max(240000, sizeBasedTimeoutMs),
                   onProgress: (status) => {
                     if (!status) return;
@@ -1196,6 +1388,7 @@ export default function App() {
               if (import.meta.env.VITE_P2P_DEBUG === "1") {
                 console.log("[web-p2p] preview-fallback", "full-download-after-transcode-fail");
               }
+              setPreviewStage("回退下载");
               setPreviewStatusText("流式预览失败，正在回退整文件预览...");
               const result = await withTimeout(p2p.downloadFile(file.clientId, file.path), fallbackDownloadTimeoutMs);
               url = URL.createObjectURL(result.blob);
@@ -1210,6 +1403,7 @@ export default function App() {
             if (import.meta.env.VITE_P2P_DEBUG === "1") {
               console.log("[web-p2p] preview-fallback", "full-download-direct");
             }
+            setPreviewStage("回退下载");
             setPreviewStatusText("流式预览失败，正在回退整文件预览...");
             const result = await withTimeout(p2p.downloadFile(file.clientId, file.path), fallbackDownloadTimeoutMs);
             url = URL.createObjectURL(result.blob);
@@ -1222,6 +1416,7 @@ export default function App() {
         }
       } else {
         if (isImageMime(file.mimeType) && Number(file.size || 0) >= IMAGE_PREVIEW_COMPRESS_THRESHOLD) {
+          setPreviewStage("图片压缩");
           setPreviewStatusText("图片较大，正在生成压缩预览...");
           const result = await withTimeout(p2p.previewImageCompressed(file.clientId, file.path), fallbackDownloadTimeoutMs);
           url = URL.createObjectURL(result.blob);
@@ -1301,7 +1496,7 @@ export default function App() {
   }
 
   async function upload() {
-    if (!p2p || !uploadFile || !uploadClientId) {
+    if (!p2p || !uploadFiles.length || !uploadClientId) {
       setMessage("请先选择终端和文件");
       return;
     }
@@ -1309,104 +1504,108 @@ export default function App() {
     if (!(await ensureSignalingReady())) return;
 
     const folderPath = normalizeFolderPath(uploadFolderPath);
-    const targetPath = folderPath ? `${folderPath}/${uploadFile.name}` : uploadFile.name;
-    let jobId = "";
+    const columnName = columnMap.get(uploadColumnId) || "";
+    const basePath = normalizeFolderPath([columnName, folderPath].filter(Boolean).join("/"));
+    setUploadOpen(false);
 
-    try {
-      const started = await apiRequest("/api/upload-jobs/start", {
-        method: "POST",
-        token,
-        body: {
-          clientId: uploadClientId,
-          fileName: uploadFile.name,
-          relativePath: targetPath,
-          size: uploadFile.size,
-          mimeType: uploadFile.type || "application/octet-stream"
+    for (const file of uploadFiles) {
+      let jobId = "";
+      try {
+        const targetPath = basePath ? `${basePath}/${file.name}` : file.name;
+        const started = await apiRequest("/api/upload-jobs/start", {
+          method: "POST",
+          token,
+          body: {
+            clientId: uploadClientId,
+            fileName: file.name,
+            relativePath: targetPath,
+            size: file.size,
+            mimeType: file.type || "application/octet-stream",
+            columnId: uploadColumnId || "",
+            folderPath: folderPath || ""
+          }
+        });
+        if (started?.job) {
+          jobId = started.job.id;
+          upsertUploadJob(started.job);
         }
-      });
-      if (started?.job) {
-        jobId = started.job.id;
-        upsertUploadJob(started.job);
-      }
 
-      setUploadOpen(false);
-
-      setMessage("正在通过P2P上传...");
-      await p2p.uploadFile(uploadClientId, targetPath, uploadFile, {
-        onProgress: ({ transferredBytes, progress }) => {
-          if (!jobId) {
-            return;
-          }
-          upsertUploadJob({
-            id: jobId,
-            status: "uploading",
-            progress,
-            transferredBytes,
-            size: uploadFile.size,
-            updatedAt: new Date().toISOString(),
-            message: `上传中 ${progress}%`
-          });
-
-          const now = Date.now();
-          const prevAt = uploadProgressReportAt.current[jobId] || 0;
-          const shouldReport = now - prevAt >= 1000 || progress >= 100;
-          if (!shouldReport) {
-            return;
-          }
-          uploadProgressReportAt.current[jobId] = now;
-          apiRequest(`/api/upload-jobs/${jobId}/progress`, {
-            method: "POST",
-            token,
-            body: {
+        setMessage(`正在上传 ${file.name}...`);
+        await p2p.uploadFile(uploadClientId, targetPath, file, {
+          onProgress: ({ transferredBytes, progress }) => {
+            if (!jobId) {
+              return;
+            }
+            upsertUploadJob({
+              id: jobId,
+              status: "uploading",
               progress,
               transferredBytes,
+              size: file.size,
+              updatedAt: new Date().toISOString(),
               message: `上传中 ${progress}%`
+            });
+
+            const now = Date.now();
+            const prevAt = uploadProgressReportAt.current[jobId] || 0;
+            const shouldReport = now - prevAt >= 1000 || progress >= 100;
+            if (!shouldReport) {
+              return;
             }
+            uploadProgressReportAt.current[jobId] = now;
+            apiRequest(`/api/upload-jobs/${jobId}/progress`, {
+              method: "POST",
+              token,
+              body: {
+                progress,
+                transferredBytes,
+                message: `上传中 ${progress}%`
+              }
+            }).catch(() => {});
+          }
+        });
+
+        if (jobId) {
+          const finished = await apiRequest(`/api/upload-jobs/${jobId}/finish`, {
+            method: "POST",
+            token,
+            body: { message: "上传完成，等待文件索引刷新" }
+          });
+          if (finished?.job) {
+            upsertUploadJob(finished.job);
+          }
+        }
+      } catch (error) {
+        const isCancelled = /已取消|cancelled/i.test(error?.message || "");
+        if (!isCancelled && jobId) {
+          apiRequest(`/api/upload-jobs/${jobId}/fail`, {
+            method: "POST",
+            token,
+            body: { message: `上传失败: ${error.message}` }
           }).catch(() => {});
+          upsertUploadJob({
+            id: jobId,
+            status: "failed",
+            message: `上传失败: ${error.message}`,
+            updatedAt: new Date().toISOString()
+          });
         }
-      });
-
-      if (jobId) {
-        const finished = await apiRequest(`/api/upload-jobs/${jobId}/finish`, {
-          method: "POST",
-          token,
-          body: { message: "上传完成，等待文件索引刷新" }
-        });
-        if (finished?.job) {
-          upsertUploadJob(finished.job);
+        if (!isCancelled) {
+          setMessage(`上传失败: ${error.message}`);
+        }
+      } finally {
+        if (jobId) {
+          delete uploadProgressReportAt.current[jobId];
         }
       }
+    }
 
-      setMessage("上传完成（P2P）");
-      await refreshAll();
-      setUploadFile(null);
-      setUploadOpen(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
-    } catch (error) {
-      const isCancelled = /已取消|cancelled/i.test(error?.message || "");
-      if (isCancelled) {
-        return;
-      }
-      if (jobId) {
-        apiRequest(`/api/upload-jobs/${jobId}/fail`, {
-          method: "POST",
-          token,
-          body: { message: `上传失败: ${error.message}` }
-        }).catch(() => {});
-        upsertUploadJob({
-          id: jobId,
-          status: "failed",
-          message: `上传失败: ${error.message}`,
-          updatedAt: new Date().toISOString()
-        });
-      }
-      setMessage(`上传失败: ${error.message}`);
-    } finally {
-      if (jobId) {
-        delete uploadProgressReportAt.current[jobId];
-      }
+    setMessage("上传完成（P2P）");
+    await refreshAll();
+    setUploadFiles([]);
+    setUploadOpen(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
     }
   }
 
@@ -1492,15 +1691,48 @@ export default function App() {
           <div className="row">
             <button className="onlineBadgeBtn" onClick={() => setDiagnosticsOpen(true)}>
               <Badge appearance="filled" color={clients.some((item) => item.status === "online") ? "success" : "informative"}>
-                在线终端 {clients.filter((item) => item.status === "online").length}
+                在线终端 {onlineCount}
               </Badge>
             </button>
-            <Button onClick={() => refreshAll()}>{loading ? <Spinner size="tiny" /> : "刷新"}</Button>
-            <Button onClick={logout}>退出</Button>
+            <Button size="small" onClick={() => refreshAll()}>{loading ? <Spinner size="tiny" /> : "刷新"}</Button>
+            <Button size="small" onClick={logout}>退出</Button>
           </div>
         </div>
 
-        {message && <MessageBar>{message}</MessageBar>}
+        <div className="statusBar">
+          <div className="statusGroup">
+            <div className="statusItem">
+              <span className={`statusDot ${diagnostics.wsState === "open" ? "ok" : "warn"}`} />
+              <Text>WS</Text>
+              <Badge appearance="outline" color={diagnostics.wsState === "open" ? "success" : "informative"}>{diagnostics.wsState || "idle"}</Badge>
+            </div>
+            <div className="statusItem">
+              <Text>在线终端</Text>
+              <Text className="statusValue">{onlineCount}</Text>
+            </div>
+            <div className="statusItem">
+              <Text>中继</Text>
+              <Badge appearance="outline" color={relayCount ? "warning" : "success"}>{relayCount}</Badge>
+            </div>
+            <div className="statusItem">
+              <Text>上传中</Text>
+              <Badge appearance="outline" color={uploadingCount ? "informative" : "success"}>{uploadingCount}</Badge>
+            </div>
+          </div>
+          <div className="statusGroup">
+            <div className="statusItem">
+              <Text>最近刷新</Text>
+              <Caption1>{formatRelativeTime(lastRefreshAt)}</Caption1>
+            </div>
+            <div className="statusItem">
+              <Text>轮询更新</Text>
+              <Caption1>{formatRelativeTime(lastPollAt)}</Caption1>
+            </div>
+            <Button size="small" appearance="primary" onClick={() => setDiagnosticsOpen(true)}>诊断面板</Button>
+          </div>
+        </div>
+
+        {message && <MessageBar className="messageBar">{message}</MessageBar>}
 
         <div className="contentLayout">
           <section className="filePanel">
@@ -1508,57 +1740,97 @@ export default function App() {
               <div className="fileCenterHeader">
                 <Subtitle1>文件中心</Subtitle1>
                 <div className="row">
-                  <Button appearance={viewMode === "grid" ? "primary" : "secondary"} onClick={() => setViewMode("grid")}>图标模式</Button>
-                  <Button appearance={viewMode === "details" ? "primary" : "secondary"} onClick={() => setViewMode("details")}>详情模式</Button>
-                  <Button appearance="primary" onClick={() => setUploadOpen(true)}>上传文件</Button>
+                  <Button size="small" appearance={viewMode === "grid" ? "primary" : "secondary"} onClick={() => setViewMode("grid")}>图标模式</Button>
+                  <Button size="small" appearance={viewMode === "details" ? "primary" : "secondary"} onClick={() => setViewMode("details")}>详情模式</Button>
+                  <Button size="small" appearance="primary" onClick={() => setUploadOpen(true)}>上传文件</Button>
                 </div>
               </div>
               <Divider />
 
-              {viewMode === "details" && (
-                <div className="fileList">
-                  {visibleUploadJobs.map((job) => (
-                    <div key={job.id} className={`fileRow uploadRow status-${job.status || "uploading"}`}>
-                      <div className="thumbFallback">上传</div>
-                      <div className="fileMeta">
-                        <div className="fileName">{job.fileName || "上传任务"}</div>
-                        <div className="fileSub">{job.relativePath} · {getClientDisplayName(job.clientId)} · 发起人: {job.createdByDisplayName || "-"}</div>
-                        <div className="uploadProgressBar">
-                          <div className="uploadProgressInner" style={{ width: `${Math.max(0, Math.min(100, job.progress || 0))}%` }} />
-                        </div>
-                        <div className="fileSub">
-                          {job.message || "处理中"}
-                          {typeof job.progress === "number" ? ` · ${job.progress}%` : ""}
-                          {typeof job.transferredBytes === "number" && typeof job.size === "number" && job.size > 0
-                            ? ` · ${formatBytes(job.transferredBytes)} / ${formatBytes(job.size)}`
-                            : ""}
-                        </div>
-                      </div>
-                      <div className="actions">
-                        <Button size="small" appearance="primary" onClick={() => cancelUploadJob(job)}>取消上传</Button>
-                        <Badge appearance="outline" color="informative">上传中</Badge>
-                      </div>
-                    </div>
+              <div className="filterBar">
+                <Input
+                  value={keyword}
+                  onChange={(_, data) => setKeyword(data.value)}
+                  placeholder="搜索文件名或路径"
+                />
+                <Dropdown selectedOptions={[columnFilter]} value={columnFilter} onOptionSelect={(_, data) => setColumnFilter(data.optionValue || "all")}>
+                  <Option value="all">全部栏目</Option>
+                  <Option value="none">未分类</Option>
+                  {columns.map((col) => (
+                    <Option key={col.id} value={col.id}>{col.name}</Option>
                   ))}
+                </Dropdown>
+                <Dropdown selectedOptions={[typeFilter]} value={typeFilter} onOptionSelect={(_, data) => setTypeFilter(data.optionValue || "all")}>
+                  <Option value="all">全部类型</Option>
+                  <Option value="image">图片</Option>
+                  <Option value="video">视频</Option>
+                  <Option value="audio">音频</Option>
+                  <Option value="doc">文档</Option>
+                  <Option value="other">其他</Option>
+                </Dropdown>
+                <Button size="small" onClick={() => { setKeyword(""); setColumnFilter("all"); setTypeFilter("all"); }}>清空筛选</Button>
+              </div>
 
-                  {onlineFiles.map((file) => (
-                    <div key={file.id} className="fileRow">
-                      <button className="thumbButton" onClick={() => preview(file)}>
-                        {thumbMap[getThumbKey(file)]?.url ? <img src={thumbMap[getThumbKey(file)].url} className="thumbImg" /> : <div className="thumbFallback">{isUploadingFile(file) ? "上传中" : isImageMime(file.mimeType) ? "图片" : isVideoMime(file.mimeType) ? "视频" : "文件"}</div>}
-                      </button>
-                      <div className="fileMeta">
-                        <div className="fileName">{file.name}</div>
-                        <div className="fileSub">{file.path} · {formatBytes(file.size)} · {getClientDisplayName(file.clientId)}</div>
-                      </div>
-                      <div className="actions">
-                        <Button size="small" onClick={() => toggleFavorite(file.id)}>{file.favorite ? "取消收藏" : "收藏"}</Button>
-                        <Button size="small" onClick={() => preview(file)}>预览</Button>
-                        <Button size="small" onClick={() => download(file)}>下载</Button>
-                        <Button size="small" appearance="primary" onClick={() => removeFile(file)}>删除</Button>
-                      </div>
+              {viewMode === "details" && (
+                <>
+                  {visibleUploadJobs.length > 0 && (
+                    <div className="uploadList">
+                      {visibleUploadJobs.map((job) => (
+                        <div key={job.id} className={`fileRow uploadRow status-${job.status || "uploading"}`}>
+                          <div className="thumbFallback">上传</div>
+                          <div className="fileMeta">
+                            <div className="fileName">{job.fileName || "上传任务"}</div>
+                            <div className="fileSub">{job.relativePath} · {getClientDisplayName(job.clientId)} · 发起人: {job.createdByDisplayName || "-"}</div>
+                            <div className="uploadProgressBar">
+                              <div className="uploadProgressInner" style={{ width: `${Math.max(0, Math.min(100, job.progress || 0))}%` }} />
+                            </div>
+                            <div className="fileSub">
+                              {job.message || "处理中"}
+                              {typeof job.progress === "number" ? ` · ${job.progress}%` : ""}
+                              {typeof job.transferredBytes === "number" && typeof job.size === "number" && job.size > 0
+                                ? ` · ${formatBytes(job.transferredBytes)} / ${formatBytes(job.size)}`
+                                : ""}
+                            </div>
+                          </div>
+                          <div className="actions">
+                            <Button size="small" appearance="primary" onClick={() => cancelUploadJob(job)}>取消上传</Button>
+                            <Badge appearance="outline" color="informative">上传中</Badge>
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  )}
+                  <div
+                    className="fileList"
+                    ref={fileListRef}
+                    onScroll={(event) => setListScrollTop(event.currentTarget.scrollTop)}
+                  >
+                    <div style={{ paddingTop: detailPaddingTop, paddingBottom: detailPaddingBottom }}>
+                      {detailSlice.map((file) => (
+                        <div key={file.id} className="fileRow">
+                          <button className="thumbButton" onClick={() => preview(file)}>
+                            {thumbMap[getThumbKey(file)]?.url ? <img src={thumbMap[getThumbKey(file)].url} className="thumbImg" /> : <div className="thumbFallback">{isUploadingFile(file) ? "上传中" : isImageMime(file.mimeType) ? "图片" : isVideoMime(file.mimeType) ? "视频" : "文件"}</div>}
+                          </button>
+                          <div className="fileMeta">
+                            <div className="fileName">{file.name}</div>
+                            <div className="fileSub">
+                              {file.path} · {formatBytes(file.size)} · {getClientDisplayName(file.clientId)}
+                            </div>
+                            <div className="fileSub">
+                              栏目: {columnMap.get(file.columnId) || "未分类"} · 上传: {formatRelativeTime(file.updatedAt)}
+                            </div>
+                          </div>
+                          <div className="actions">
+                            <Button size="small" onClick={() => toggleFavorite(file.id)}>{file.favorite ? "取消收藏" : "收藏"}</Button>
+                            <Button size="small" onClick={() => preview(file)}>预览</Button>
+                            <Button size="small" onClick={() => download(file)}>下载</Button>
+                            <Button size="small" appearance="primary" onClick={() => removeFile(file)}>删除</Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
               )}
 
               {viewMode === "grid" && (
@@ -1576,7 +1848,7 @@ export default function App() {
                       <Button size="small" appearance="primary" onClick={() => cancelUploadJob(job)}>取消</Button>
                     </div>
                   ))}
-                  {onlineFiles.map((file) => (
+                  {filteredOnlineFiles.map((file) => (
                     <div key={file.id} className="gridItem">
                       <button className="gridThumb" onClick={() => preview(file)}>
                         {thumbMap[getThumbKey(file)]?.url ? <img src={thumbMap[getThumbKey(file)].url} className="thumbImg" /> : <div className="thumbFallback">{isUploadingFile(file) ? "上传中" : isImageMime(file.mimeType) ? "图片" : isVideoMime(file.mimeType) ? "视频" : "文件"}</div>}
@@ -1584,6 +1856,8 @@ export default function App() {
                       <div className="gridName" title={file.name}>{file.name}</div>
                       <Caption1>{getClientDisplayName(file.clientId)}</Caption1>
                       <Caption1>{formatBytes(file.size)}</Caption1>
+                      <Caption1>栏目: {columnMap.get(file.columnId) || "未分类"}</Caption1>
+                      <Caption1>上传: {formatRelativeTime(file.updatedAt)}</Caption1>
                       <div className="row">
                         <Button size="small" onClick={() => preview(file)}>预览</Button>
                         <Button size="small" onClick={() => download(file)}>下载</Button>
@@ -1594,7 +1868,7 @@ export default function App() {
                 </div>
               )}
 
-              {!onlineFiles.length && <Text>暂无可用文件，等待在线存储终端上报。</Text>}
+              {!filteredOnlineFiles.length && <Text>暂无可用文件，等待在线存储终端上报。</Text>}
             </Card>
           </section>
 
@@ -1615,13 +1889,31 @@ export default function App() {
                   ))}
                 </Dropdown>
               </Field>
+              <Field label="栏目">
+                <Dropdown selectedOptions={uploadColumnId ? [uploadColumnId] : ["none"]} value={uploadColumnId || "none"} onOptionSelect={(_, data) => setUploadColumnId(data.optionValue === "none" ? "" : data.optionValue || "") }>
+                  <Option value="none">未分类</Option>
+                  {columns.map((item) => (
+                    <Option key={item.id} value={item.id}>{item.name}</Option>
+                  ))}
+                </Dropdown>
+              </Field>
+              <div className="row">
+                <Input value={columnDraftName} onChange={(_, data) => setColumnDraftName(data.value)} placeholder="新建栏目名称" />
+                <Button size="small" appearance="secondary" onClick={createColumn}>新增栏目</Button>
+              </div>
               <Field label="目标目录（可选）">
                 <Input value={uploadFolderPath} onChange={(_, data) => setUploadFolderPath(data.value)} placeholder="例如 media/photos" />
               </Field>
-              <input ref={fileInputRef} type="file" className="hiddenInput" onChange={(event) => setUploadFile(event.target.files?.[0] || null)} />
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hiddenInput"
+                onChange={(event) => setUploadFiles(Array.from(event.target.files || []))}
+              />
               <div className="uploadChooser">
                 <Button appearance="secondary" onClick={() => fileInputRef.current?.click()}>选择文件</Button>
-                <Text>{uploadFile?.name || "未选择文件"}</Text>
+                <Text>{uploadFiles.length ? `已选择 ${uploadFiles.length} 个文件` : "未选择文件"}</Text>
               </div>
               <Button appearance="primary" onClick={async () => { await upload(); }}>开始上传</Button>
             </div>
@@ -1659,14 +1951,43 @@ export default function App() {
             <div className="modalWindow" onClick={(event) => event.stopPropagation()}>
               <div className="modalHeader">
                 <Subtitle1>连接诊断</Subtitle1>
-                <Button size="small" onClick={() => setDiagnosticsOpen(false)}>关闭</Button>
+                <div className="row">
+                  <Button size="small" onClick={() => refreshAll()}>刷新</Button>
+                  <Button size="small" onClick={() => setDiagnosticsOpen(false)}>关闭</Button>
+                </div>
               </div>
               <div className="diagRow">
                 <Text>信令 WS</Text>
-                <Badge appearance="filled" color={diagnostics.wsState === "open" ? "success" : "informative"}>{diagnostics.wsState}</Badge>
+                <div className="row">
+                  <Badge appearance="filled" color={diagnostics.wsState === "open" ? "success" : "informative"}>{diagnostics.wsState}</Badge>
+                  <Button
+                    size="small"
+                    onClick={() => ensureSignalingReady()}
+                  >
+                    重连 WS
+                  </Button>
+                </div>
               </div>
               <Caption1>WS URL: {diagnostics.wsUrl || "-"}</Caption1>
               {diagnostics.wsLastError ? <Caption1>最近WS错误: {diagnostics.wsLastError}</Caption1> : null}
+              <div className="diagSummary">
+                <div>
+                  <Caption1>终端总数</Caption1>
+                  <Text>{clients.length}</Text>
+                </div>
+                <div>
+                  <Caption1>在线</Caption1>
+                  <Text>{clients.filter((c) => c.status === "online").length}</Text>
+                </div>
+                <div>
+                  <Caption1>中继</Caption1>
+                  <Text>{clients.filter((c) => (diagnostics.clients[c.id]?.route || "unknown") === "relay").length}</Text>
+                </div>
+                <div>
+                  <Caption1>重试</Caption1>
+                  <Text>{clients.reduce((sum, c) => sum + (diagnostics.clients[c.id]?.retries || 0), 0)}</Text>
+                </div>
+              </div>
               <div className="diagList">
                 {clients.map((client) => {
                   const diag = diagnostics.clients[client.id] || {};
@@ -1675,13 +1996,38 @@ export default function App() {
                   return (
                     <div key={client.id} className="diagItem">
                       <div className="diagHead">
-                        <Text>{client.name || client.id}</Text>
-                        <Badge appearance="outline" color={isRelay ? "warning" : route === "direct" ? "success" : "informative"}>{route}</Badge>
+                        <div>
+                          <Text>{client.name || client.id}</Text>
+                          <Caption1>{client.id}</Caption1>
+                        </div>
+                        <div className="row">
+                          <Badge appearance="outline" color={getClientStatusColor(client.status)}>{client.status || "unknown"}</Badge>
+                          <Badge appearance="outline" color={isRelay ? "warning" : route === "direct" ? "success" : "informative"}>{route}</Badge>
+                        </div>
                       </div>
-                      <Caption1>ICE: {diag.iceState || "new"} · Conn: {diag.connectionState || "new"}</Caption1>
-                      <Caption1>候选: {diag.localCandidateType || "-"} {"->"} {diag.remoteCandidateType || "-"}</Caption1>
-                      <Caption1>重试: {diag.retries || 0}</Caption1>
+                      <div className="diagMetaGrid">
+                        <Caption1>ICE: {diag.iceState || "new"}</Caption1>
+                        <Caption1>Conn: {diag.connectionState || "new"}</Caption1>
+                        <Caption1>候选: {diag.localCandidateType || "-"} {"->"} {diag.remoteCandidateType || "-"}</Caption1>
+                        <Caption1>最近心跳: {formatRelativeTime(client.lastHeartbeatAt)}</Caption1>
+                        <Caption1>重试: {diag.retries || 0}</Caption1>
+                      </div>
                       {diag.lastError ? <Caption1>最近错误: {diag.lastError}</Caption1> : null}
+                      <div className="diagActions">
+                        <Button size="small" onClick={() => p2p?.connectToPeer(client.id)}>重连</Button>
+                        <Button size="small" onClick={() => p2p?.closePeer(client.id, true)}>断开</Button>
+                        <Button
+                          size="small"
+                          onClick={async () => {
+                            const ok = await copyText(client.id);
+                            if (ok) {
+                              setMessage("终端ID已复制");
+                            }
+                          }}
+                        >
+                          复制ID
+                        </Button>
+                      </div>
                     </div>
                   );
                 })}
@@ -1711,6 +2057,9 @@ export default function App() {
                     {previewStatusText}
                     {typeof previewProgress === "number" ? ` (${previewProgress}%)` : ""}
                   </Caption1>
+                ) : null}
+                {previewing && previewStage ? (
+                  <Caption1 className="previewStage">阶段：{previewStage}</Caption1>
                 ) : null}
                 {!previewing && previewMime.startsWith("video/") && (
                   <video
@@ -1797,9 +2146,14 @@ export default function App() {
                 <div key={item.id} className="simpleRow withActions">
                   <div>
                     <div className="fileName">{item.name || item.id}</div>
-                    <div className="fileSub">状态: {item.status}</div>
+                    <div className="fileSub">ID: {item.id}</div>
+                    <div className="fileSub">
+                      状态: {item.status} · 心跳: {formatRelativeTime(item.lastHeartbeatAt)} · 路由: {diagnostics.clients[item.id]?.route || "unknown"}
+                    </div>
                   </div>
                   <div className="row">
+                    <Badge appearance="outline" color={getClientStatusColor(item.status)}>{item.status}</Badge>
+                    <Button size="small" onClick={() => p2p?.connectToPeer(item.id)}>重连</Button>
                     <Button size="small" onClick={() => changeClientStatus(item.id, "online")}>启用</Button>
                     <Button size="small" onClick={() => changeClientStatus(item.id, "disabled")}>禁用</Button>
                   </div>

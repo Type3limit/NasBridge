@@ -9,6 +9,8 @@ const defaultDb = {
   users: [],
   clients: [],
   files: [],
+  columns: [],
+  fileMeta: [],
   favorites: [],
   uploadJobs: []
 };
@@ -26,10 +28,16 @@ function readDb() {
   ensureDb();
   const raw = fs.readFileSync(dbPath, "utf-8");
   const db = JSON.parse(raw);
+  if (!Array.isArray(db.columns)) {
+    db.columns = [];
+  }
+  if (!Array.isArray(db.fileMeta)) {
+    db.fileMeta = [];
+  }
   if (!Array.isArray(db.uploadJobs)) {
     db.uploadJobs = [];
-    writeDb(db);
   }
+  writeDb(db);
   return db;
 }
 
@@ -176,6 +184,68 @@ export function replaceClientFiles(clientId, files) {
 
 export function listFiles() {
   return readDb().files;
+}
+
+export function listColumns() {
+  return readDb().columns || [];
+}
+
+export function createColumn({ name }) {
+  const db = readDb();
+  const normalized = String(name || "").trim();
+  if (!normalized) {
+    throw new Error("name is required");
+  }
+  const existing = (db.columns || []).find((item) => String(item.name || "").toLowerCase() === normalized.toLowerCase());
+  if (existing) {
+    return existing;
+  }
+  const now = new Date().toISOString();
+  const entity = {
+    id: nanoid(10),
+    name: normalized,
+    createdAt: now
+  };
+  db.columns = db.columns || [];
+  db.columns.push(entity);
+  writeDb(db);
+  return entity;
+}
+
+export function upsertFileMeta(fileId, patch) {
+  if (!fileId) {
+    return null;
+  }
+  const db = readDb();
+  db.fileMeta = db.fileMeta || [];
+  const now = new Date().toISOString();
+  const existing = db.fileMeta.find((item) => item.fileId === fileId);
+  if (existing) {
+    Object.assign(existing, patch, { updatedAt: now });
+    writeDb(db);
+    return existing;
+  }
+  const entity = {
+    fileId,
+    columnId: patch?.columnId || "",
+    folderPath: patch?.folderPath || "",
+    createdAt: now,
+    updatedAt: now
+  };
+  db.fileMeta.push(entity);
+  writeDb(db);
+  return entity;
+}
+
+export function getFileMetaMap() {
+  const db = readDb();
+  const map = new Map();
+  for (const meta of db.fileMeta || []) {
+    if (meta?.fileId) {
+      map.set(meta.fileId, meta);
+    }
+  }
+  return map;
 }
 
 export function clearClientFiles(clientId) {
