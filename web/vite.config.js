@@ -12,6 +12,25 @@ const wsProxyTarget =
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("hls.js")) {
+            return "hls-player";
+          }
+          if (id.includes("/src/components/PreviewModal")) {
+            return "preview";
+          }
+          if (id.includes("node_modules")) {
+            return "vendor";
+          }
+          return undefined;
+        }
+      }
+    }
+  },
   server: {
     host: "0.0.0.0",
     port: 5173,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import {
   Badge,
   Button,
@@ -9,20 +9,30 @@ import {
   Dropdown,
   Field,
   Input,
-  MessageBar,
   Option,
   Spinner,
   Subtitle1,
   Text,
   Title3
 } from "@fluentui/react-components";
-import Hls from "hls.js";
+import {
+  ArrowDownloadRegular,
+  ChevronDownRegular,
+  ChevronUpRegular,
+  DeleteRegular,
+  EyeRegular,
+  StarFilled,
+  StarRegular
+} from "@fluentui/react-icons";
 import { apiRequest } from "./api";
 import { P2PBridge } from "./webrtc";
+
+const PreviewModal = lazy(() => import("./components/PreviewModal"));
 
 const THUMB_CACHE_STORAGE_KEY = "nas_thumb_cache_v1";
 const THUMB_CACHE_MAX_ITEMS = 120;
 const THUMB_CACHE_MAX_BLOB_SIZE = 450 * 1024;
+const DESKTOP_STREAM_SAVE_THRESHOLD_BYTES = 512 * 1024 * 1024;
 const PREVIEW_FORCE_BLOB_MAX_SIZE = 120 * 1024 * 1024;
 const PREVIEW_FIRST_FRAME_TIMEOUT_MS = 8000;
 const PREVIEW_HLS_STALL_TIMEOUT_MS = 10000;
@@ -81,6 +91,72 @@ function formatBytes(size) {
   return `${(size / 1024 ** 3).toFixed(1)} GB`;
 }
 
+function formatSpeed(bytesPerSecond) {
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return "-";
+  return `${formatBytes(bytesPerSecond)}/s`;
+}
+
+function getRouteLabel(diag = {}) {
+  const route = diag.routeLabel || diag.route || "unknown";
+  return route;
+}
+
+function getRouteColor(diag = {}) {
+  const route = diag.route || "unknown";
+  if (route === "relay") return "warning";
+  if (route === "direct") return "success";
+  return "informative";
+}
+
+function isMobileBrowser() {
+  if (typeof navigator === "undefined") {
+    return false;
+  }
+  return /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent || "");
+}
+
+function supportsAnchorDownload() {
+  if (typeof document === "undefined") {
+    return false;
+  }
+  const link = document.createElement("a");
+  return "download" in link;
+}
+
+function triggerBrowserDownload(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName || "download";
+  link.rel = "noopener";
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  window.setTimeout(() => {
+    link.remove();
+    URL.revokeObjectURL(url);
+  }, 60_000);
+}
+
+async function tryShareDownloadedFile(blob, fileName, mimeType = "application/octet-stream") {
+  if (typeof navigator === "undefined" || typeof navigator.share !== "function") {
+    return false;
+  }
+  try {
+    const file = new File([blob], fileName || "download", { type: blob.type || mimeType });
+    if (typeof navigator.canShare === "function" && !navigator.canShare({ files: [file] })) {
+      return false;
+    }
+    await navigator.share({ files: [file], title: file.name });
+    return true;
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw error;
+    }
+    return false;
+  }
+}
+
 function normalizeFolderPath(value) {
   return (value || "").trim().replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
 }
@@ -122,37 +198,6 @@ function isGifMime(mimeType = "") {
   return mimeType === "image/gif";
 }
 
-function buildP2pHlsManifestUrl(clientId, relativePath, hlsId) {
-  return `https://p2p-hls.local/manifest/${encodeURIComponent(clientId)}/${encodeURIComponent(hlsId)}/index.m3u8?path=${encodeURIComponent(relativePath || "")}`;
-}
-
-function buildP2pHlsSegmentUrl(clientId, hlsId, segmentName) {
-  return `https://p2p-hls.local/segment/${encodeURIComponent(clientId)}/${encodeURIComponent(hlsId)}/${encodeURIComponent(segmentName)}`;
-}
-
-function parseP2pHlsSegmentUrl(url) {
-  try {
-    const parsed = new URL(url);
-    if (parsed.hostname !== "p2p-hls.local") {
-      return null;
-    }
-    const parts = parsed.pathname.split("/").filter(Boolean);
-    if (parts[0] !== "segment") {
-      return null;
-    }
-    if (parts.length < 4) {
-      return null;
-    }
-    return {
-      clientId: decodeURIComponent(parts[1]),
-      hlsId: decodeURIComponent(parts[2]),
-      segmentName: decodeURIComponent(parts.slice(3).join("/"))
-    };
-  } catch {
-    return null;
-  }
-}
-
 function emptyPreviewDebug() {
   return {
     mode: "",
@@ -171,20 +216,6 @@ function emptyPreviewDebug() {
     currentTime: 0,
     duration: 0,
     firstFrameAt: ""
-  };
-}
-
-function createHlsLoaderStats() {
-  return {
-    aborted: false,
-    loaded: 0,
-    retry: 0,
-    total: 0,
-    chunkCount: 0,
-    bwEstimate: 0,
-    loading: { start: 0, first: 0, end: 0 },
-    parsing: { start: 0, end: 0 },
-    buffering: { start: 0, first: 0, end: 0 }
   };
 }
 
@@ -218,6 +249,29 @@ async function copyText(text) {
   return false;
 }
 
+let hlsModulePromise = null;
+
+async function getHlsPlaybackSupport() {
+  try {
+    hlsModulePromise ||= import("hls.js");
+    const mod = await hlsModulePromise;
+    const Hls = mod?.default;
+    if (!Hls) {
+      return { supported: false, reason: "hls.js 未正确加载" };
+    }
+    if (typeof Hls.isSupported === "function" && Hls.isSupported()) {
+      return { supported: true, reason: "hls.js supported" };
+    }
+    const hasMse = typeof window !== "undefined" && !!(window.MediaSource || window.ManagedMediaSource || window.WebKitMediaSource);
+    if (hasMse) {
+      return { supported: true, reason: "MediaSource 可用，尝试 HLS" };
+    }
+    return { supported: false, reason: "当前浏览器缺少 MediaSource 支持" };
+  } catch (error) {
+    return { supported: false, reason: error?.message || "hls.js 动态加载失败" };
+  }
+}
+
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem("nas_token") || "");
   const [user, setUser] = useState(null);
@@ -225,8 +279,9 @@ export default function App() {
   const [clients, setClients] = useState([]);
   const [users, setUsers] = useState([]);
   const [uploadJobs, setUploadJobs] = useState([]);
+  const [downloadJobs, setDownloadJobs] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("");
+  const [toasts, setToasts] = useState([]);
   const [viewMode, setViewMode] = useState("grid");
   const [uploadOpen, setUploadOpen] = useState(false);
   const [diagnostics, setDiagnostics] = useState({ wsState: "idle", clients: {} });
@@ -235,11 +290,20 @@ export default function App() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [authMode, setAuthMode] = useState("login");
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    return window.innerWidth <= 760;
+  });
 
   const [previewing, setPreviewing] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteStep, setDeleteStep] = useState(1);
+  const [selectedFileIds, setSelectedFileIds] = useState([]);
   const [previewName, setPreviewName] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
   const [previewMime, setPreviewMime] = useState("");
@@ -259,6 +323,7 @@ export default function App() {
   const [uploadFiles, setUploadFiles] = useState([]);
   const [uploadColumnId, setUploadColumnId] = useState("");
   const [columnDraftName, setColumnDraftName] = useState("");
+  const [uploadStep, setUploadStep] = useState(1);
 
   const [columns, setColumns] = useState([]);
   const [keyword, setKeyword] = useState("");
@@ -277,8 +342,6 @@ export default function App() {
   const thumbnailRetry = useRef({});
   const thumbnailCache = useRef(loadThumbCache());
   const previewReleaseRef = useRef(null);
-  const previewVideoRef = useRef(null);
-  const previewHlsRef = useRef(null);
   const previewModeRef = useRef("");
   const previewFirstFrameRef = useRef(false);
   const previewAutoFallbackRef = useRef("");
@@ -287,10 +350,95 @@ export default function App() {
   const fileInputRef = useRef(null);
   const uploadProgressReportAt = useRef({});
   const fileListRef = useRef(null);
+  const toastTimersRef = useRef(new Map());
   const [listHeight, setListHeight] = useState(520);
   const [listScrollTop, setListScrollTop] = useState(0);
 
   const [p2p, setP2p] = useState(null);
+
+  function getDownloadJobId(file) {
+    return `${file.clientId}|${file.path}`;
+  }
+
+  function upsertDownloadJob(file, patch = {}) {
+    const jobId = getDownloadJobId(file);
+    const now = Date.now();
+    setDownloadJobs((prev) => {
+      const idx = prev.findIndex((item) => item.id === jobId);
+      const current = idx >= 0 ? prev[idx] : {
+        id: jobId,
+        clientId: file.clientId,
+        fileName: file.name,
+        path: file.path,
+        channelName: "file",
+        requestId: "",
+        size: Number(file.size || 0),
+        transferredBytes: 0,
+        progress: 0,
+        speedBytesPerSec: 0,
+        mode: "browser",
+        startedAt: now,
+        lastProgressAt: now
+      };
+      const nextTransferredBytes = typeof patch.transferredBytes === "number"
+        ? patch.transferredBytes
+        : (current.transferredBytes || 0);
+      const nextSize = typeof patch.size === "number"
+        ? patch.size
+        : (current.size || Number(file.size || 0));
+      let nextSpeed = current.speedBytesPerSec || 0;
+      let nextLastProgressAt = current.lastProgressAt || current.startedAt || now;
+      if (typeof patch.transferredBytes === "number") {
+        const deltaBytes = patch.transferredBytes - (current.transferredBytes || 0);
+        const deltaMs = now - (current.lastProgressAt || current.startedAt || now);
+        if (deltaBytes > 0 && deltaMs > 0) {
+          nextSpeed = Math.round(deltaBytes / (deltaMs / 1000));
+        } else {
+          const elapsedMs = Math.max(1, now - (current.startedAt || now));
+          nextSpeed = Math.round(nextTransferredBytes / (elapsedMs / 1000));
+        }
+        nextLastProgressAt = now;
+      }
+      const nextJob = {
+        ...current,
+        ...patch,
+        id: jobId,
+        clientId: file.clientId,
+        fileName: file.name,
+        path: file.path,
+        channelName: patch.channelName || current.channelName || "file",
+        requestId: patch.requestId || current.requestId || "",
+        size: nextSize,
+        transferredBytes: nextTransferredBytes,
+        progress: typeof patch.progress === "number"
+          ? patch.progress
+          : (nextSize > 0 ? Math.max(0, Math.min(100, Math.round((nextTransferredBytes / nextSize) * 100))) : (current.progress || 0)),
+        speedBytesPerSec: nextSpeed,
+        updatedAt: now,
+        lastProgressAt: nextLastProgressAt
+      };
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = nextJob;
+        return next;
+      }
+      return [nextJob, ...prev].slice(0, 12);
+    });
+    return jobId;
+  }
+
+  function removeDownloadJob(jobId) {
+    setDownloadJobs((prev) => prev.filter((item) => item.id !== jobId));
+  }
+
+  function cancelDownloadJob(job) {
+    if (!p2p || !job?.clientId) {
+      return;
+    }
+    const cancelled = p2p.cancelOperation(job.clientId, job.channelName || "file", job.requestId || "");
+    removeDownloadJob(job.id);
+    setMessage(cancelled ? `已取消下载: ${job.fileName || job.path || "任务"}` : "下载任务已结束或无法取消", cancelled ? "warning" : "info");
+  }
 
   useEffect(() => {
     if (!token) {
@@ -302,6 +450,15 @@ export default function App() {
     setP2p((prev) => { prev?.dispose(); return bridge; });
     return () => bridge.dispose();
   }, [token]);
+
+  useEffect(() => {
+    return () => {
+      for (const timer of toastTimersRef.current.values()) {
+        clearTimeout(timer);
+      }
+      toastTimersRef.current.clear();
+    };
+  }, []);
 
   const visibleUploadJobs = useMemo(() => {
     return uploadJobs.filter((job) => {
@@ -332,6 +489,7 @@ export default function App() {
     () => uploadJobs.filter((job) => job.status === "uploading").length,
     [uploadJobs]
   );
+  const downloadingCount = useMemo(() => downloadJobs.length, [downloadJobs]);
 
   const onlineFiles = useMemo(() => {
     const onlineIds = new Set(clients.filter((c) => c.status === "online").map((c) => c.id));
@@ -364,6 +522,63 @@ export default function App() {
     });
   }, [onlineFiles, columnFilter, typeFilter, keyword]);
 
+  const totalOnlineBytes = useMemo(
+    () => onlineFiles.reduce((sum, file) => sum + Number(file.size || 0), 0),
+    [onlineFiles]
+  );
+  const mediaFileCount = useMemo(
+    () => onlineFiles.filter((file) => isImageMime(file.mimeType) || isVideoMime(file.mimeType)).length,
+    [onlineFiles]
+  );
+  const favoriteCount = useMemo(
+    () => onlineFiles.filter((file) => file.favorite).length,
+    [onlineFiles]
+  );
+  const categorizedCount = useMemo(
+    () => onlineFiles.filter((file) => file.columnId).length,
+    [onlineFiles]
+  );
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (keyword.trim()) count += 1;
+    if (columnFilter !== "all") count += 1;
+    if (typeFilter !== "all") count += 1;
+    return count;
+  }, [keyword, columnFilter, typeFilter]);
+  const uploadTargetPreview = useMemo(() => {
+    const folderPath = normalizeFolderPath(uploadFolderPath);
+    const columnName = columnMap.get(uploadColumnId) || "";
+    return normalizeFolderPath([columnName, folderPath].filter(Boolean).join("/"));
+  }, [uploadFolderPath, uploadColumnId, columnMap]);
+  const spotlightClients = useMemo(() => {
+    return [...clients]
+      .sort((left, right) => {
+        if (left.status === right.status) {
+          return (right.lastHeartbeatAt || "").localeCompare(left.lastHeartbeatAt || "");
+        }
+        return left.status === "online" ? -1 : 1;
+      })
+      .slice(0, 8);
+  }, [clients]);
+  const uploadQueuePreview = useMemo(() => visibleUploadJobs.slice(0, 4), [visibleUploadJobs]);
+  const downloadQueuePreview = useMemo(() => downloadJobs.slice(0, 4), [downloadJobs]);
+  const selectedFiles = useMemo(
+    () => onlineFiles.filter((file) => selectedFileIds.includes(file.id)),
+    [onlineFiles, selectedFileIds]
+  );
+  const selectedVisibleFiles = useMemo(
+    () => filteredOnlineFiles.filter((file) => selectedFileIds.includes(file.id)),
+    [filteredOnlineFiles, selectedFileIds]
+  );
+  const selectedVisibleAllFavorite = useMemo(
+    () => selectedVisibleFiles.length > 0 && selectedVisibleFiles.every((file) => file.favorite),
+    [selectedVisibleFiles]
+  );
+  const allVisibleSelected = useMemo(
+    () => filteredOnlineFiles.length > 0 && filteredOnlineFiles.every((file) => selectedFileIds.includes(file.id)),
+    [filteredOnlineFiles, selectedFileIds]
+  );
+
   const detailItemHeight = 96;
   const detailOverscan = 6;
   const detailTotal = filteredOnlineFiles.length;
@@ -372,12 +587,48 @@ export default function App() {
     detailTotal,
     Math.ceil((listScrollTop + listHeight) / detailItemHeight) + detailOverscan
   );
-  const detailSlice = filteredOnlineFiles.slice(detailStart, detailEnd);
-  const detailPaddingTop = detailStart * detailItemHeight;
-  const detailPaddingBottom = Math.max(0, (detailTotal - detailEnd) * detailItemHeight);
+  const detailSlice = isMobileViewport ? filteredOnlineFiles : filteredOnlineFiles.slice(detailStart, detailEnd);
+  const detailPaddingTop = isMobileViewport ? 0 : detailStart * detailItemHeight;
+  const detailPaddingBottom = isMobileViewport ? 0 : Math.max(0, (detailTotal - detailEnd) * detailItemHeight);
 
   function isUploadingFile(file) {
     return uploadingFileKeys.has(`${file.clientId}|${file.path}`);
+  }
+
+  function dismissToast(id) {
+    const timer = toastTimersRef.current.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      toastTimersRef.current.delete(id);
+    }
+    setToasts((prev) => prev.filter((item) => item.id !== id));
+  }
+
+  function resolveToastIntent(text, intent) {
+    if (intent !== "info") {
+      return intent;
+    }
+    if (/失败|错误|不可用|超时/i.test(text)) {
+      return "error";
+    }
+    if (/成功|完成|已就绪|已复制|已处理|已触发/i.test(text)) {
+      return "success";
+    }
+    if (/取消|排队|稍候|不在线|不支持|未开始|未选择|请输入|上传中/i.test(text)) {
+      return "warning";
+    }
+    return "info";
+  }
+
+  function setMessage(text, intent = "info") {
+    if (!text) {
+      return;
+    }
+    const nextIntent = resolveToastIntent(text, intent);
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setToasts((prev) => [...prev.slice(-3), { id, text, intent: nextIntent }]);
+    const timer = setTimeout(() => dismissToast(id), nextIntent === "error" ? 5600 : 3600);
+    toastTimersRef.current.set(id, timer);
   }
 
   function ensureClientOnline(clientId) {
@@ -390,6 +641,9 @@ export default function App() {
   }
 
   function getClientDisplayName(clientId) {
+    if (!clientId || typeof clientId !== "string") {
+      return "终端-未知";
+    }
     const client = clients.find((item) => item.id === clientId);
     const name = (client?.name || "").trim();
     if (!name || name === clientId) {
@@ -399,10 +653,6 @@ export default function App() {
   }
 
   function clearPreview() {
-    if (previewHlsRef.current) {
-      previewHlsRef.current.destroy();
-      previewHlsRef.current = null;
-    }
     if (previewReleaseRef.current) {
       previewReleaseRef.current();
       previewReleaseRef.current = null;
@@ -433,273 +683,6 @@ export default function App() {
     clearPreview();
     setPreviewOpen(false);
   }
-
-  useEffect(() => {
-    if (!previewOpen || previewing || !previewHlsSource || !p2p) {
-      return;
-    }
-    if (!Hls.isSupported()) {
-      setPreviewHlsSource(null);
-      return;
-    }
-
-    const video = previewVideoRef.current;
-    if (!video) {
-      return;
-    }
-
-    if (previewHlsRef.current) {
-      previewHlsRef.current.destroy();
-      previewHlsRef.current = null;
-    }
-
-    const sourceSnapshot = previewHlsSource;
-    const rewrittenManifest = String(sourceSnapshot.manifest || "")
-      .split(/\r?\n/)
-      .map((line) => {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith("#")) {
-          return line;
-        }
-        return buildP2pHlsSegmentUrl(sourceSnapshot.clientId, sourceSnapshot.hlsId, trimmed);
-      })
-      .join("\n");
-    const manifestDataUrl = `data:application/vnd.apple.mpegurl;charset=utf-8,${encodeURIComponent(rewrittenManifest)}`;
-    const manifestSegments = String(sourceSnapshot.manifest || "")
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#"))
-      .length;
-
-    setPreviewDebug((prev) => ({
-      ...prev,
-      mode: "hls-stream",
-      hlsId: sourceSnapshot.hlsId || "",
-      codec: sourceSnapshot.codec || prev.codec || "",
-      manifestSegments,
-      segmentRequests: 0,
-      segmentCompleted: 0,
-      segmentErrors: 0,
-      segmentBytes: 0,
-      lastSegment: "",
-      lastError: "",
-      hlsState: "initializing",
-      lastHlsEvent: "init"
-    }));
-
-    class P2PHlsLoader {
-      constructor() {
-        this.aborted = false;
-        this.context = null;
-        this.stats = createHlsLoaderStats();
-      }
-
-      load(context, _config, callbacks) {
-        this.context = context;
-        this.stats = createHlsLoaderStats();
-        const stats = this.stats;
-        stats.loading.start = performance.now();
-
-        (async () => {
-          try {
-            if (this.aborted) {
-              return;
-            }
-
-            setPreviewDebug((prev) => ({
-              ...prev,
-              lastHlsEvent: `loader:${context.type || "unknown"}`,
-              hlsState: "loading"
-            }));
-
-            const parsed = parseP2pHlsSegmentUrl(context.url);
-            if (!parsed && typeof context.url === "string" && /^https?:\/\//i.test(context.url)) {
-              const response = await fetch(context.url);
-              if (!response.ok) {
-                throw new Error(`http fallback load failed: ${response.status}`);
-              }
-              const isText = context.type === "manifest" || context.type === "level" || context.type === "audioTrack";
-              const data = isText ? await response.text() : await response.arrayBuffer();
-              const now = performance.now();
-              stats.loading.first = now;
-              stats.loading.end = now;
-              stats.loaded = isText ? data.length : data.byteLength;
-              stats.total = stats.loaded;
-              stats.chunkCount = Math.max(1, stats.chunkCount);
-              setPreviewDebug((prev) => ({ ...prev, lastError: "", hlsState: "loaded-fallback" }));
-              callbacks.onSuccess({ url: context.url, data }, stats, context, null);
-              return;
-            }
-
-            if (!parsed) {
-              throw new Error(`invalid hls url (${context.type || "unknown"}): ${context.url}`);
-            }
-
-            setPreviewDebug((prev) => ({
-              ...prev,
-              segmentRequests: prev.segmentRequests + 1,
-              lastSegment: parsed.segmentName,
-              hlsState: "segment-loading"
-            }));
-
-            const response = await p2p.getHlsSegment(parsed.clientId, parsed.hlsId, parsed.segmentName);
-            const data = await response.blob.arrayBuffer();
-            const now = performance.now();
-            stats.loading.first = stats.loading.first || now;
-            stats.loading.end = now;
-            stats.loaded = data.byteLength;
-            stats.total = data.byteLength;
-            stats.chunkCount = Math.max(1, stats.chunkCount + 1);
-            setPreviewDebug((prev) => ({
-              ...prev,
-              segmentCompleted: prev.segmentCompleted + 1,
-              segmentBytes: prev.segmentBytes + data.byteLength,
-              lastSegment: parsed.segmentName,
-              lastError: "",
-              hlsState: "segment-loaded"
-            }));
-            callbacks.onSuccess({ url: context.url, data }, stats, context, null);
-          } catch (error) {
-            const errorText = error?.message || "hls load failed";
-            stats.loading.end = performance.now();
-            setPreviewDebug((prev) => ({
-              ...prev,
-              segmentErrors: prev.segmentErrors + 1,
-              lastError: errorText,
-              hlsState: "error"
-            }));
-            callbacks.onError({ code: 0, text: errorText }, context, null, stats);
-          }
-        })();
-      }
-
-      abort() {
-        this.aborted = true;
-        if (this.stats) {
-          this.stats.aborted = true;
-          this.stats.loading.end = performance.now();
-        }
-      }
-
-      destroy() {
-        this.aborted = true;
-      }
-    }
-
-    const hls = new Hls({
-      enableWorker: true,
-      lowLatencyMode: false,
-      fLoader: P2PHlsLoader
-    });
-    previewHlsRef.current = hls;
-
-    hls.on(Hls.Events.MANIFEST_LOADING, () => {
-      setPreviewDebug((prev) => ({ ...prev, hlsState: "manifest-loading", lastHlsEvent: "MANIFEST_LOADING" }));
-    });
-    hls.on(Hls.Events.MANIFEST_LOADED, () => {
-      setPreviewDebug((prev) => ({ ...prev, hlsState: "manifest-loaded", lastHlsEvent: "MANIFEST_LOADED" }));
-    });
-    hls.on(Hls.Events.MANIFEST_PARSED, () => {
-      setPreviewDebug((prev) => ({ ...prev, hlsState: "manifest-parsed", lastHlsEvent: "MANIFEST_PARSED" }));
-      video.play().catch(() => {});
-    });
-    hls.on(Hls.Events.FRAG_LOADING, (_event, data) => {
-      setPreviewDebug((prev) => ({
-        ...prev,
-        hlsState: "frag-loading",
-        lastHlsEvent: `FRAG_LOADING ${data?.frag?.sn ?? "-"}`
-      }));
-    });
-    hls.on(Hls.Events.FRAG_LOADED, (_event, data) => {
-      setPreviewDebug((prev) => ({
-        ...prev,
-        hlsState: "frag-loaded",
-        lastHlsEvent: `FRAG_LOADED ${data?.frag?.sn ?? "-"}`
-      }));
-    });
-    hls.on(Hls.Events.BUFFER_APPENDED, () => {
-      setPreviewDebug((prev) => ({ ...prev, hlsState: "buffer-appended", lastHlsEvent: "BUFFER_APPENDED" }));
-    });
-
-    hls.on(Hls.Events.ERROR, (_event, data) => {
-      const detailText = [
-        data?.details || data?.type || "unknown",
-        data?.reason || "",
-        data?.error?.message || ""
-      ].filter(Boolean).join(" | ");
-      if (!data?.fatal) {
-        setPreviewDebug((prev) => ({
-          ...prev,
-          lastHlsEvent: `ERROR:${detailText || "non-fatal"}`
-        }));
-        return;
-      }
-      setPreviewDebug((prev) => ({
-        ...prev,
-        lastError: `hls-fatal:${detailText || "unknown"}`,
-        segmentErrors: prev.segmentErrors + 1,
-        hlsState: "fatal-error",
-        lastHlsEvent: `FATAL:${detailText || "unknown"}`
-      }));
-      setMessage(`HLS预览失败: ${detailText || "unknown"}`);
-      setPreviewHlsSource(null);
-      hls.destroy();
-      if (previewHlsRef.current === hls) {
-        previewHlsRef.current = null;
-      }
-    });
-
-    hls.attachMedia(video);
-    hls.on(Hls.Events.MEDIA_ATTACHED, () => {
-      setPreviewDebug((prev) => ({ ...prev, hlsState: "media-attached", lastHlsEvent: "MEDIA_ATTACHED" }));
-      hls.loadSource(manifestDataUrl);
-    });
-
-    return () => {
-      hls.destroy();
-      if (previewHlsRef.current === hls) {
-        previewHlsRef.current = null;
-      }
-    };
-  }, [previewOpen, previewing, previewHlsSource, p2p]);
-
-  useEffect(() => {
-    if (!previewOpen || previewing || !previewMime.startsWith("video/")) {
-      return;
-    }
-    const video = previewVideoRef.current;
-    if (!video) {
-      return;
-    }
-
-    const timer = setInterval(() => {
-      const currentTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
-      const duration = Number.isFinite(video.duration) ? video.duration : 0;
-      let bufferedEnd = currentTime;
-      try {
-        for (let idx = 0; idx < video.buffered.length; idx += 1) {
-          const start = video.buffered.start(idx);
-          const end = video.buffered.end(idx);
-          if (currentTime >= start && currentTime <= end) {
-            bufferedEnd = end;
-            break;
-          }
-          if (end > bufferedEnd) {
-            bufferedEnd = end;
-          }
-        }
-      } catch {
-      }
-      setPreviewDebug((prev) => ({
-        ...prev,
-        currentTime,
-        duration,
-        bufferedAhead: Math.max(0, bufferedEnd - currentTime)
-      }));
-    }, 500);
-
-    return () => clearInterval(timer);
-  }, [previewOpen, previewing, previewMime]);
 
   useEffect(() => {
     if (!previewOpen || previewing) {
@@ -790,17 +773,76 @@ export default function App() {
     setUploadJobs((prev) => {
       const idx = prev.findIndex((item) => item.id === job.id);
       if (idx === -1) {
-        return [job, ...prev].slice(0, 120);
+        return [{ speedBytesPerSec: 0, lastProgressAt: Date.now(), ...job }, ...prev].slice(0, 120);
       }
       const next = [...prev];
       const merged = { ...next[idx], ...job };
       if (merged.status === "uploading") {
         merged.progress = Math.max(next[idx].progress || 0, merged.progress || 0);
         merged.transferredBytes = Math.max(next[idx].transferredBytes || 0, merged.transferredBytes || 0);
+        if (typeof job.transferredBytes === "number") {
+          const now = Date.now();
+          const deltaBytes = merged.transferredBytes - (next[idx].transferredBytes || 0);
+          const deltaMs = now - (next[idx].lastProgressAt || now);
+          merged.speedBytesPerSec = deltaBytes > 0 && deltaMs > 0
+            ? Math.round(deltaBytes / (deltaMs / 1000))
+            : (next[idx].speedBytesPerSec || 0);
+          merged.lastProgressAt = now;
+        }
       }
       next[idx] = merged;
       return next;
     });
+  }
+
+  function getTransferDiag(clientId) {
+    if (!clientId || typeof clientId !== "string") {
+      return {};
+    }
+    return diagnostics.clients[clientId] || {};
+  }
+
+  function renderTransferQueueRow(job, kind) {
+    const safeJob = job || {};
+    const diag = getTransferDiag(safeJob.clientId);
+    const routeLabel = getRouteLabel(diag);
+    const speed = kind === "download" ? safeJob.speedBytesPerSec : (safeJob.speedBytesPerSec || 0);
+    const progress = Math.max(0, Math.min(100, safeJob.progress || 0));
+    const subStatus = kind === "download"
+      ? `下载中 · ${typeof safeJob.progress === "number" ? `${safeJob.progress}%` : "-"}`
+      : `上传中 · ${typeof safeJob.progress === "number" ? `${safeJob.progress}%` : "-"}`;
+    const extraMode = kind === "download"
+      ? (safeJob.mode === "direct-save" ? "直存" : safeJob.mode === "mobile" ? "移动端" : "浏览器")
+      : "P2P 上传";
+    return (
+      <div key={`${kind}-${safeJob.id || safeJob.relativePath || safeJob.fileName || "unknown"}`} className="miniListRow queueRow transferQueueRow">
+        <div className="miniListMain">
+          <Text className="miniListTitle" title={safeJob.fileName || safeJob.relativePath}>{safeJob.fileName || `${kind === "download" ? "下载" : "上传"}任务`}</Text>
+          <Caption1>{getClientDisplayName(safeJob.clientId)} · {subStatus}</Caption1>
+          <Caption1>
+            {typeof safeJob.transferredBytes === "number" && typeof safeJob.size === "number" && safeJob.size > 0
+              ? `${formatBytes(safeJob.transferredBytes)} / ${formatBytes(safeJob.size)}`
+              : formatBytes(safeJob.transferredBytes || 0)}
+            {` · ${formatSpeed(speed)}`}
+            {` · ${routeLabel}`}
+            {` · ${extraMode}`}
+          </Caption1>
+          <Caption1>
+            候选: {diag.localCandidateType || "-"} {"->"} {diag.remoteCandidateType || "-"}
+            {` · 下行 ${formatSpeed(diag.currentRecvBps || 0)}`}
+            {` · 上行 ${formatSpeed(diag.currentSendBps || 0)}`}
+          </Caption1>
+          <div className="uploadProgressBar">
+            <div className="uploadProgressInner" style={{ width: `${progress}%` }} />
+          </div>
+        </div>
+        {kind === "download" ? (
+          <Button size="small" onClick={() => cancelDownloadJob(safeJob)}>取消</Button>
+        ) : (
+          <Button size="small" onClick={() => cancelUploadJob(safeJob)}>取消</Button>
+        )}
+      </div>
+    );
   }
 
   async function navigatePreview(offset) {
@@ -959,6 +1001,13 @@ export default function App() {
     return () => window.removeEventListener("resize", updateHeight);
   }, [viewMode]);
 
+  useEffect(() => {
+    const onResize = () => setIsMobileViewport(window.innerWidth <= 760);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
   // Pre-establish P2P connections to online clients
   useEffect(() => {
     if (!p2p) return;
@@ -1001,6 +1050,16 @@ export default function App() {
       fileListRef.current.scrollTop = 0;
     }
   }, [viewMode, onlineFiles.length]);
+
+  useEffect(() => {
+    setSelectedFileIds((prev) => prev.filter((id) => onlineFiles.some((file) => file.id === id)));
+  }, [onlineFiles]);
+
+  useEffect(() => {
+    if (!uploadOpen) {
+      setUploadStep(1);
+    }
+  }, [uploadOpen]);
 
   async function login() {
     try {
@@ -1133,17 +1192,67 @@ export default function App() {
   async function download(file) {
     if (!p2p || !ensureClientOnline(file.clientId)) return;
     if (!(await ensureSignalingReady())) return;
+    const jobId = getDownloadJobId(file);
+    const onStart = ({ requestId, channelName }) => {
+      upsertDownloadJob(file, {
+        requestId,
+        channelName: channelName || "file"
+      });
+    };
+    const onMeta = (meta) => {
+      upsertDownloadJob(file, {
+        size: Number(meta?.size || file.size || 0),
+        progress: 0
+      });
+    };
+    const onProgress = ({ transferredBytes, totalBytes, progress }) => {
+      upsertDownloadJob(file, {
+        size: Number(totalBytes || file.size || 0),
+        transferredBytes: Number(transferredBytes || 0),
+        progress: typeof progress === "number" ? progress : undefined
+      });
+    };
     try {
-      const canStream = typeof window.showSaveFilePicker === "function" && typeof p2p.downloadFileStream === "function";
-      if (canStream) {
+      const mobileBrowser = isMobileBrowser();
+      const preferDesktopDirectSave = !mobileBrowser
+        && Number(file.size || 0) >= DESKTOP_STREAM_SAVE_THRESHOLD_BYTES
+        && typeof window.showSaveFilePicker === "function"
+        && typeof p2p.downloadFileStream === "function";
+
+      if (preferDesktopDirectSave) {
         try {
           const handle = await window.showSaveFilePicker({ suggestedName: file.name });
           const writable = await handle.createWritable();
-          setMessage("正在建立P2P连接并下载...");
-          await p2p.downloadFileStream(file.clientId, file.path, { writable });
-          setMessage("下载完成（P2P）");
+          upsertDownloadJob(file, { mode: "direct-save", progress: 0, transferredBytes: 0, size: Number(file.size || 0) });
+          setMessage("正在建立P2P连接并直接写入文件...");
+          await p2p.downloadFileStream(file.clientId, file.path, { writable, onStart, onMeta, onProgress });
+          removeDownloadJob(jobId);
+          setMessage("下载完成（已直接写入本地）", "success");
           return;
         } catch (error) {
+          removeDownloadJob(jobId);
+          if (error?.name === "AbortError") {
+            setMessage("已取消保存");
+            return;
+          }
+          setMessage("直存失败，回退浏览器下载...", "warning");
+        }
+      }
+
+      upsertDownloadJob(file, { mode: mobileBrowser ? "mobile" : "browser", progress: 0, transferredBytes: 0, size: Number(file.size || 0) });
+      setMessage("正在建立P2P连接并下载...");
+  const result = await p2p.downloadFile(file.clientId, file.path, { onStart, onMeta, onProgress });
+
+      if (mobileBrowser) {
+        try {
+          const shared = await tryShareDownloadedFile(result.blob, file.name, result.meta?.mimeType || file.mimeType);
+          if (shared) {
+            removeDownloadJob(jobId);
+            setMessage("已打开系统分享/存储面板", "success");
+            return;
+          }
+        } catch (error) {
+          removeDownloadJob(jobId);
           if (error?.name === "AbortError") {
             setMessage("已取消保存");
             return;
@@ -1151,16 +1260,21 @@ export default function App() {
         }
       }
 
-      setMessage("正在建立P2P连接并下载...");
-      const result = await p2p.downloadFile(file.clientId, file.path);
-      const url = URL.createObjectURL(result.blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = file.name;
-      a.click();
-      URL.revokeObjectURL(url);
-      setMessage("下载完成（P2P）");
+      if (supportsAnchorDownload()) {
+        triggerBrowserDownload(result.blob, file.name);
+        removeDownloadJob(jobId);
+        setMessage(mobileBrowser ? "文件已交给浏览器处理" : "浏览器下载已开始", "success");
+        return;
+      }
+
+      removeDownloadJob(jobId);
+      throw new Error("当前浏览器不支持标准下载或文件直存");
     } catch (error) {
+      removeDownloadJob(jobId);
+      if (error?.cancelled || /cancelled|operation cancelled|已取消/i.test(error?.message || "")) {
+        setMessage(`已取消下载: ${file.name}`, "warning");
+        return;
+      }
       setMessage(`下载失败: ${error.message}`);
     }
   }
@@ -1217,9 +1331,23 @@ export default function App() {
         Math.max(90_000, Math.ceil(Number(file.size || 0) / (1024 * 1024)) * 1200)
       );
       const fallbackDownloadTimeoutMs = Math.min(12 * 60 * 1000, Math.max(120_000, sizeBasedTimeoutMs));
+      const hlsCapability = isVideoMime(file.mimeType) && !options.forceTranscode && !options.skipHls
+        ? await getHlsPlaybackSupport()
+        : { supported: false, reason: "当前预览流程未启用 HLS" };
+      const hlsSupported = !!hlsCapability.supported;
+
+      if (isVideoMime(file.mimeType) && !options.forceTranscode && !options.skipHls && !hlsSupported) {
+        setPreviewDebug((prev) => ({
+          ...prev,
+          lastError: `hls-skip:${hlsCapability.reason}`,
+          hlsState: "unsupported",
+          lastHlsEvent: "HLS_SKIPPED"
+        }));
+        setMessage(`HLS 未启用，已回退源文件预览: ${hlsCapability.reason}`, "warning");
+      }
 
       if (isVideoMime(file.mimeType) || isAudioMime(file.mimeType)) {
-        if (isVideoMime(file.mimeType) && !options.forceTranscode && !options.skipHls && Hls.isSupported()) {
+        if (hlsSupported) {
           try {
             setPreviewStage("准备 HLS");
             setPreviewStatusText("正在准备 HLS 预览...");
@@ -1263,6 +1391,14 @@ export default function App() {
             return;
           } catch (error) {
             if (previewSessionIdRef.current !== sessionId) return;
+            setPreviewDebug((prev) => ({
+              ...prev,
+              lastError: `hls-manifest:${error?.message || "unknown"}`,
+              hlsState: "fallback",
+              lastHlsEvent: "HLS_MANIFEST_FAILED"
+            }));
+            setPreviewStage("HLS 回退");
+            setMessage(`HLS 预览失败，已回退源文件预览: ${error?.message || "unknown"}`, "warning");
             if (import.meta.env.VITE_P2P_DEBUG === "1") {
               console.log("[web-p2p] hls-fallback", error?.message || error);
             }
@@ -1456,7 +1592,11 @@ export default function App() {
 
   async function removeFile(file) {
     if (!p2p || !ensureClientOnline(file.clientId)) return;
-    setDeleteTarget(file);
+    if (isUploadingFile(file)) {
+      setMessage("该文件仍在上传中，请先取消上传或等待任务结束后再删除");
+      return;
+    }
+    setDeleteTarget({ kind: "single", files: [file] });
     setDeleteStep(1);
   }
 
@@ -1467,26 +1607,40 @@ export default function App() {
       setDeleteStep(1);
       return;
     }
-    if (p2p?.isClientBusy(deleteTarget.clientId)) {
-      setMessage("目标终端当前忙，删除请求已排队，请稍候...");
-    }
+
+    const targets = deleteTarget.files || [];
+    let deletedCount = 0;
+    let failedCount = 0;
     try {
-      setMessage("正在删除文件...");
-      // deleteFile already retries once internally via withPeerRetry.
-      await p2p.deleteFile(deleteTarget.clientId, deleteTarget.path);
-      if (previewPath === deleteTarget.path && previewClientId === deleteTarget.clientId) {
-        clearPreview();
-        setPreviewOpen(false);
+      setMessage(targets.length > 1 ? `正在删除 ${targets.length} 个文件...` : "正在删除文件...");
+      for (const target of targets) {
+        if (!ensureClientOnline(target.clientId)) {
+          failedCount += 1;
+          continue;
+        }
+        if (p2p?.isClientBusy(target.clientId)) {
+          setMessage("部分目标终端当前忙，删除请求已排队，请稍候...");
+        }
+        await p2p.deleteFile(target.clientId, target.path);
+        if (previewPath === target.path && previewClientId === target.clientId) {
+          clearPreview();
+          setPreviewOpen(false);
+        }
+        deletedCount += 1;
+        delete thumbnailCache.current[getThumbKey(target)];
       }
       setThumbMap((prev) => {
         const next = { ...prev };
-        delete next[getThumbKey(deleteTarget)];
+        for (const target of targets) {
+          delete next[getThumbKey(target)];
+        }
         return next;
       });
-      delete thumbnailCache.current[getThumbKey(deleteTarget)];
       saveThumbCache(thumbnailCache.current);
-      setMessage("文件已删除");
+      setSelectedFileIds((prev) => prev.filter((id) => !targets.some((item) => item.id === id)));
+      setMessage(targets.length > 1 ? `批量删除完成：成功 ${deletedCount}，失败 ${failedCount}` : "文件已删除");
       setDeleteTarget(null);
+      setDeleteStep(1);
       await refreshAll();
     } catch (error) {
       setMessage(`删除失败: ${error.message}`);
@@ -1507,6 +1661,10 @@ export default function App() {
     const columnName = columnMap.get(uploadColumnId) || "";
     const basePath = normalizeFolderPath([columnName, folderPath].filter(Boolean).join("/"));
     setUploadOpen(false);
+
+    let successCount = 0;
+    let failedCount = 0;
+    let cancelledCount = 0;
 
     for (const file of uploadFiles) {
       let jobId = "";
@@ -1575,8 +1733,14 @@ export default function App() {
             upsertUploadJob(finished.job);
           }
         }
+        successCount += 1;
       } catch (error) {
         const isCancelled = /已取消|cancelled/i.test(error?.message || "");
+        if (isCancelled) {
+          cancelledCount += 1;
+        } else {
+          failedCount += 1;
+        }
         if (!isCancelled && jobId) {
           apiRequest(`/api/upload-jobs/${jobId}/fail`, {
             method: "POST",
@@ -1600,8 +1764,14 @@ export default function App() {
       }
     }
 
-    setMessage("上传完成（P2P）");
     await refreshAll();
+    if (successCount && !failedCount && !cancelledCount) {
+      setMessage(`已完成 ${successCount} 个文件上传`);
+    } else if (successCount || failedCount || cancelledCount) {
+      setMessage(`上传结束：成功 ${successCount}，失败 ${failedCount}，取消 ${cancelledCount}`);
+    } else {
+      setMessage("未开始上传任务");
+    }
     setUploadFiles([]);
     setUploadOpen(false);
     if (fileInputRef.current) {
@@ -1611,7 +1781,17 @@ export default function App() {
 
   function cancelUploadJob(job) {
     if (!p2p || !job?.clientId || !job?.relativePath) return;
-    p2p.cancelUpload(job.clientId, job.relativePath);
+    let cancelled = false;
+    try {
+      cancelled = p2p.cancelUpload(job.clientId, job.relativePath);
+    } catch (error) {
+      setMessage(`取消上传失败: ${error?.message || error}`);
+      return;
+    }
+    if (!cancelled) {
+      setMessage("当前上传任务不在本地活跃队列中，未执行通道取消", "warning");
+      return;
+    }
     if (job.id) {
       apiRequest(`/api/upload-jobs/${job.id}/fail`, {
         method: "POST",
@@ -1626,6 +1806,59 @@ export default function App() {
       });
     }
     setMessage("上传已取消");
+  }
+
+  function toggleFileSelected(fileId) {
+    setSelectedFileIds((prev) => (prev.includes(fileId) ? prev.filter((id) => id !== fileId) : [...prev, fileId]));
+  }
+
+  function toggleSelectAllVisible() {
+    setSelectedFileIds((prev) => {
+      const visibleIds = filteredOnlineFiles.map((file) => file.id);
+      if (visibleIds.length === 0) {
+        return prev;
+      }
+      const prevSet = new Set(prev);
+      const allSelected = visibleIds.every((id) => prevSet.has(id));
+      if (allSelected) {
+        return prev.filter((id) => !visibleIds.includes(id));
+      }
+      return Array.from(new Set([...prev, ...visibleIds]));
+    });
+  }
+
+  async function batchToggleFavorite() {
+    if (!selectedVisibleFiles.length) {
+      return;
+    }
+    for (const file of selectedVisibleFiles) {
+      await apiRequest(`/api/favorites/${encodeURIComponent(file.id)}`, {
+        method: "POST",
+        token
+      });
+    }
+    await refreshAll();
+    setMessage(`已处理 ${selectedVisibleFiles.length} 个文件的收藏状态`);
+  }
+
+  async function batchDownload() {
+    if (!selectedVisibleFiles.length) {
+      return;
+    }
+    for (const file of selectedVisibleFiles) {
+      await download(file);
+    }
+    setMessage(`已触发 ${selectedVisibleFiles.length} 个文件的下载`);
+  }
+
+  function requestBatchDelete() {
+    const deletableFiles = selectedVisibleFiles.filter((file) => !isUploadingFile(file));
+    if (!deletableFiles.length) {
+      setMessage("当前选中文件里没有可删除项");
+      return;
+    }
+    setDeleteTarget({ kind: "batch", files: deletableFiles });
+    setDeleteStep(1);
   }
 
   async function changeClientStatus(clientId, status) {
@@ -1654,26 +1887,248 @@ export default function App() {
     setPreviewOpen(false);
   }
 
+  function renderFileActionTray(file, floating = false) {
+    const deletingDisabled = isUploadingFile(file);
+    return (
+      <div className={`fileActionTray${floating ? " floating" : ""}`} onClick={(event) => event.stopPropagation()}>
+        <button
+          type="button"
+          className={`actionChip${file.favorite ? " active" : ""}`}
+          title={file.favorite ? "取消收藏" : "收藏"}
+          aria-label={file.favorite ? "取消收藏" : "收藏"}
+          onClick={() => toggleFavorite(file.id)}
+        >
+          {file.favorite ? <StarFilled /> : <StarRegular />}
+        </button>
+        <button
+          type="button"
+          className="actionChip"
+          title="预览"
+          aria-label="预览"
+          onClick={() => preview(file)}
+        >
+          <EyeRegular />
+        </button>
+        <button
+          type="button"
+          className="actionChip"
+          title="下载"
+          aria-label="下载"
+          onClick={() => download(file)}
+        >
+          <ArrowDownloadRegular />
+        </button>
+        <button
+          type="button"
+          className="actionChip danger"
+          title={deletingDisabled ? "上传中不可删除" : "删除"}
+          aria-label={deletingDisabled ? "上传中不可删除" : "删除"}
+          disabled={deletingDisabled}
+          onClick={() => removeFile(file)}
+        >
+          <DeleteRegular />
+        </button>
+      </div>
+    );
+  }
+
+  function renderSelectionToggle(file) {
+    const selected = selectedFileIds.includes(file.id);
+    return (
+      <button
+        type="button"
+        className={`selectToggle${selected ? " active" : ""}`}
+        aria-label={selected ? "取消选中" : "选中文件"}
+        onClick={(event) => {
+          event.stopPropagation();
+          toggleFileSelected(file.id);
+        }}
+      >
+        <span className="selectToggleFrame">
+          <span className="selectToggleMark" />
+        </span>
+        <span className="selectToggleGlow" />
+      </button>
+    );
+  }
+
+  function renderToastViewport() {
+    if (!toasts.length) {
+      return null;
+    }
+    return (
+      <div className="toastViewport" aria-live="polite" aria-atomic="true">
+        {toasts.map((toast) => (
+          <div key={toast.id} className={`toastItem ${toast.intent}`}>
+            <div className="toastBody">
+              <Caption1>{toast.intent === "error" ? "错误" : toast.intent === "success" ? "已完成" : toast.intent === "warning" ? "注意" : "状态"}</Caption1>
+              <Text>{toast.text}</Text>
+            </div>
+            <button type="button" className="toastClose" aria-label="关闭提示" onClick={() => dismissToast(toast.id)}>
+              关闭
+            </button>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   if (!token || !user) {
     return (
-      <div className="page">
-        <div className="shell authShell">
-          <Card className="surfaceCard">
-            <CardHeader header={<Title3>NAS Bridge 登录 / 注册</Title3>} />
-            <Field label="邮箱">
-              <Input value={email} onChange={(_, data) => setEmail(data.value)} />
-            </Field>
-            <Field label="密码">
-              <Input type="password" value={password} onChange={(_, data) => setPassword(data.value)} />
-            </Field>
-            <Field label="显示名（注册时必填）">
-              <Input value={displayName} onChange={(_, data) => setDisplayName(data.value)} />
-            </Field>
-            <div className="row">
-              <Button appearance="primary" onClick={login}>登录</Button>
-              <Button onClick={register}>注册</Button>
+      <div className="page authPage">
+        {renderToastViewport()}
+        <div className="authLayout authExperience">
+          <section className="surfaceCard authShowcase">
+            <div className="authShowcaseCopy">
+              <div className="authShowcaseTop">
+                <Badge appearance="outline" color="informative">NAS Bridge</Badge>
+                <div className="authShowcasePulse">
+                  <span className="authShowcasePulseDot" />
+                  <Caption1>Private cloud relay console</Caption1>
+                </div>
+              </div>
+
+              <div className="authShowcaseHeadline">
+                <Title3>一个入口，接管所有远端存储节点。</Title3>
+                <Text>
+                  登录后直接进入文件工作台，处理预览、上传、批量操作和多终端连接，不再把这些动作拆在不同页面里。
+                </Text>
+              </div>
+
+              <div className="authShowcaseMetrics">
+                <div className="authMetricCard primary">
+                  <Caption1>连接层</Caption1>
+                  <Text>03 条链路</Text>
+                </div>
+                <div className="authMetricCard">
+                  <Caption1>操作面</Caption1>
+                  <Text>04 类动作</Text>
+                </div>
+                <div className="authMetricCard">
+                  <Caption1>控制台</Caption1>
+                  <Text>01 个入口</Text>
+                </div>
+              </div>
+
+              <div className="authFeatureRail">
+                <div className="authFeatureBlock">
+                  <Caption1>P2P First</Caption1>
+                  <Text>直连优先</Text>
+                </div>
+                <div className="authFeatureBlock">
+                  <Caption1>Relay Ready</Caption1>
+                  <Text>中继兜底</Text>
+                </div>
+                <div className="authFeatureBlock">
+                  <Caption1>Media Stack</Caption1>
+                  <Text>预览可切换</Text>
+                </div>
+              </div>
             </div>
-            {message && <MessageBar>{message}</MessageBar>}
+
+            <div className="authShowcaseVisual" aria-hidden="true">
+              <div className="authVisualHalo haloA" />
+              <div className="authVisualHalo haloB" />
+              <div className="authVisualCard authVisualPrimary">
+                <div className="authVisualHeader">
+                  <span className="authVisualWindowDot red" />
+                  <span className="authVisualWindowDot amber" />
+                  <span className="authVisualWindowDot green" />
+                </div>
+                <div className="authVisualBody">
+                  <div className="authVisualRow">
+                    <span>node/home</span>
+                    <strong>online</strong>
+                  </div>
+                  <div className="authVisualBars">
+                    <span style={{ width: "84%" }} />
+                    <span style={{ width: "66%" }} />
+                    <span style={{ width: "92%" }} />
+                  </div>
+                  <div className="authVisualTerminal">
+                    <span>preview channel ready</span>
+                    <span>upload queue synced</span>
+                    <span>relay fallback standby</span>
+                  </div>
+                </div>
+              </div>
+              <div className="authVisualStack">
+                <div className="authVisualCard authVisualMini">
+                  <Caption1>PREVIEW</Caption1>
+                  <Text>HLS / Stream / Blob</Text>
+                </div>
+                <div className="authVisualCard authVisualMini alt">
+                  <Caption1>NODES</Caption1>
+                  <Text>Live routes synced</Text>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <Card className="surfaceCard authPanel authPanelElevated">
+            <div className="authPanelHeader">
+              <div className="authPanelBrand">
+                <div className="brandLogo authPanelLogo" aria-hidden="true">
+                  <span className="brandLogoCore" />
+                  <span className="brandLogoOrbit orbitA" />
+                  <span className="brandLogoOrbit orbitB" />
+                </div>
+                <div>
+                  <Caption1>NAS Bridge Access</Caption1>
+                </div>
+              </div>
+              <div>
+                <Title3>{authMode === "login" ? "进入文件工作台" : "创建访问入口"}</Title3>
+                <Caption1>{authMode === "login" ? "Sign in to the bridge console" : "Create account and enter the console"}</Caption1>
+              </div>
+              <div className="authModeSwitch">
+                <Button appearance={authMode === "login" ? "primary" : "secondary"} onClick={() => setAuthMode("login")}>登录</Button>
+                <Button appearance={authMode === "register" ? "primary" : "secondary"} onClick={() => setAuthMode("register")}>注册</Button>
+              </div>
+            </div>
+
+            <div className="authForm">
+              <Field label="邮箱">
+                <Input value={email} placeholder="name@example.com" onChange={(_, data) => setEmail(data.value)} />
+              </Field>
+              <Field label="密码">
+                <Input
+                  type="password"
+                  value={password}
+                  placeholder="输入登录密码"
+                  onChange={(_, data) => setPassword(data.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      if (authMode === "login") {
+                        login();
+                      } else {
+                        register();
+                      }
+                    }
+                  }}
+                />
+              </Field>
+              {authMode === "register" && (
+                <Field label="显示名">
+                  <Input value={displayName} placeholder="例如：家用 NAS" onChange={(_, data) => setDisplayName(data.value)} />
+                </Field>
+              )}
+              <div className="authActions">
+                <Button appearance="primary" onClick={authMode === "login" ? login : register}>
+                  {authMode === "login" ? "进入控制台" : "创建并进入"}
+                </Button>
+                <Button onClick={() => setAuthMode(authMode === "login" ? "register" : "login")}>
+                  {authMode === "login" ? "没有账号？去注册" : "已有账号？去登录"}
+                </Button>
+              </div>
+              <div className="authPanelFooterNote">
+                <Caption1>
+                  {authMode === "login"
+                    ? "登录后直接进入文件、终端和任务视图。"
+                    : "显示名会立即用于终端归属与上传记录展示。"}
+                </Caption1>
+              </div>
+            </div>
           </Card>
         </div>
       </div>
@@ -1682,94 +2137,218 @@ export default function App() {
 
   return (
     <div className="page">
-      <div className="shell">
-        <div className="header modernHeader">
-          <div>
-            <Title3>NAS Bridge</Title3>
-            <Caption1>{user.displayName}（{user.role}）</Caption1>
+      {renderToastViewport()}
+      <div className="shell appShell">
+        <header className="appTopbar surfaceCard">
+          <div className="brandBlock">
+            <div className="brandIdentity">
+              <div className="brandLogo" aria-hidden="true">
+                <span className="brandLogoCore" />
+                <span className="brandLogoOrbit orbitA" />
+                <span className="brandLogoOrbit orbitB" />
+              </div>
+              <div>
+                <Title3>NAS Console</Title3>
+                <Caption1>{user.displayName} · {user.role === "admin" ? "管理员" : "成员"}</Caption1>
+              </div>
+            </div>
+            <div className="brandMetaRow">
+              <Badge appearance="outline" color={diagnostics.wsState === "open" ? "success" : "informative"}>WS {diagnostics.wsState || "idle"}</Badge>
+              <Badge appearance="outline" color={onlineCount ? "success" : "informative"}>在线终端 {onlineCount}</Badge>
+              <Caption1>最近刷新 {formatRelativeTime(lastRefreshAt)}</Caption1>
+            </div>
           </div>
-          <div className="row">
-            <button className="onlineBadgeBtn" onClick={() => setDiagnosticsOpen(true)}>
-              <Badge appearance="filled" color={clients.some((item) => item.status === "online") ? "success" : "informative"}>
-                在线终端 {onlineCount}
-              </Badge>
-            </button>
-            <Button size="small" onClick={() => refreshAll()}>{loading ? <Spinner size="tiny" /> : "刷新"}</Button>
-            <Button size="small" onClick={logout}>退出</Button>
+          <div className="topbarActions">
+            <Button appearance="primary" onClick={() => setUploadOpen(true)}>上传文件</Button>
+            <Button onClick={() => refreshAll()}>{loading ? <Spinner size="tiny" /> : "同步索引"}</Button>
+            <Button onClick={logout}>退出</Button>
           </div>
-        </div>
+        </header>
 
-        <div className="statusBar">
-          <div className="statusGroup">
-            <div className="statusItem">
-              <span className={`statusDot ${diagnostics.wsState === "open" ? "ok" : "warn"}`} />
-              <Text>WS</Text>
-              <Badge appearance="outline" color={diagnostics.wsState === "open" ? "success" : "informative"}>{diagnostics.wsState || "idle"}</Badge>
-            </div>
-            <div className="statusItem">
-              <Text>在线终端</Text>
-              <Text className="statusValue">{onlineCount}</Text>
-            </div>
-            <div className="statusItem">
-              <Text>中继</Text>
-              <Badge appearance="outline" color={relayCount ? "warning" : "success"}>{relayCount}</Badge>
-            </div>
-            <div className="statusItem">
-              <Text>上传中</Text>
-              <Badge appearance="outline" color={uploadingCount ? "informative" : "success"}>{uploadingCount}</Badge>
-            </div>
-          </div>
-          <div className="statusGroup">
-            <div className="statusItem">
-              <Text>最近刷新</Text>
-              <Caption1>{formatRelativeTime(lastRefreshAt)}</Caption1>
-            </div>
-            <div className="statusItem">
-              <Text>轮询更新</Text>
-              <Caption1>{formatRelativeTime(lastPollAt)}</Caption1>
-            </div>
-            <Button size="small" appearance="primary" onClick={() => setDiagnosticsOpen(true)}>诊断面板</Button>
-          </div>
-        </div>
-
-        {message && <MessageBar className="messageBar">{message}</MessageBar>}
-
-        <div className="contentLayout">
-          <section className="filePanel">
-            <Card className="surfaceCard panelCard">
-              <div className="fileCenterHeader">
-                <Subtitle1>文件中心</Subtitle1>
-                <div className="row">
-                  <Button size="small" appearance={viewMode === "grid" ? "primary" : "secondary"} onClick={() => setViewMode("grid")}>图标模式</Button>
-                  <Button size="small" appearance={viewMode === "details" ? "primary" : "secondary"} onClick={() => setViewMode("details")}>详情模式</Button>
-                  <Button size="small" appearance="primary" onClick={() => setUploadOpen(true)}>上传文件</Button>
+        <div className="workspaceLayout">
+          <aside className="controlRail">
+            <Card className="surfaceCard panelCard controlCard commandCard">
+              <div className="sectionHeaderCompact">
+                <div>
+                  <Subtitle1>系统概览</Subtitle1>
+                </div>
+                <Badge appearance="filled" color={diagnostics.wsState === "open" ? "success" : "informative"}>{diagnostics.wsState || "idle"}</Badge>
+              </div>
+              <div className="controlActionGrid">
+                <Button appearance="primary" onClick={() => setUploadOpen(true)}>发起上传</Button>
+                <Button onClick={() => setDiagnosticsOpen(true)}>打开诊断</Button>
+                <Button onClick={() => refreshAll()}>{loading ? <Spinner size="tiny" /> : "同步索引"}</Button>
+                <Button onClick={() => setViewMode((prev) => prev === "grid" ? "details" : "grid")}>{viewMode === "grid" ? "切到详情" : "切到卡片"}</Button>
+              </div>
+              <div className="railMetricList">
+                <div className="railMetric">
+                  <Caption1>信令状态</Caption1>
+                  <Text>{diagnostics.wsState || "idle"}</Text>
+                </div>
+                <div className="railMetric">
+                  <Caption1>轮询更新</Caption1>
+                  <Text>{formatRelativeTime(lastPollAt)}</Text>
+                </div>
+                <div className="railMetric">
+                  <Caption1>当前筛选</Caption1>
+                  <Text>{activeFilterCount ? `${activeFilterCount} 项` : "无"}</Text>
+                </div>
+                <div className="railMetric">
+                  <Caption1>上传队列</Caption1>
+                  <Text>{visibleUploadJobs.length} 项</Text>
+                </div>
+                <div className="railMetric">
+                  <Caption1>下载队列</Caption1>
+                  <Text>{downloadingCount} 项</Text>
                 </div>
               </div>
-              <Divider />
+            </Card>
 
-              <div className="filterBar">
-                <Input
-                  value={keyword}
-                  onChange={(_, data) => setKeyword(data.value)}
-                  placeholder="搜索文件名或路径"
-                />
-                <Dropdown selectedOptions={[columnFilter]} value={columnFilter} onOptionSelect={(_, data) => setColumnFilter(data.optionValue || "all")}>
-                  <Option value="all">全部栏目</Option>
-                  <Option value="none">未分类</Option>
-                  {columns.map((col) => (
-                    <Option key={col.id} value={col.id}>{col.name}</Option>
-                  ))}
-                </Dropdown>
-                <Dropdown selectedOptions={[typeFilter]} value={typeFilter} onOptionSelect={(_, data) => setTypeFilter(data.optionValue || "all")}>
-                  <Option value="all">全部类型</Option>
-                  <Option value="image">图片</Option>
-                  <Option value="video">视频</Option>
-                  <Option value="audio">音频</Option>
-                  <Option value="doc">文档</Option>
-                  <Option value="other">其他</Option>
-                </Dropdown>
-                <Button size="small" onClick={() => { setKeyword(""); setColumnFilter("all"); setTypeFilter("all"); }}>清空筛选</Button>
+            <Card className="surfaceCard panelCard controlCard">
+              <div className="sectionHeaderCompact">
+                <Subtitle1>终端状态</Subtitle1>
+                <Badge appearance="outline" color={onlineCount ? "success" : "informative"}>在线 {onlineCount}</Badge>
               </div>
+              <div className="miniList">
+                {spotlightClients.map((client) => (
+                  <div key={client.id} className="miniListRow terminalRow">
+                    <div className="miniListMain">
+                      <Text className="miniListTitle">{getClientDisplayName(client.id)}</Text>
+                      <Caption1>{client.lastHeartbeatAt ? `心跳 ${formatRelativeTime(client.lastHeartbeatAt)}` : "无心跳"}</Caption1>
+                    </div>
+                    <div className="miniListBadges">
+                      <Badge appearance="outline" color={getClientStatusColor(client.status)}>{client.status || "unknown"}</Badge>
+                      <Badge appearance="outline" color={(diagnostics.clients[client.id]?.route || "unknown") === "relay" ? "warning" : "informative"}>{diagnostics.clients[client.id]?.route || "unknown"}</Badge>
+                    </div>
+                  </div>
+                ))}
+                {!spotlightClients.length && <Caption1>暂无终端数据</Caption1>}
+              </div>
+            </Card>
+
+            <Card className="surfaceCard panelCard controlCard">
+              <div className="sectionHeaderCompact">
+                <Subtitle1>传输队列</Subtitle1>
+                <Badge appearance="outline" color={visibleUploadJobs.length || downloadingCount ? "warning" : "success"}>{visibleUploadJobs.length + downloadingCount}</Badge>
+              </div>
+              <div className="miniList">
+                          {downloadQueuePreview.map((job) => renderTransferQueueRow(job, "download"))}
+                          {uploadQueuePreview.map((job) => renderTransferQueueRow(job, "upload"))}
+                {!downloadQueuePreview.length && !uploadQueuePreview.length && <Caption1>当前没有正在传输的任务</Caption1>}
+              </div>
+            </Card>
+          </aside>
+
+          <main className="mainCanvas">
+            <section className="filePanel explorerPanel">
+              <Card className="surfaceCard panelCard explorerShell">
+                <div className="explorerTop">
+                  <div className="explorerTitleBlock">
+                    <Subtitle1>资源浏览器</Subtitle1>
+                  </div>
+                  <div className="explorerToolbar">
+                    <div className="summaryStrip">
+                      <div className="summaryPill">
+                        <Caption1>文件</Caption1>
+                        <Text>{filteredOnlineFiles.length} / {onlineFiles.length}</Text>
+                      </div>
+                      <div className="summaryPill">
+                        <Caption1>媒体</Caption1>
+                        <Text>{mediaFileCount}</Text>
+                      </div>
+                      <div className="summaryPill">
+                        <Caption1>上传中</Caption1>
+                        <Text>{visibleUploadJobs.length}</Text>
+                      </div>
+                    </div>
+                    <div className="segmentedControl iconSwitch">
+                      <Button
+                        size="small"
+                        appearance={viewMode === "grid" ? "primary" : "secondary"}
+                        onClick={() => setViewMode("grid")}
+                        aria-label="卡片模式"
+                      >
+                        ▦
+                      </Button>
+                      <Button
+                        size="small"
+                        appearance={viewMode === "details" ? "primary" : "secondary"}
+                        onClick={() => setViewMode("details")}
+                        aria-label="详情模式"
+                      >
+                        ☰
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="filterPanelShell">
+                  <div className="filterPanelHeader">
+                    <div>
+                      <Text>筛选与排序</Text>
+                      <Caption1>{activeFilterCount ? `已启用 ${activeFilterCount} 项` : "按需展开"}</Caption1>
+                    </div>
+                    <div className="row">
+                      {activeFilterCount > 0 && <Badge appearance="outline" color="informative">已筛选</Badge>}
+                      <Button size="small" onClick={() => setFiltersExpanded((prev) => !prev)} icon={filtersExpanded ? <ChevronUpRegular /> : <ChevronDownRegular />}>
+                        {filtersExpanded ? "收起筛选" : "展开筛选"}
+                      </Button>
+                    </div>
+                  </div>
+                  {filtersExpanded && (
+                    <>
+                      <div className="filterWorkbench">
+                        <Field className="filterField searchField" label="搜索文件">
+                          <Input
+                            value={keyword}
+                            onChange={(_, data) => setKeyword(data.value)}
+                            placeholder="搜索文件名或路径"
+                          />
+                        </Field>
+                        <Field className="filterField columnField" label="栏目">
+                          <Dropdown selectedOptions={[columnFilter]} value={columnFilter} onOptionSelect={(_, data) => setColumnFilter(data.optionValue || "all")}>
+                            <Option value="all">全部栏目</Option>
+                            <Option value="none">未分类</Option>
+                            {columns.map((col) => (
+                              <Option key={col.id} value={col.id}>{col.name}</Option>
+                            ))}
+                          </Dropdown>
+                        </Field>
+                        <Field className="filterField typeField" label="分类">
+                          <Dropdown selectedOptions={[typeFilter]} value={typeFilter} onOptionSelect={(_, data) => setTypeFilter(data.optionValue || "all")}>
+                            <Option value="all">全部类型</Option>
+                            <Option value="image">图片</Option>
+                            <Option value="video">视频</Option>
+                            <Option value="audio">音频</Option>
+                            <Option value="doc">文档</Option>
+                            <Option value="other">其他</Option>
+                          </Dropdown>
+                        </Field>
+                        <div className="filterActionBlock filterMetaBlock">
+                          <Button size="small" onClick={() => { setKeyword(""); setColumnFilter("all"); setTypeFilter("all"); }}>清空筛选</Button>
+                          <Badge appearance="outline" color={columns.length ? "informative" : "subtle"}>栏目 {columns.length}</Badge>
+                          <Badge appearance="outline" color={relayCount ? "warning" : "success"}>连接 {relayCount ? "含中继" : "直连优先"}</Badge>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {selectedVisibleFiles.length > 0 && (
+                  <div className="bulkToolbar">
+                    <div className="bulkToolbarInfo">
+                      <Text>已选中 {selectedVisibleFiles.length} 项</Text>
+                      <Caption1>{allVisibleSelected ? "当前结果已全选" : "批量收藏、下载、删除"}</Caption1>
+                    </div>
+                    <div className="bulkToolbarActions">
+                      <Button size="small" onClick={toggleSelectAllVisible}>{allVisibleSelected ? "取消全选" : "全选当前结果"}</Button>
+                      <Button size="small" onClick={() => setSelectedFileIds([])}>清空选择</Button>
+                      <Button size="small" onClick={batchToggleFavorite}>{selectedVisibleAllFavorite ? "批量取消收藏" : "批量切换收藏"}</Button>
+                      <Button size="small" onClick={batchDownload}>批量下载</Button>
+                      <Button size="small" appearance="primary" onClick={requestBatchDelete}>批量删除</Button>
+                    </div>
+                  </div>
+                )}
 
               {viewMode === "details" && (
                 <>
@@ -1808,9 +2387,12 @@ export default function App() {
                     <div style={{ paddingTop: detailPaddingTop, paddingBottom: detailPaddingBottom }}>
                       {detailSlice.map((file) => (
                         <div key={file.id} className="fileRow">
-                          <button className="thumbButton" onClick={() => preview(file)}>
-                            {thumbMap[getThumbKey(file)]?.url ? <img src={thumbMap[getThumbKey(file)].url} className="thumbImg" /> : <div className="thumbFallback">{isUploadingFile(file) ? "上传中" : isImageMime(file.mimeType) ? "图片" : isVideoMime(file.mimeType) ? "视频" : "文件"}</div>}
-                          </button>
+                          <div className="thumbShell">
+                            <button className="thumbButton" onClick={() => preview(file)}>
+                              {thumbMap[getThumbKey(file)]?.url ? <img src={thumbMap[getThumbKey(file)].url} className="thumbImg" /> : <div className="thumbFallback">{isUploadingFile(file) ? "上传中" : isImageMime(file.mimeType) ? "图片" : isVideoMime(file.mimeType) ? "视频" : "文件"}</div>}
+                            </button>
+                            {renderSelectionToggle(file)}
+                          </div>
                           <div className="fileMeta">
                             <div className="fileName">{file.name}</div>
                             <div className="fileSub">
@@ -1821,10 +2403,8 @@ export default function App() {
                             </div>
                           </div>
                           <div className="actions">
-                            <Button size="small" onClick={() => toggleFavorite(file.id)}>{file.favorite ? "取消收藏" : "收藏"}</Button>
-                            <Button size="small" onClick={() => preview(file)}>预览</Button>
-                            <Button size="small" onClick={() => download(file)}>下载</Button>
-                            <Button size="small" appearance="primary" onClick={() => removeFile(file)}>删除</Button>
+                            {renderFileActionTray(file)}
+                            <Caption1 className="actionHint">点击缩略图可直接预览</Caption1>
                           </div>
                         </div>
                       ))}
@@ -1850,18 +2430,19 @@ export default function App() {
                   ))}
                   {filteredOnlineFiles.map((file) => (
                     <div key={file.id} className="gridItem">
-                      <button className="gridThumb" onClick={() => preview(file)}>
-                        {thumbMap[getThumbKey(file)]?.url ? <img src={thumbMap[getThumbKey(file)].url} className="thumbImg" /> : <div className="thumbFallback">{isUploadingFile(file) ? "上传中" : isImageMime(file.mimeType) ? "图片" : isVideoMime(file.mimeType) ? "视频" : "文件"}</div>}
-                      </button>
+                      <div className="fileVisualShell">
+                        <button className="gridThumb" onClick={() => preview(file)}>
+                          {thumbMap[getThumbKey(file)]?.url ? <img src={thumbMap[getThumbKey(file)].url} className="thumbImg" /> : <div className="thumbFallback">{isUploadingFile(file) ? "上传中" : isImageMime(file.mimeType) ? "图片" : isVideoMime(file.mimeType) ? "视频" : "文件"}</div>}
+                        </button>
+                        {renderSelectionToggle(file)}
+                      </div>
                       <div className="gridName" title={file.name}>{file.name}</div>
                       <Caption1>{getClientDisplayName(file.clientId)}</Caption1>
                       <Caption1>{formatBytes(file.size)}</Caption1>
                       <Caption1>栏目: {columnMap.get(file.columnId) || "未分类"}</Caption1>
                       <Caption1>上传: {formatRelativeTime(file.updatedAt)}</Caption1>
-                      <div className="row">
-                        <Button size="small" onClick={() => preview(file)}>预览</Button>
-                        <Button size="small" onClick={() => download(file)}>下载</Button>
-                        <Button size="small" appearance="primary" onClick={() => removeFile(file)}>删除</Button>
+                      <div className="gridCardFooter">
+                        {renderFileActionTray(file)}
                       </div>
                     </div>
                   ))}
@@ -1869,41 +2450,58 @@ export default function App() {
               )}
 
               {!filteredOnlineFiles.length && <Text>暂无可用文件，等待在线存储终端上报。</Text>}
-            </Card>
-          </section>
-
+              </Card>
+            </section>
+          </main>
         </div>
 
         {uploadOpen && (
-          <div className="overlay" onClick={() => setUploadOpen(false)}>
-            <div className="modalWindow uploadModal" onClick={(event) => event.stopPropagation()}>
+          <div className="overlay drawerOverlay" onClick={() => setUploadOpen(false)}>
+            <div className="modalWindow uploadModal drawerSheet" onClick={(event) => event.stopPropagation()}>
+              <div className="drawerHandle" />
               <div className="modalHeader">
                 <Subtitle1>上传文件</Subtitle1>
                 <Button size="small" onClick={() => setUploadOpen(false)}>关闭</Button>
               </div>
               <Caption1>目标终端：{getClientDisplayName(uploadClientId) || "未选择"}</Caption1>
-              <Field label="目标存储终端">
-                <Dropdown selectedOptions={uploadClientId ? [uploadClientId] : []} value={uploadClientId} onOptionSelect={(_, data) => setUploadClientId(data.optionValue || "") }>
-                  {clients.map((item) => (
-                    <Option key={item.id} value={item.id}>{getClientDisplayName(item.id)}</Option>
-                  ))}
-                </Dropdown>
-              </Field>
-              <Field label="栏目">
-                <Dropdown selectedOptions={uploadColumnId ? [uploadColumnId] : ["none"]} value={uploadColumnId || "none"} onOptionSelect={(_, data) => setUploadColumnId(data.optionValue === "none" ? "" : data.optionValue || "") }>
-                  <Option value="none">未分类</Option>
-                  {columns.map((item) => (
-                    <Option key={item.id} value={item.id}>{item.name}</Option>
-                  ))}
-                </Dropdown>
-              </Field>
-              <div className="row">
-                <Input value={columnDraftName} onChange={(_, data) => setColumnDraftName(data.value)} placeholder="新建栏目名称" />
-                <Button size="small" appearance="secondary" onClick={createColumn}>新增栏目</Button>
+              <div className="drawerSteps">
+                <div className={`drawerStepBadge${uploadStep === 1 ? " active" : ""}`}>1. 选择目标</div>
+                <div className={`drawerStepBadge${uploadStep === 2 ? " active" : ""}`}>2. 路径与文件</div>
               </div>
-              <Field label="目标目录（可选）">
-                <Input value={uploadFolderPath} onChange={(_, data) => setUploadFolderPath(data.value)} placeholder="例如 media/photos" />
-              </Field>
+              {uploadStep === 1 && (
+                <div className="drawerSection">
+                  <Field label="目标存储终端">
+                    <Dropdown selectedOptions={uploadClientId ? [uploadClientId] : []} value={uploadClientId} onOptionSelect={(_, data) => setUploadClientId(data.optionValue || "") }>
+                      {clients.map((item) => (
+                        <Option key={item.id} value={item.id}>{getClientDisplayName(item.id)}</Option>
+                      ))}
+                    </Dropdown>
+                  </Field>
+                  <Field label="栏目">
+                    <Dropdown selectedOptions={uploadColumnId ? [uploadColumnId] : ["none"]} value={uploadColumnId || "none"} onOptionSelect={(_, data) => setUploadColumnId(data.optionValue === "none" ? "" : data.optionValue || "") }>
+                      <Option value="none">未分类</Option>
+                      {columns.map((item) => (
+                        <Option key={item.id} value={item.id}>{item.name}</Option>
+                      ))}
+                    </Dropdown>
+                  </Field>
+                  <div className="drawerInlineFields">
+                    <Input value={columnDraftName} onChange={(_, data) => setColumnDraftName(data.value)} placeholder="需要新栏目时再输入" />
+                    <Button size="small" appearance="secondary" onClick={createColumn}>新增栏目</Button>
+                  </div>
+                  <div className="drawerFooterInline">
+                    <Button appearance="primary" disabled={!uploadClientId} onClick={() => setUploadStep(2)}>下一步</Button>
+                  </div>
+                </div>
+              )}
+              {uploadStep === 2 && (
+                <>
+                  <div className="drawerSection">
+                    <Field label="目标目录（可选）">
+                      <Input value={uploadFolderPath} onChange={(_, data) => setUploadFolderPath(data.value)} placeholder="例如 media/photos" />
+                    </Field>
+                    <Caption1>最终上传路径会按“栏目 / 目录 / 文件名”的顺序组合。</Caption1>
+                  </div>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -1911,11 +2509,43 @@ export default function App() {
                 className="hiddenInput"
                 onChange={(event) => setUploadFiles(Array.from(event.target.files || []))}
               />
-              <div className="uploadChooser">
-                <Button appearance="secondary" onClick={() => fileInputRef.current?.click()}>选择文件</Button>
-                <Text>{uploadFiles.length ? `已选择 ${uploadFiles.length} 个文件` : "未选择文件"}</Text>
+                  <div className="drawerSection">
+                    <div className="uploadChooser">
+                      <Button appearance="secondary" onClick={() => fileInputRef.current?.click()}>选择文件</Button>
+                      <Text>{uploadFiles.length ? `已选择 ${uploadFiles.length} 个文件` : "未选择文件"}</Text>
+                    </div>
+                    <div className="uploadPlan">
+                      <div className="uploadPlanCard">
+                        <Caption1>目标终端</Caption1>
+                        <Text>{getClientDisplayName(uploadClientId) || "未选择"}</Text>
+                      </div>
+                      <div className="uploadPlanCard">
+                        <Caption1>目标路径</Caption1>
+                        <Text>{uploadTargetPreview || "/"}</Text>
+                      </div>
+                      <div className="uploadPlanCard">
+                        <Caption1>预计文件数</Caption1>
+                        <Text>{uploadFiles.length}</Text>
+                      </div>
+                    </div>
+                  </div>
+              {uploadFiles.length > 0 && (
+                <div className="selectedFilesList drawerSection">
+                  {uploadFiles.slice(0, 6).map((file) => (
+                    <div key={`${file.name}-${file.size}-${file.lastModified}`} className="selectedFileRow">
+                      <span className="selectedFileName" title={file.name}>{file.name}</span>
+                      <Caption1>{formatBytes(file.size)}</Caption1>
+                    </div>
+                  ))}
+                  {uploadFiles.length > 6 && <Caption1>还有 {uploadFiles.length - 6} 个文件未展开显示</Caption1>}
+                </div>
+              )}
+              <div className="drawerFooter">
+                <Button onClick={() => setUploadStep(1)}>上一步</Button>
+                <Button appearance="primary" onClick={async () => { await upload(); }}>开始上传</Button>
               </div>
-              <Button appearance="primary" onClick={async () => { await upload(); }}>开始上传</Button>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -1927,9 +2557,18 @@ export default function App() {
                 <Subtitle1>删除确认</Subtitle1>
                 <Button size="small" onClick={() => setDeleteTarget(null)}>取消</Button>
               </div>
-              <Text>文件：{deleteTarget.name}</Text>
-              <Caption1>终端：{getClientDisplayName(deleteTarget.clientId)}</Caption1>
-              <Caption1>路径：{deleteTarget.path}</Caption1>
+              {deleteTarget.kind === "batch" ? (
+                <>
+                  <Text>将删除 {deleteTarget.files.length} 个已选文件</Text>
+                  <Caption1>仅会删除当前可见且不在上传中的文件。</Caption1>
+                </>
+              ) : (
+                <>
+                  <Text>文件：{deleteTarget.files[0]?.name}</Text>
+                  <Caption1>终端：{getClientDisplayName(deleteTarget.files[0]?.clientId || "")}</Caption1>
+                  <Caption1>路径：{deleteTarget.files[0]?.path}</Caption1>
+                </>
+              )}
               {deleteStep === 1 ? (
                 <div className="row" style={{ marginTop: 12 }}>
                   <Button onClick={() => setDeleteTarget(null)}>取消</Button>
@@ -1947,8 +2586,9 @@ export default function App() {
         )}
 
         {diagnosticsOpen && (
-          <div className="overlay" onClick={() => setDiagnosticsOpen(false)}>
-            <div className="modalWindow" onClick={(event) => event.stopPropagation()}>
+          <div className="overlay drawerOverlay" onClick={() => setDiagnosticsOpen(false)}>
+            <div className="modalWindow drawerSheet diagnosticsDrawer" onClick={(event) => event.stopPropagation()}>
+              <div className="drawerHandle" />
               <div className="modalHeader">
                 <Subtitle1>连接诊断</Subtitle1>
                 <div className="row">
@@ -1992,7 +2632,7 @@ export default function App() {
                 {clients.map((client) => {
                   const diag = diagnostics.clients[client.id] || {};
                   const route = diag.route || "unknown";
-                  const isRelay = route === "relay";
+                  const routeLabel = getRouteLabel(diag);
                   return (
                     <div key={client.id} className="diagItem">
                       <div className="diagHead">
@@ -2002,7 +2642,7 @@ export default function App() {
                         </div>
                         <div className="row">
                           <Badge appearance="outline" color={getClientStatusColor(client.status)}>{client.status || "unknown"}</Badge>
-                          <Badge appearance="outline" color={isRelay ? "warning" : route === "direct" ? "success" : "informative"}>{route}</Badge>
+                          <Badge appearance="outline" color={getRouteColor(diag)}>{routeLabel}</Badge>
                         </div>
                       </div>
                       <div className="diagMetaGrid">
@@ -2011,6 +2651,10 @@ export default function App() {
                         <Caption1>候选: {diag.localCandidateType || "-"} {"->"} {diag.remoteCandidateType || "-"}</Caption1>
                         <Caption1>最近心跳: {formatRelativeTime(client.lastHeartbeatAt)}</Caption1>
                         <Caption1>重试: {diag.retries || 0}</Caption1>
+                        <Caption1>下行吞吐: {formatSpeed(diag.currentRecvBps || 0)}</Caption1>
+                        <Caption1>上行吞吐: {formatSpeed(diag.currentSendBps || 0)}</Caption1>
+                        <Caption1>累计接收: {formatBytes(diag.totalBytesReceived || 0)}</Caption1>
+                        <Caption1>累计发送: {formatBytes(diag.totalBytesSent || 0)}</Caption1>
                       </div>
                       {diag.lastError ? <Caption1>最近错误: {diag.lastError}</Caption1> : null}
                       <div className="diagActions">
@@ -2038,91 +2682,47 @@ export default function App() {
         )}
 
         {previewOpen && (
-          <div className="overlay" onClick={() => { stopActivePreviewSession(); }}>
-            <div className="modalWindow previewModal" onClick={(event) => event.stopPropagation()}>
-              <div className="previewTopBar">
-                <div>
-                  <Subtitle1>{previewName || "文件"}</Subtitle1>
-                  <Caption1>{previewMime || "未知类型"}</Caption1>
-                </div>
-                <div className="row">
-                  <Button size="small" onClick={() => download({ name: previewName, path: previewPath, clientId: previewClientId, mimeType: previewMime })}>下载</Button>
-                  <Button size="small" onClick={() => { stopActivePreviewSession(); }}>关闭</Button>
+          <Suspense
+            fallback={
+              <div className="overlay">
+                <div className="modalWindow previewModal previewFallbackModal">
+                  <Spinner label="正在加载预览模块..." />
                 </div>
               </div>
-              <div className="playerSurface">
-                {previewing && <Spinner label={previewStatusText || "正在加载预览..."} />}
-                {previewing && previewStatusText ? (
-                  <Caption1>
-                    {previewStatusText}
-                    {typeof previewProgress === "number" ? ` (${previewProgress}%)` : ""}
-                  </Caption1>
-                ) : null}
-                {previewing && previewStage ? (
-                  <Caption1 className="previewStage">阶段：{previewStage}</Caption1>
-                ) : null}
-                {!previewing && previewMime.startsWith("video/") && (
-                  <video
-                    ref={previewVideoRef}
-                    src={previewHlsSource ? undefined : previewUrl}
-                    controls
-                    className="preview"
-                    onLoadedData={() => {
-                      previewFirstFrameRef.current = true;
-                      setPreviewStatusText("");
-                      setPreviewDebug((prev) => ({
-                        ...prev,
-                        firstFrameAt: prev.firstFrameAt || new Date().toLocaleTimeString()
-                      }));
-                    }}
-                    onPlaying={() => {
-                      previewFirstFrameRef.current = true;
-                    }}
-                  />
-                )}
-                {!previewing && previewMime.startsWith("audio/") && <audio src={previewUrl} controls className="previewAudio" />}
-                {!previewing && previewMime.startsWith("image/") && <img src={previewUrl} className="preview" />}
-                {!previewing && previewMime === "application/pdf" && <iframe src={previewUrl} className="previewFrame" title="preview-frame" />}
-              </div>
-              {!previewing && previewMime.startsWith("video/") && (
-                <div className="previewDebugPanel">
-                  <div className="previewDebugRow">
-                    <Caption1>模式：{previewDebug.mode || "-"}</Caption1>
-                    <Caption1>HLS ID：{previewDebug.hlsId || "-"}</Caption1>
-                    <Caption1>编码器：{previewDebug.codec || "-"}</Caption1>
-                    <Caption1>状态：{previewDebug.hlsState || "-"}</Caption1>
-                    <Caption1>首帧：{previewDebug.firstFrameAt || "-"}</Caption1>
-                  </div>
-                  <div className="previewDebugRow">
-                    <Caption1>分片：{previewDebug.segmentCompleted}/{Math.max(previewDebug.manifestSegments, previewDebug.segmentRequests)}</Caption1>
-                    <Caption1>错误：{previewDebug.segmentErrors}</Caption1>
-                    <Caption1>流量：{formatBytes(previewDebug.segmentBytes || 0)}</Caption1>
-                    <Caption1>最近分片：{previewDebug.lastSegment || "-"}</Caption1>
-                  </div>
-                  <div className="previewDebugRow">
-                    <Caption1>错误详情：{previewDebug.lastError || "-"}</Caption1>
-                  </div>
-                  <div className="previewDebugRow">
-                    <Caption1>事件：{previewDebug.lastHlsEvent || "-"}</Caption1>
-                  </div>
-                  <div className="previewDebugRow">
-                    <Caption1>播放：{previewDebug.currentTime.toFixed(1)}s / {previewDebug.duration > 0 ? previewDebug.duration.toFixed(1) : "-"}s</Caption1>
-                    <Caption1>缓冲前瞻：{previewDebug.bufferedAhead.toFixed(1)}s</Caption1>
-                  </div>
-                </div>
-              )}
-              <div className="previewMetaBar">
-                <Caption1>终端：{getClientDisplayName(previewClientId || "") || "-"}</Caption1>
-                <Caption1 title={previewPath}>{previewPath || "-"}</Caption1>
-              </div>
-              {!previewing && previewName && !isInlinePreviewMime(previewMime) && (
-                <div className="unsupportedPreview">
-                  <Text>当前文件类型不支持在线预览，请直接下载。</Text>
-                  <Button appearance="primary" size="small" onClick={() => download({ name: previewName, path: previewPath, clientId: previewClientId, mimeType: previewMime })}>下载</Button>
-                </div>
-              )}
-            </div>
-          </div>
+            }
+          >
+            <PreviewModal
+              previewing={previewing}
+              previewName={previewName}
+              previewMime={previewMime}
+              previewPath={previewPath}
+              previewClientId={previewClientId}
+              previewUrl={previewUrl}
+              previewStatusText={previewStatusText}
+              previewProgress={previewProgress}
+              previewStage={previewStage}
+              previewDebug={previewDebug}
+              previewHlsSource={previewHlsSource}
+              p2p={p2p}
+              setPreviewHlsSource={setPreviewHlsSource}
+              setPreviewDebug={setPreviewDebug}
+              setMessage={setMessage}
+              setPreviewStatusText={setPreviewStatusText}
+              onClose={stopActivePreviewSession}
+              onFirstFrame={() => {
+                previewFirstFrameRef.current = true;
+                setPreviewStatusText("");
+                setPreviewDebug((prev) => ({
+                  ...prev,
+                  firstFrameAt: prev.firstFrameAt || new Date().toLocaleTimeString()
+                }));
+              }}
+              onDownload={() => download({ name: previewName, path: previewPath, clientId: previewClientId, mimeType: previewMime })}
+              getClientDisplayName={getClientDisplayName}
+              formatBytes={formatBytes}
+              isInlinePreviewMime={isInlinePreviewMime}
+            />
+          </Suspense>
         )}
 
         {user.role === "admin" && (

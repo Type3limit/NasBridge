@@ -4,7 +4,9 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "dev": "node --watch-path=src src/index.js",
+    "dev": "node src/index.js",
+    "dev:plain": "node src/index.js",
+    "dev:watch": "node --watch-path=src src/index.js",
     "start": "node src/index.js"
   },
   "dependencies": {

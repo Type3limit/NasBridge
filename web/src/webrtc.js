@@ -1,5 +1,7 @@
 import { toWsUrl } from "./api";
 
+const FILE_TRANSFER_TIMEOUT_MS = 300_000;
+
 function buildIceServers() {
   const servers = [];
   const stunUrl = import.meta.env.VITE_STUN_URL;
@@ -41,6 +43,7 @@ export class P2PBridge {
     this.keepaliveTimers = new Map();
     this.lastPongTime = new Map();
     this.activeUploads = new Map();
+    this.routeSamples = new Map();
     this.diagnostics = {
       wsState: "idle",
       wsUrl: "",
@@ -52,6 +55,21 @@ export class P2PBridge {
     this.disposed = false;
     this.debug = import.meta.env.VITE_P2P_DEBUG === "1";
     this.wsReconnectDelay = 2000;
+  }
+
+  getActiveClientOpCount(clientId) {
+    const prefix = `${clientId}::`;
+    let count = 0;
+    for (const key of this.currentOp.keys()) {
+      if (key.startsWith(prefix)) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  hasActiveClientTransfer(clientId) {
+    return this.getActiveClientOpCount(clientId) > 0 || this.isClientBusy(clientId);
   }
 
   waitAnyChannelOpen(channels) {
@@ -216,7 +234,11 @@ export class P2PBridge {
         if (message.type === "admin-client-status") {
           this.log("client-status", message.clientId, message.status);
           if (message.status === "offline") {
-            this.closePeer(message.clientId);
+            if (this.isPeerConnected(message.clientId) || this.isClientBusy(message.clientId)) {
+              this.updateClientDiagnostics(message.clientId, { lastError: "client offline signal ignored during active peer session" });
+            } else {
+              this.closePeer(message.clientId);
+            }
           }
           return;
         }
@@ -400,10 +422,34 @@ export class P2PBridge {
       const localType = localCandidate?.candidateType || "unknown";
       const remoteType = remoteCandidate?.candidateType || "unknown";
       const route = localType === "relay" || remoteType === "relay" ? "relay" : (localType === "unknown" ? "unknown" : "direct");
+      const routeLabel = route === "direct"
+        ? `direct(${localType}-${remoteType})`
+        : route === "relay"
+          ? `relay(${localType}-${remoteType})`
+          : `unknown(${localType}-${remoteType})`;
+      const timestamp = Number(selectedPair?.timestamp || Date.now());
+      const bytesSent = Number(selectedPair?.bytesSent || 0);
+      const bytesReceived = Number(selectedPair?.bytesReceived || 0);
+      const previous = this.routeSamples.get(clientId);
+      let sendBps = 0;
+      let recvBps = 0;
+      if (previous && Number.isFinite(previous.timestamp) && timestamp > previous.timestamp) {
+        const elapsedSeconds = (timestamp - previous.timestamp) / 1000;
+        if (elapsedSeconds > 0) {
+          sendBps = Math.max(0, Math.round((bytesSent - previous.bytesSent) / elapsedSeconds));
+          recvBps = Math.max(0, Math.round((bytesReceived - previous.bytesReceived) / elapsedSeconds));
+        }
+      }
+      this.routeSamples.set(clientId, { timestamp, bytesSent, bytesReceived });
       this.updateClientDiagnostics(clientId, {
         route,
+        routeLabel,
         localCandidateType: localType,
-        remoteCandidateType: remoteType
+        remoteCandidateType: remoteType,
+        currentSendBps: sendBps,
+        currentRecvBps: recvBps,
+        totalBytesSent: bytesSent,
+        totalBytesReceived: bytesReceived
       });
     } catch {
     }
@@ -502,12 +548,13 @@ export class P2PBridge {
         if (disconnectTimer) {
           clearTimeout(disconnectTimer);
         }
+        const busy = this.hasActiveClientTransfer(clientId);
         disconnectTimer = setTimeout(() => {
           const livePeer = this.peers.get(clientId);
           if (livePeer?.pc?.connectionState === "disconnected") {
             this.closePeer(clientId, true);
           }
-        }, 8000);
+        }, busy ? 45_000 : 8_000);
         armRestartTimer();
       }
     };
@@ -580,6 +627,24 @@ export class P2PBridge {
     }, ms);
   }
 
+  cancelOperation(clientId, channelName, requestId = "") {
+    const opKey = this.opKey(clientId, channelName);
+    const op = this.currentOp.get(opKey);
+    if (!op) {
+      return false;
+    }
+    if (requestId && op.requestId && op.requestId !== requestId) {
+      return false;
+    }
+    const err = new Error("operation cancelled");
+    err.cancelled = true;
+    err.intentionalClose = true;
+    op.onError?.(err);
+    this.currentOp.delete(opKey);
+    this.clientQueues.delete(opKey);
+    return true;
+  }
+
   enqueueClientTask(clientId, channelName, task) {
     const queueKey = this.opKey(clientId, channelName);
     const previous = this.clientQueues.get(queueKey) || Promise.resolve();
@@ -592,16 +657,13 @@ export class P2PBridge {
     return next;
   }
 
+  enqueueTransferTask(clientId, task) {
+    return this.enqueueClientTask(clientId, "transfer", task);
+  }
+
   cancelClientChannel(clientId, channelName) {
     const opKey = this.opKey(clientId, channelName);
-    const op = this.currentOp.get(opKey);
-    if (op) {
-      const err = new Error("operation cancelled");
-      err.cancelled = true;
-      err.intentionalClose = true;
-      op.onError?.(err);
-      this.currentOp.delete(opKey);
-    }
+    this.cancelOperation(clientId, channelName);
     this.clientQueues.delete(opKey);
   }
 
@@ -632,7 +694,8 @@ export class P2PBridge {
       const controlChannel = peer.channels?.control;
       if (controlChannel?.readyState === "open") {
         const lastPong = this.lastPongTime.get(clientId) || 0;
-        if (Date.now() - lastPong > 38000) {
+        const pongTimeoutMs = this.hasActiveClientTransfer(clientId) ? 180_000 : 38_000;
+        if (Date.now() - lastPong > pongTimeoutMs) {
           this.log("keepalive-pong-timeout", clientId);
           this.closePeer(clientId, true);
           return;
@@ -701,6 +764,21 @@ export class P2PBridge {
       });
       this.log("peer-retry", clientId, error?.message || error);
 
+      const existingPeer = this.peers.get(clientId);
+      const hasSiblingTransfers = this.getActiveClientOpCount(clientId) > 1;
+      const existingConnState = existingPeer?.pc?.connectionState || "unknown";
+      const existingHasOpenChannel = Object.values(existingPeer?.channels || {}).some((ch) => ch?.readyState === "open");
+      const canRetryWithoutRebuild = existingPeer
+        && existingConnState === "connected"
+        && existingHasOpenChannel;
+
+      if (canRetryWithoutRebuild && hasSiblingTransfers) {
+        this.log("peer-retry-reuse", clientId, `conn=${existingConnState}`);
+        await this.sleep(500);
+        const peer = await this.getPeer(clientId);
+        return task(peer);
+      }
+
       // Soft-close: sibling ops get a retryable (non-intentionalClose) error so
       // their own withPeerRetry can reconnect independently.  Hard close is only
       // for truly intentional tears (dispose, client-offline).
@@ -725,7 +803,8 @@ export class P2PBridge {
         );
         if (hasLiveChannel) {
           const ageMs = Date.now() - (peer.createdAt || 0);
-          if (connState === "connecting" && ageMs > 25000) {
+          const staleConnectingMs = this.hasActiveClientTransfer(clientId) ? 60_000 : 25_000;
+          if (connState === "connecting" && ageMs > staleConnectingMs) {
             this.log("peer-stale-connecting", clientId, `age=${ageMs}ms`, channelStates.join(","));
             this.closePeer(clientId, true);
           } else {
@@ -1044,28 +1123,43 @@ export class P2PBridge {
     }
   }
 
-  async downloadFile(clientId, relativePath) {
-    return this.enqueueClientTask(clientId, "file", async () => this.withPeerRetry(clientId, async (peer) => {
+  async downloadFile(clientId, relativePath, options = {}) {
+    return this.enqueueTransferTask(clientId, async () => this.enqueueClientTask(clientId, "file", async () => this.withPeerRetry(clientId, async (peer) => {
       const { channel, opChannelName } = await this.getChannelForOp(peer, "file");
       const requestId = this.generateRequestId();
+      options.onStart?.({ requestId, channelName: opChannelName });
       this.log("op-start", "download", clientId, relativePath, requestId);
       return new Promise((resolve, reject) => {
-        let timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 120_000);
+        let timeout = this.createOperationTimeout(clientId, opChannelName, requestId, FILE_TRANSFER_TIMEOUT_MS);
         const refreshTimeout = () => {
           clearTimeout(timeout);
-          timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 120_000);
+          timeout = this.createOperationTimeout(clientId, opChannelName, requestId, FILE_TRANSFER_TIMEOUT_MS);
         };
         const opKey = this.opKey(clientId, opChannelName);
         const ctx = {
           requestId,
           chunks: [],
           meta: null,
+          transferredBytes: 0,
           onMeta: (message) => {
             ctx.meta = message;
             refreshTimeout();
+            options.onMeta?.(message);
+            options.onProgress?.({
+              transferredBytes: ctx.transferredBytes,
+              totalBytes: Number(message?.size || 0),
+              progress: Number(message?.size || 0) > 0 ? 0 : null
+            });
           },
           onChunk: (chunk) => {
             ctx.chunks.push(chunk);
+            ctx.transferredBytes += Number(chunk?.byteLength || chunk?.length || 0);
+            const totalBytes = Number(ctx.meta?.size || 0);
+            options.onProgress?.({
+              transferredBytes: ctx.transferredBytes,
+              totalBytes,
+              progress: totalBytes > 0 ? Math.max(0, Math.min(100, Math.round((ctx.transferredBytes / totalBytes) * 100))) : null
+            });
             refreshTimeout();
           },
           onEnd: () => {
@@ -1087,7 +1181,7 @@ export class P2PBridge {
         this.logInfo("op-send", "get-file", clientId, opChannelName, `ch=${channel.readyState}`, relativePath);
         channel.send(JSON.stringify({ type: "get-file", path: relativePath, requestId }));
       });
-    }));
+    })));
   }
 
   async downloadFileStream(clientId, relativePath, options = {}) {
@@ -1128,15 +1222,16 @@ export class P2PBridge {
       }
     };
 
-    return this.enqueueClientTask(clientId, "file", async () => this.withPeerRetry(clientId, async (peer) => {
+    return this.enqueueTransferTask(clientId, async () => this.enqueueClientTask(clientId, "file", async () => this.withPeerRetry(clientId, async (peer) => {
       const { channel, opChannelName } = await this.getChannelForOp(peer, "file");
       const requestId = this.generateRequestId();
+      options.onStart?.({ requestId, channelName: opChannelName });
       this.log("op-start", "download-stream", clientId, relativePath, requestId);
       return new Promise((resolve, reject) => {
-        let timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 120_000);
+        let timeout = this.createOperationTimeout(clientId, opChannelName, requestId, FILE_TRANSFER_TIMEOUT_MS);
         const refreshTimeout = () => {
           clearTimeout(timeout);
-          timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 120_000);
+          timeout = this.createOperationTimeout(clientId, opChannelName, requestId, FILE_TRANSFER_TIMEOUT_MS);
         };
         const opKey = this.opKey(clientId, opChannelName);
         let pending = Promise.resolve();
@@ -1144,13 +1239,26 @@ export class P2PBridge {
         const ctx = {
           requestId,
           meta: null,
+          transferredBytes: 0,
           onMeta: (message) => {
             ctx.meta = message;
             refreshTimeout();
             options.onMeta?.(message);
+            options.onProgress?.({
+              transferredBytes: ctx.transferredBytes,
+              totalBytes: Number(message?.size || 0),
+              progress: Number(message?.size || 0) > 0 ? 0 : null
+            });
           },
           onChunk: (chunk) => {
             refreshTimeout();
+            ctx.transferredBytes += Number(chunk?.byteLength || chunk?.length || 0);
+            const totalBytes = Number(ctx.meta?.size || 0);
+            options.onProgress?.({
+              transferredBytes: ctx.transferredBytes,
+              totalBytes,
+              progress: totalBytes > 0 ? Math.max(0, Math.min(100, Math.round((ctx.transferredBytes / totalBytes) * 100))) : null
+            });
             pending = pending.then(() => writeChunk(chunk));
             pending.catch((error) => {
               if (failed) {
@@ -1187,7 +1295,7 @@ export class P2PBridge {
         this.logInfo("op-send", "get-file", clientId, opChannelName, `ch=${channel.readyState}`, relativePath);
         channel.send(JSON.stringify({ type: "get-file", path: relativePath, requestId }));
       });
-    }));
+    })));
   }
 
   async thumbnailFile(clientId, relativePath) {
@@ -1284,6 +1392,7 @@ export class P2PBridge {
             clearTimeout(timeout);
             this.currentOp.delete(opKey);
             this.log("op-done", "hls-manifest", clientId, requestId, message.hlsId || "-");
+            this.logInfo("hls-manifest-recv", clientId, message.hlsId || "-", `codec=${message.codec || ""}`);
             resolve({
               manifest: String(message.manifest || ""),
               hlsId: String(message.hlsId || ""),
@@ -1608,7 +1717,7 @@ export class P2PBridge {
 
   async uploadFile(clientId, relativePath, file, options = {}) {
     const uploadKey = `${clientId}::${relativePath}`;
-    return this.enqueueClientTask(clientId, "upload", async () => this.withPeerRetry(clientId, async (peer) => {
+    return this.enqueueTransferTask(clientId, async () => this.enqueueClientTask(clientId, "upload", async () => this.withPeerRetry(clientId, async (peer) => {
       const { channel, opChannelName } = await this.getChannelForOp(peer, "upload");
       const requestId = this.generateRequestId();
       this.log("op-start", "upload", clientId, relativePath, requestId, `size=${file.size}`);
@@ -1732,7 +1841,7 @@ export class P2PBridge {
           requestId
         }));
       });
-    }));
+    })));
   }
 
   async sendUploadCancel(clientId, requestId, relativePath) {
@@ -1765,8 +1874,7 @@ export class P2PBridge {
       }
       return true;
     }
-    this.cancelClientChannel(clientId, "upload");
-    return true;
+    return false;
   }
 
   cancelAllUploads(clientId) {

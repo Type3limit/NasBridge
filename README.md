@@ -143,13 +143,85 @@ npm run deploy:stop:linux
   - （可选，建议）启用转码预览：
     - `ENABLE_TRANSCODE=1`
     - `FFMPEG_PATH=ffmpeg`（或 ffmpeg 可执行文件完整路径）
+    - `FFPROBE_PATH=ffprobe`（如果 `FFMPEG_PATH` 指向自定义目录，建议显式填写，避免探测时长/视频流失败）
   - `TRANSCODE_VIDEO_CODEC=auto`（默认自动优先尝试 GPU：`h264_nvenc`/`h264_qsv`/`h264_amf`，失败自动回退 `libx264`）
   - `TRANSCODE_PREFER_GPU=1`（设为 `0` 可强制仅 CPU 编码）
+  - `ALLOW_GPU_HLS_ENCODING=1`（允许 HLS 链路优先尝试 GPU）
+  - `HLS_VIDEO_CODEC=auto`（可单独为 HLS 指定 `h264_nvenc` / `h264_qsv` / `h264_amf` / `libx264`）
+  - `HLS_NVENC_PRESET=p2`（NVIDIA HLS 预设，`p1` 更快，`p2` 更稳）
+    - `HLS_NVENC_USE_CUDA_PIPELINE=0`（默认关闭，优先兼容的 NVENC 编码路径；设为 `1` 才启用 `cuda decode + scale_cuda` 全 GPU 管线）
+  - `DISABLED_ENCODER_COOLDOWN_MS=900000`（GPU 编码器失败后的冷却时间，默认 15 分钟，之后会自动重试）
 2. 启动：
    ```bash
    npm run start -w storage-client
    ```
 3. 建议使用 PM2 / systemd 保活。
+
+### Storage Client GPU 推荐模板
+
+#### NVIDIA 机器
+
+适合 GeForce / RTX / Quadro，目标是让 HLS 尽量固定走 NVENC：
+
+```env
+ENABLE_TRANSCODE=1
+FFMPEG_PATH=ffmpeg
+FFPROBE_PATH=ffprobe
+ALLOW_GPU_HLS_ENCODING=1
+HLS_VIDEO_CODEC=h264_nvenc
+HLS_NVENC_PRESET=p1
+HLS_NVENC_USE_CUDA_PIPELINE=0
+TRANSCODE_VIDEO_CODEC=h264_nvenc
+TRANSCODE_PREFER_GPU=1
+DISABLED_ENCODER_COOLDOWN_MS=300000
+```
+
+建议：
+- `p1` 最高速，适合 CPU 弱、希望 HLS 更快起播。
+- 如果画质或稳定性不理想，改为 `HLS_NVENC_PRESET=p2`。
+- 如果确认显卡驱动与 ffmpeg 的 CUDA 解码链路稳定，再尝试 `HLS_NVENC_USE_CUDA_PIPELINE=1`；默认 `0` 更兼容。
+
+#### Intel 核显 / Quick Sync 机器
+
+适合带 QSV 的 Intel iGPU：
+
+```env
+ENABLE_TRANSCODE=1
+FFMPEG_PATH=ffmpeg
+ALLOW_GPU_HLS_ENCODING=1
+HLS_VIDEO_CODEC=h264_qsv
+TRANSCODE_VIDEO_CODEC=h264_qsv
+TRANSCODE_PREFER_GPU=1
+DISABLED_ENCODER_COOLDOWN_MS=300000
+```
+
+建议：
+- 如果 ffmpeg 日志里出现 `MFX_ERR_UNSUPPORTED` 或设备初始化失败，先确认驱动和 ffmpeg 是否带 QSV 支持。
+
+#### AMD 机器
+
+适合带 AMF 的 Windows 主机：
+
+```env
+ENABLE_TRANSCODE=1
+FFMPEG_PATH=ffmpeg
+ALLOW_GPU_HLS_ENCODING=1
+HLS_VIDEO_CODEC=h264_amf
+TRANSCODE_VIDEO_CODEC=h264_amf
+TRANSCODE_PREFER_GPU=1
+DISABLED_ENCODER_COOLDOWN_MS=300000
+```
+
+建议：
+- AMF 在不同驱动版本上的稳定性波动更大，若频繁失败，可先保留 `HLS_VIDEO_CODEC=h264_amf`，但把 `TRANSCODE_VIDEO_CODEC=auto` 交给预览链路自行回退。
+
+### HLS 日志怎么看
+
+storage-client 现在会打印三类更直接的 HLS 日志：
+
+- `[hls-plan]`：开始生成前的计划，包含候选 codec、是否命中 GPU 冷却、当前输入视频信息。
+- `[hls-result]`：单次 HLS 最终结果，包含最终选中的 codec、是否走 copy/cache/transcode、总耗时。
+- `[hls-build-summary]`：缓存写入完成后的汇总，便于和 `hls-cache`、浏览器请求串起来看。
 
 ## 4. 已实现功能对照
 

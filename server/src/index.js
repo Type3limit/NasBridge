@@ -164,7 +164,7 @@ app.post("/api/upload/prepare", requireAuth, (req, res) => {
 
 app.get("/api/upload-jobs", requireAuth, (req, res) => {
   serverLog("upload-jobs-list", req.reqId, req.auth.sub);
-  finalizeStaleUploadingJobs(10 * 60 * 1000);
+  finalizeStaleUploadingJobs(2 * 60 * 1000);
   const jobs = listUploadJobs()
     .filter((job) => job.status === "uploading")
     .slice(0, 120);
