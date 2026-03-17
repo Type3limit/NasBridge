@@ -3,9 +3,7 @@ import {
   Badge,
   Button,
   Card,
-  CardHeader,
   Caption1,
-  Divider,
   Dropdown,
   Field,
   Input,
@@ -16,16 +14,30 @@ import {
   Title3
 } from "@fluentui/react-components";
 import {
+  AddRegular,
+  AppsListRegular,
   ArrowDownloadRegular,
-  ChevronDownRegular,
-  ChevronUpRegular,
+  ArrowRightRegular,
+  ArrowSwapRegular,
+  ChatRegular,
+  ChevronRightRegular,
   DeleteRegular,
+  CopyRegular,
+  DesktopRegular,
+  DismissRegular,
+  EditRegular,
   EyeRegular,
+  FilterRegular,
+  FolderOpenRegular,
+  ShareRegular,
   StarFilled,
   StarRegular
 } from "@fluentui/react-icons";
 import { apiRequest } from "./api";
-import { P2PBridge } from "./webrtc";
+import { P2PBridgePool } from "./webrtc";
+import AvatarFace from "./components/AvatarFace";
+import ChatRoom from "./components/ChatRoom";
+import ProfileDialog from "./components/ProfileDialog";
 
 const PreviewModal = lazy(() => import("./components/PreviewModal"));
 
@@ -37,6 +49,40 @@ const PREVIEW_FORCE_BLOB_MAX_SIZE = 120 * 1024 * 1024;
 const PREVIEW_FIRST_FRAME_TIMEOUT_MS = 8000;
 const PREVIEW_HLS_STALL_TIMEOUT_MS = 10000;
 const IMAGE_PREVIEW_COMPRESS_THRESHOLD = 6 * 1024 * 1024;
+const P2P_PEER_ROLES = ["download", "upload", "preview", "control"];
+const MIME_PRESET_OPTIONS = [
+  { value: "application/octet-stream", label: "通用二进制" },
+  { value: "application/pdf", label: "PDF 文档" },
+  { value: "image/jpeg", label: "JPEG 图片" },
+  { value: "image/png", label: "PNG 图片" },
+  { value: "image/gif", label: "GIF 图片" },
+  { value: "video/mp4", label: "MP4 视频" },
+  { value: "video/webm", label: "WebM 视频" },
+  { value: "audio/mpeg", label: "MP3 音频" },
+  { value: "audio/mp4", label: "M4A 音频" },
+  { value: "text/plain", label: "纯文本" }
+];
+const SHARE_EXPIRY_OPTIONS = [
+  { value: "1", label: "1 天后失效" },
+  { value: "7", label: "7 天后失效" },
+  { value: "30", label: "30 天后失效" },
+  { value: "0", label: "长期有效" }
+];
+const FILE_SORT_OPTIONS = [
+  { value: "name", label: "按文件名" },
+  { value: "createdAt", label: "按上传时间" },
+  { value: "type", label: "按类型" }
+];
+const ROOT_FOLDER_OPTION_VALUE = "__root__";
+const PROFILE_AVATAR_DIR_NAME = ".nas-user-avatars";
+
+function sanitizePathSegment(value = "") {
+  return String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "") || "asset";
+}
 
 function getThumbKey(file) {
   return `${file.clientId}|${file.path}|${file.size}|${file.mimeType || ""}`;
@@ -83,6 +129,9 @@ function blobToDataUrl(blob) {
     reader.readAsDataURL(blob);
   });
 }
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function formatBytes(size) {
   if (size < 1024) return `${size} B`;
@@ -106,6 +155,52 @@ function getRouteColor(diag = {}) {
   if (route === "relay") return "warning";
   if (route === "direct") return "success";
   return "informative";
+}
+
+function getPeerRoleLabel(role) {
+  if (role === "download") return "下载";
+  if (role === "upload") return "上传";
+  if (role === "preview") return "预览";
+  if (role === "control") return "控制";
+  return role || "未知";
+}
+
+function formatPeerRoleSummary(diag = {}) {
+  const peers = diag.peers || {};
+  const items = P2P_PEER_ROLES
+    .filter((role) => peers[role])
+    .map((role) => {
+      const peerDiag = peers[role] || {};
+      const route = peerDiag.routeLabel || peerDiag.route || "unknown";
+      const state = peerDiag.connectionState || peerDiag.iceState || "new";
+      return `${getPeerRoleLabel(role)}:${route}/${state}`;
+    });
+  return items.join(" · ");
+}
+
+function getPeerRoleDiagnostics(diag = {}, role) {
+  return diag?.peers?.[role] || {};
+}
+
+function buildUploadDraft(file, index = 0) {
+  return {
+    id: `${file.name}-${file.size}-${file.lastModified}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+    file,
+    desiredName: file.name
+  };
+}
+
+function sanitizeUploadFileName(value, fallbackName = "") {
+  const cleaned = String(value || "")
+    .trim()
+    .replace(/[\\/]+/g, "_")
+    .replace(/^\.+$/, "");
+  return cleaned || String(fallbackName || "upload.bin");
+}
+
+function buildUploadTargetPath(basePath, fileName) {
+  const cleanName = sanitizeUploadFileName(fileName, "upload.bin");
+  return basePath ? `${basePath}/${cleanName}` : cleanName;
 }
 
 function isMobileBrowser() {
@@ -173,8 +268,28 @@ function isAudioMime(mimeType = "") {
   return mimeType.startsWith("audio/");
 }
 
+function isTextPreviewMime(mimeType = "") {
+  const normalized = String(mimeType || "").toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.startsWith("text/")) {
+    return true;
+  }
+  if (normalized === "application/json" || normalized === "application/xml") {
+    return true;
+  }
+  if (normalized.includes("markdown") || normalized.includes("md")) {
+    return true;
+  }
+  if (normalized.endsWith("+json") || normalized.endsWith("+xml")) {
+    return true;
+  }
+  return false;
+}
+
 function isInlinePreviewMime(mimeType = "") {
-  return isImageMime(mimeType) || isVideoMime(mimeType) || isAudioMime(mimeType) || mimeType === "application/pdf";
+  return isImageMime(mimeType) || isVideoMime(mimeType) || isAudioMime(mimeType) || isTextPreviewMime(mimeType) || mimeType === "application/pdf";
 }
 
 function canBrowserPlayVideoMime(mimeType = "") {
@@ -194,8 +309,183 @@ function getFileTypeGroup(mimeType = "") {
   return "other";
 }
 
-function isGifMime(mimeType = "") {
-  return mimeType === "image/gif";
+function getFileTypeLabel(type) {
+  if (type === "image") return "图片";
+  if (type === "video") return "视频";
+  if (type === "audio") return "音频";
+  if (type === "doc") return "文档";
+  if (type === "other") return "其他";
+  return "全部类型";
+}
+
+function getFileCreatedAt(file = {}) {
+  return file.createdAt || file.updatedAt || file.syncedAt || "";
+}
+
+function getFileSortTimestamp(file = {}) {
+  const ts = Date.parse(getFileCreatedAt(file));
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+function compareFileNames(left = {}, right = {}) {
+  return String(left.name || "").localeCompare(String(right.name || ""), "zh-CN", { numeric: true, sensitivity: "base" });
+}
+
+function compareFilesByType(left = {}, right = {}) {
+  const groupCompare = getFileTypeLabel(getFileTypeGroup(left.mimeType)).localeCompare(
+    getFileTypeLabel(getFileTypeGroup(right.mimeType)),
+    "zh-CN",
+    { sensitivity: "base" }
+  );
+  if (groupCompare !== 0) {
+    return groupCompare;
+  }
+  return compareFileNames(left, right);
+}
+
+function sortFiles(files = [], sortBy = "createdAt") {
+  const next = [...files];
+  next.sort((left, right) => {
+    if (sortBy === "createdAt") {
+      const timeDelta = getFileSortTimestamp(right) - getFileSortTimestamp(left);
+      if (timeDelta !== 0) {
+        return timeDelta;
+      }
+      return compareFileNames(left, right);
+    }
+    if (sortBy === "type") {
+      return compareFilesByType(left, right);
+    }
+    return compareFileNames(left, right);
+  });
+  return next;
+}
+
+function getShareExpiryLabel(value) {
+  const matched = SHARE_EXPIRY_OPTIONS.find((item) => item.value === String(value ?? "7"));
+  return matched?.label || "7 天后失效";
+}
+
+function getShareStatusLabel(status = "") {
+  if (status === "active") return "有效";
+  if (status === "expired") return "已过期";
+  if (status === "revoked") return "已撤销";
+  return "未知";
+}
+
+function getShareStatusColor(status = "") {
+  if (status === "active") return "success";
+  if (status === "expired") return "warning";
+  if (status === "revoked") return "danger";
+  return "informative";
+}
+
+function isShareValid(status = "") {
+  return status === "active";
+}
+
+function getPathFileName(filePath = "") {
+  const normalized = String(filePath || "").replace(/\\/g, "/");
+  const parts = normalized.split("/").filter(Boolean);
+  return parts[parts.length - 1] || normalized;
+}
+
+function getPathDirectory(filePath = "") {
+  const normalized = String(filePath || "").replace(/\\/g, "/");
+  const parts = normalized.split("/").filter(Boolean);
+  return parts.slice(0, -1).join("/");
+}
+
+function findMimePreset(mimeType = "") {
+  const normalized = String(mimeType || "").trim().toLowerCase();
+  return MIME_PRESET_OPTIONS.find((item) => item.value.toLowerCase() === normalized) || null;
+}
+
+function getMimeDisplayValue(mimeType = "") {
+  const preset = findMimePreset(mimeType);
+  return preset?.label || mimeType || "自定义 MIME";
+}
+
+function getPathSegments(filePath = "") {
+  return normalizeFolderPath(filePath).split("/").filter(Boolean);
+}
+
+function getImmediateChildFolderPath(filePath = "", currentFolderPath = "") {
+  const directorySegments = getPathSegments(getPathDirectory(filePath));
+  const currentSegments = getPathSegments(currentFolderPath);
+  if (directorySegments.length <= currentSegments.length) {
+    return "";
+  }
+  for (let index = 0; index < currentSegments.length; index += 1) {
+    if (directorySegments[index] !== currentSegments[index]) {
+      return "";
+    }
+  }
+  return directorySegments.slice(0, currentSegments.length + 1).join("/");
+}
+
+function buildExplorerFolderEntries(files = [], directories = [], currentFolderPath = "") {
+  const folderMap = new Map();
+  for (const directory of directories) {
+    const childFolderPath = getImmediateChildFolderPath(directory.path, currentFolderPath);
+    if (!childFolderPath) {
+      continue;
+    }
+    const existing = folderMap.get(childFolderPath) || {
+      id: `folder:${childFolderPath}`,
+      path: childFolderPath,
+      name: getPathFileName(childFolderPath),
+      fileCount: 0,
+      totalBytes: 0,
+      clientIds: new Set(),
+      latestTimestamp: 0,
+      latestCreatedAt: ""
+    };
+    if (directory.clientId) {
+      existing.clientIds.add(directory.clientId);
+    }
+    const timestamp = getFileSortTimestamp(directory);
+    if (timestamp >= existing.latestTimestamp) {
+      existing.latestTimestamp = timestamp;
+      existing.latestCreatedAt = getFileCreatedAt(directory);
+    }
+    folderMap.set(childFolderPath, existing);
+  }
+  for (const file of files) {
+    const childFolderPath = getImmediateChildFolderPath(file.path, currentFolderPath);
+    if (!childFolderPath) {
+      continue;
+    }
+    const existing = folderMap.get(childFolderPath) || {
+      id: `folder:${childFolderPath}`,
+      path: childFolderPath,
+      name: getPathFileName(childFolderPath),
+      fileCount: 0,
+      totalBytes: 0,
+      clientIds: new Set(),
+      latestTimestamp: 0,
+      latestCreatedAt: ""
+    };
+    existing.fileCount += 1;
+    existing.totalBytes += Number(file.size || 0);
+    if (file.clientId) {
+      existing.clientIds.add(file.clientId);
+    }
+    const timestamp = getFileSortTimestamp(file);
+    if (timestamp >= existing.latestTimestamp) {
+      existing.latestTimestamp = timestamp;
+      existing.latestCreatedAt = getFileCreatedAt(file);
+    }
+    folderMap.set(childFolderPath, existing);
+  }
+  return Array.from(folderMap.values())
+    .map((folder) => ({
+      ...folder,
+      clientCount: folder.clientIds.size,
+      clientIds: [...folder.clientIds],
+      singleClientId: folder.clientIds.size === 1 ? [...folder.clientIds][0] : ""
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name, "zh-CN", { numeric: true, sensitivity: "base" }));
 }
 
 function emptyPreviewDebug() {
@@ -276,14 +566,19 @@ export default function App() {
   const [token, setToken] = useState(localStorage.getItem("nas_token") || "");
   const [user, setUser] = useState(null);
   const [files, setFiles] = useState([]);
+  const [directories, setDirectories] = useState([]);
   const [clients, setClients] = useState([]);
   const [users, setUsers] = useState([]);
   const [uploadJobs, setUploadJobs] = useState([]);
   const [downloadJobs, setDownloadJobs] = useState([]);
+  const [shares, setShares] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [shareLoading, setShareLoading] = useState(false);
   const [toasts, setToasts] = useState([]);
   const [viewMode, setViewMode] = useState("grid");
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileSaving, setProfileSaving] = useState(false);
   const [diagnostics, setDiagnostics] = useState({ wsState: "idle", clients: {} });
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
 
@@ -292,6 +587,8 @@ export default function App() {
   const [displayName, setDisplayName] = useState("");
   const [authMode, setAuthMode] = useState("login");
   const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState("explorer");
+  const [navExpanded, setNavExpanded] = useState(false);
   const [isMobileViewport, setIsMobileViewport] = useState(() => {
     if (typeof window === "undefined") {
       return false;
@@ -301,6 +598,19 @@ export default function App() {
 
   const [previewing, setPreviewing] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [shareTarget, setShareTarget] = useState(null);
+  const [shareExpiryDays, setShareExpiryDays] = useState("7");
+  const [shareHistoryOpen, setShareHistoryOpen] = useState(false);
+  const [editFileOpen, setEditFileOpen] = useState(false);
+  const [editFileDraft, setEditFileDraft] = useState(null);
+  const [editFileAdvancedOpen, setEditFileAdvancedOpen] = useState(false);
+  const [editFolderOpen, setEditFolderOpen] = useState(false);
+  const [editFolderDraft, setEditFolderDraft] = useState(null);
+  const [createFolderOpen, setCreateFolderOpen] = useState(false);
+  const [createFolderSaving, setCreateFolderSaving] = useState(false);
+  const [createFolderDraft, setCreateFolderDraft] = useState({ clientId: "", folderName: "" });
+  const [createFolderContext, setCreateFolderContext] = useState({ source: "explorer", basePath: "", uploadFolderBasePath: "" });
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteStep, setDeleteStep] = useState(1);
   const [selectedFileIds, setSelectedFileIds] = useState([]);
@@ -324,11 +634,14 @@ export default function App() {
   const [uploadColumnId, setUploadColumnId] = useState("");
   const [columnDraftName, setColumnDraftName] = useState("");
   const [uploadStep, setUploadStep] = useState(1);
+  const [uploadAdvancedOpen, setUploadAdvancedOpen] = useState(false);
 
   const [columns, setColumns] = useState([]);
   const [keyword, setKeyword] = useState("");
   const [columnFilter, setColumnFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
+  const [sortBy, setSortBy] = useState("createdAt");
+  const [currentExplorerPath, setCurrentExplorerPath] = useState("");
 
   const [thumbMap, setThumbMap] = useState(() => {
     const cache = loadThumbCache();
@@ -441,12 +754,24 @@ export default function App() {
   }
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const shareId = params.get("share");
+    if (!shareId) {
+      return;
+    }
+    const currentPath = window.location.pathname || "/";
+    if (/share\.html$/i.test(currentPath)) {
+      return;
+    }
+    window.location.replace(`/share.html?share=${encodeURIComponent(shareId)}`);
+  }, []);
+
+  useEffect(() => {
     if (!token) {
       setP2p((prev) => { prev?.dispose(); return null; });
       return;
     }
-    const bridge = new P2PBridge(token);
-    bridge.connect();
+    const bridge = new P2PBridgePool(token);
     setP2p((prev) => { prev?.dispose(); return bridge; });
     return () => bridge.dispose();
   }, [token]);
@@ -496,13 +821,18 @@ export default function App() {
     return files.filter((f) => onlineIds.has(f.clientId));
   }, [files, clients]);
 
+  const onlineDirectories = useMemo(() => {
+    const onlineIds = new Set(clients.filter((c) => c.status === "online").map((c) => c.id));
+    return directories.filter((directory) => onlineIds.has(directory.clientId));
+  }, [directories, clients]);
+
   const columnMap = useMemo(() => {
     return new Map(columns.map((item) => [item.id, item.name]));
   }, [columns]);
 
   const filteredOnlineFiles = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
-    return onlineFiles.filter((file) => {
+    const filtered = onlineFiles.filter((file) => {
       if (columnFilter === "none" && file.columnId) {
         return false;
       }
@@ -520,7 +850,104 @@ export default function App() {
       }
       return true;
     });
-  }, [onlineFiles, columnFilter, typeFilter, keyword]);
+    return sortFiles(filtered, sortBy);
+  }, [onlineFiles, columnFilter, typeFilter, keyword, sortBy]);
+
+  const filteredOnlineDirectories = useMemo(() => {
+    const kw = keyword.trim().toLowerCase();
+    return onlineDirectories
+      .filter((directory) => {
+        if (columnFilter !== "all" || typeFilter !== "all") {
+          return false;
+        }
+        if (kw) {
+          const hay = `${directory.name || ""} ${directory.path || ""}`.toLowerCase();
+          if (!hay.includes(kw)) {
+            return false;
+          }
+        }
+        return true;
+      })
+      .sort((left, right) => String(left.path || "").localeCompare(String(right.path || ""), "zh-CN", { numeric: true, sensitivity: "base" }));
+  }, [onlineDirectories, columnFilter, typeFilter, keyword]);
+
+  const explorerFolderEntries = useMemo(
+    () => buildExplorerFolderEntries(filteredOnlineFiles, filteredOnlineDirectories, currentExplorerPath),
+    [filteredOnlineFiles, filteredOnlineDirectories, currentExplorerPath]
+  );
+  const currentFolderFiles = useMemo(
+    () => filteredOnlineFiles.filter((file) => normalizeFolderPath(getPathDirectory(file.path)) === currentExplorerPath),
+    [filteredOnlineFiles, currentExplorerPath]
+  );
+  const currentFolderDirectories = useMemo(
+    () => onlineDirectories.filter((directory) => normalizeFolderPath(getPathDirectory(directory.path)) === currentExplorerPath),
+    [onlineDirectories, currentExplorerPath]
+  );
+  const currentExplorerEntries = useMemo(
+    () => [
+      ...explorerFolderEntries.map((folder) => ({ kind: "folder", key: folder.id, folder })),
+      ...currentFolderFiles.map((file) => ({ kind: "file", key: file.id, file }))
+    ],
+    [explorerFolderEntries, currentFolderFiles]
+  );
+  const explorerBreadcrumbs = useMemo(() => {
+    const segments = getPathSegments(currentExplorerPath);
+    return segments.map((segment, index) => ({
+      label: segment,
+      path: segments.slice(0, index + 1).join("/")
+    }));
+  }, [currentExplorerPath]);
+  const editFolderOptions = useMemo(() => {
+    const options = new Set([""]);
+    const currentPath = normalizeFolderPath(editFileDraft?.directoryPath || "");
+    if (currentPath) {
+      options.add(currentPath);
+    }
+    for (const directory of directories) {
+      if (editFileDraft?.clientId && directory.clientId !== editFileDraft.clientId) {
+        continue;
+      }
+      const directoryPath = normalizeFolderPath(directory.path);
+      if (directoryPath) {
+        options.add(directoryPath);
+      }
+    }
+    for (const file of files) {
+      if (editFileDraft?.clientId && file.clientId !== editFileDraft.clientId) {
+        continue;
+      }
+      const directoryPath = normalizeFolderPath(getPathDirectory(file.path));
+      if (directoryPath) {
+        options.add(directoryPath);
+      }
+    }
+    return Array.from(options).sort((left, right) => left.localeCompare(right, "zh-CN", { numeric: true, sensitivity: "base" }));
+  }, [directories, files, editFileDraft?.clientId, editFileDraft?.directoryPath]);
+  const createFolderClientOptions = useMemo(
+    () => clients.filter((client) => client.status === "online"),
+    [clients]
+  );
+  const preferredCreateFolderClientId = useMemo(() => {
+    const onlineIds = new Set(createFolderClientOptions.map((client) => client.id));
+    const currentIds = new Set();
+    for (const file of currentFolderFiles) {
+      if (file.clientId && onlineIds.has(file.clientId)) {
+        currentIds.add(file.clientId);
+      }
+    }
+    for (const directory of currentFolderDirectories) {
+      if (directory.clientId && onlineIds.has(directory.clientId)) {
+        currentIds.add(directory.clientId);
+      }
+    }
+    if (currentIds.size === 1) {
+      return [...currentIds][0];
+    }
+    if (uploadClientId && onlineIds.has(uploadClientId)) {
+      return uploadClientId;
+    }
+    return createFolderClientOptions[0]?.id || "";
+  }, [createFolderClientOptions, currentFolderDirectories, currentFolderFiles, uploadClientId]);
 
   const totalOnlineBytes = useMemo(
     () => onlineFiles.reduce((sum, file) => sum + Number(file.size || 0), 0),
@@ -534,6 +961,10 @@ export default function App() {
     () => onlineFiles.filter((file) => file.favorite).length,
     [onlineFiles]
   );
+  const previewTargetFile = useMemo(
+    () => files.find((item) => item.clientId === previewClientId && item.path === previewPath) || null,
+    [files, previewClientId, previewPath]
+  );
   const categorizedCount = useMemo(
     () => onlineFiles.filter((file) => file.columnId).length,
     [onlineFiles]
@@ -543,56 +974,1038 @@ export default function App() {
     if (keyword.trim()) count += 1;
     if (columnFilter !== "all") count += 1;
     if (typeFilter !== "all") count += 1;
+    if (sortBy !== "createdAt") count += 1;
     return count;
-  }, [keyword, columnFilter, typeFilter]);
+  }, [keyword, columnFilter, typeFilter, sortBy]);
   const uploadTargetPreview = useMemo(() => {
     const folderPath = normalizeFolderPath(uploadFolderPath);
     const columnName = columnMap.get(uploadColumnId) || "";
     return normalizeFolderPath([columnName, folderPath].filter(Boolean).join("/"));
   }, [uploadFolderPath, uploadColumnId, columnMap]);
-  const spotlightClients = useMemo(() => {
-    return [...clients]
-      .sort((left, right) => {
-        if (left.status === right.status) {
-          return (right.lastHeartbeatAt || "").localeCompare(left.lastHeartbeatAt || "");
+  const uploadFolderOptions = useMemo(() => {
+    const options = new Set([""]);
+    const clientId = String(uploadClientId || "").trim();
+    const columnName = normalizeFolderPath(columnMap.get(uploadColumnId) || "");
+    const prefix = columnName ? `${columnName}/` : "";
+    const currentPath = normalizeFolderPath(uploadFolderPath);
+    if (currentPath) {
+      options.add(currentPath);
+    }
+    for (const directory of directories) {
+      if (clientId && directory.clientId !== clientId) {
+        continue;
+      }
+      const directoryPath = normalizeFolderPath(directory.path);
+      if (!directoryPath) {
+        continue;
+      }
+      if (columnName) {
+        if (directoryPath === columnName) {
+          options.add("");
+          continue;
         }
-        return left.status === "online" ? -1 : 1;
-      })
-      .slice(0, 8);
-  }, [clients]);
-  const uploadQueuePreview = useMemo(() => visibleUploadJobs.slice(0, 4), [visibleUploadJobs]);
-  const downloadQueuePreview = useMemo(() => downloadJobs.slice(0, 4), [downloadJobs]);
-  const selectedFiles = useMemo(
-    () => onlineFiles.filter((file) => selectedFileIds.includes(file.id)),
-    [onlineFiles, selectedFileIds]
+        if (!directoryPath.startsWith(prefix)) {
+          continue;
+        }
+        options.add(normalizeFolderPath(directoryPath.slice(prefix.length)));
+        continue;
+      }
+      options.add(directoryPath);
+    }
+    return Array.from(options).sort((left, right) => left.localeCompare(right, "zh-CN", { numeric: true, sensitivity: "base" }));
+  }, [columnMap, directories, uploadClientId, uploadColumnId, uploadFolderPath]);
+  const uploadFolderBreadcrumbs = useMemo(() => {
+    const segments = getPathSegments(uploadFolderPath);
+    return segments.map((segment, index) => ({
+      label: segment,
+      path: segments.slice(0, index + 1).join("/")
+    }));
+  }, [uploadFolderPath]);
+  const uploadFolderChildren = useMemo(() => {
+    const folderMap = new Map();
+    for (const option of uploadFolderOptions.filter(Boolean)) {
+      const childPath = getImmediateChildFolderPath(option, uploadFolderPath);
+      if (!childPath) {
+        continue;
+      }
+      if (!folderMap.has(childPath)) {
+        folderMap.set(childPath, {
+          path: childPath,
+          name: getPathFileName(childPath)
+        });
+      }
+    }
+    return Array.from(folderMap.values()).sort((left, right) => left.name.localeCompare(right.name, "zh-CN", { numeric: true, sensitivity: "base" }));
+  }, [uploadFolderOptions, uploadFolderPath]);
+  const uploadTotalBytes = useMemo(
+    () => uploadFiles.reduce((sum, item) => sum + Number(item?.file?.size || 0), 0),
+    [uploadFiles]
   );
+  const currentFileShares = useMemo(() => {
+    if (!shareTarget?.id) {
+      return [];
+    }
+    return shares.filter((item) => item.file?.id === shareTarget.id || item.fileId === shareTarget.id).slice(0, 8);
+  }, [shares, shareTarget]);
   const selectedVisibleFiles = useMemo(
-    () => filteredOnlineFiles.filter((file) => selectedFileIds.includes(file.id)),
-    [filteredOnlineFiles, selectedFileIds]
+    () => currentFolderFiles.filter((file) => selectedFileIds.includes(file.id)),
+    [currentFolderFiles, selectedFileIds]
   );
   const selectedVisibleAllFavorite = useMemo(
     () => selectedVisibleFiles.length > 0 && selectedVisibleFiles.every((file) => file.favorite),
     [selectedVisibleFiles]
   );
   const allVisibleSelected = useMemo(
-    () => filteredOnlineFiles.length > 0 && filteredOnlineFiles.every((file) => selectedFileIds.includes(file.id)),
-    [filteredOnlineFiles, selectedFileIds]
+    () => currentFolderFiles.length > 0 && currentFolderFiles.every((file) => selectedFileIds.includes(file.id)),
+    [currentFolderFiles, selectedFileIds]
   );
+
+  useEffect(() => {
+    const allowedTabs = new Set(["explorer", "chat", "overview", "terminals", "transfers", "shares"]);
+    if (user?.role === "admin") {
+      allowedTabs.add("admin-users");
+      allowedTabs.add("admin-clients");
+    }
+    if (!allowedTabs.has(activeWorkspaceTab)) {
+      setActiveWorkspaceTab("explorer");
+    }
+  }, [activeWorkspaceTab, user?.role]);
 
   const detailItemHeight = 96;
   const detailOverscan = 6;
-  const detailTotal = filteredOnlineFiles.length;
+  const detailTotal = currentExplorerEntries.length;
   const detailStart = Math.max(0, Math.floor(listScrollTop / detailItemHeight) - detailOverscan);
   const detailEnd = Math.min(
     detailTotal,
     Math.ceil((listScrollTop + listHeight) / detailItemHeight) + detailOverscan
   );
-  const detailSlice = isMobileViewport ? filteredOnlineFiles : filteredOnlineFiles.slice(detailStart, detailEnd);
+  const detailSlice = isMobileViewport ? currentExplorerEntries : currentExplorerEntries.slice(detailStart, detailEnd);
   const detailPaddingTop = isMobileViewport ? 0 : detailStart * detailItemHeight;
   const detailPaddingBottom = isMobileViewport ? 0 : Math.max(0, (detailTotal - detailEnd) * detailItemHeight);
 
+  function openExplorerFolder(nextPath = "") {
+    const normalized = normalizeFolderPath(nextPath);
+    setCurrentExplorerPath(normalized);
+    setListScrollTop(0);
+    if (fileListRef.current) {
+      fileListRef.current.scrollTop = 0;
+    }
+  }
+
+  function openExplorerParentFolder() {
+    const segments = getPathSegments(currentExplorerPath);
+    if (!segments.length) {
+      return;
+    }
+    segments.pop();
+    openExplorerFolder(segments.join("/"));
+  }
+
+  function openCreateFolderModal(options = {}) {
+    const source = String(options.source || "explorer");
+    const basePath = normalizeFolderPath(options.basePath ?? currentExplorerPath);
+    const clientId = String(options.clientId || (source === "upload" ? uploadClientId : preferredCreateFolderClientId) || "").trim();
+    setCreateFolderDraft({
+      clientId,
+      folderName: ""
+    });
+    setCreateFolderContext({
+      source,
+      basePath,
+      uploadFolderBasePath: normalizeFolderPath(options.uploadFolderBasePath || "")
+    });
+    setCreateFolderOpen(true);
+  }
+
+  function closeCreateFolderModal(force = false) {
+    if (createFolderSaving && !force) {
+      return;
+    }
+    setCreateFolderOpen(false);
+    setCreateFolderDraft({ clientId: "", folderName: "" });
+    setCreateFolderContext({ source: "explorer", basePath: "", uploadFolderBasePath: "" });
+  }
+
   function isUploadingFile(file) {
     return uploadingFileKeys.has(`${file.clientId}|${file.path}`);
+  }
+
+  function appendUploadFiles(fileList) {
+    const nextFiles = Array.from(fileList || []);
+    if (!nextFiles.length) {
+      return;
+    }
+    setUploadFiles((prev) => [
+      ...prev,
+      ...nextFiles.map((file, index) => buildUploadDraft(file, prev.length + index))
+    ]);
+  }
+
+  function updateUploadFileName(id, value) {
+    setUploadFiles((prev) => prev.map((item) => (
+      item.id === id ? { ...item, desiredName: value } : item
+    )));
+  }
+
+  function removeUploadDraft(id) {
+    setUploadFiles((prev) => prev.filter((item) => item.id !== id));
+  }
+
+  function removeUploadJobLocal(jobId) {
+    if (!jobId) {
+      return;
+    }
+    setUploadJobs((prev) => prev.filter((item) => item.id !== jobId));
+  }
+
+  function getColumnDisplayValue(columnId) {
+    if (columnId === "all") {
+      return "全部栏目";
+    }
+    if (!columnId || columnId === "none") {
+      return "未分类";
+    }
+    return columnMap.get(columnId) || "未分类";
+  }
+
+  function getClientDropdownValue(clientId) {
+    return clientId ? getClientDisplayName(clientId) : "请选择终端";
+  }
+
+  function getTypeDropdownValue(type) {
+    if (!type || type === "all") {
+      return "全部类型";
+    }
+    return getFileTypeLabel(type);
+  }
+
+  function getShareFileName(share) {
+    if (!share) {
+      return "文件已移除";
+    }
+    return share.file?.name || share.fileName || getPathFileName(share.file?.path || share.filePath || share.fileId || "") || "文件已移除";
+  }
+
+  function getShareFilePath(share) {
+    if (!share) {
+      return "";
+    }
+    return share.file?.path || share.filePath || share.fileId || "";
+  }
+
+  function getFileSortDropdownValue(value) {
+    const matched = FILE_SORT_OPTIONS.find((item) => item.value === value);
+    return matched?.label || "按上传时间";
+  }
+
+  function renderOverviewPage() {
+    return (
+      <section className="workspacePage">
+        <Card className="surfaceCard panelCard workspacePageCard commandCard">
+          <div className="workspacePageHeader">
+            <div className="workspacePageTitleBlock">
+              <Subtitle1>系统概览</Subtitle1>
+              <Caption1>集中查看同步状态、快速操作和当前工作负载。</Caption1>
+            </div>
+            <div className="workspacePageActions">
+              <Button appearance="primary" onClick={() => setUploadOpen(true)}>发起上传</Button>
+              <Button onClick={() => setDiagnosticsOpen(true)}>打开诊断</Button>
+              <Button onClick={() => refreshAll()}>{loading ? <Spinner size="tiny" /> : "同步索引"}</Button>
+              <Button onClick={() => setViewMode((prev) => prev === "grid" ? "details" : "grid")}>{viewMode === "grid" ? "切到详情" : "切到卡片"}</Button>
+            </div>
+          </div>
+
+          <div className="workspaceMetricsGrid overviewMetricsGrid">
+            <div className="railMetric">
+              <Caption1>信令状态</Caption1>
+              <Text>{diagnostics.wsState || "idle"}</Text>
+            </div>
+            <div className="railMetric">
+              <Caption1>最近刷新</Caption1>
+              <Text>{formatRelativeTime(lastRefreshAt)}</Text>
+            </div>
+            <div className="railMetric">
+              <Caption1>轮询更新</Caption1>
+              <Text>{formatRelativeTime(lastPollAt)}</Text>
+            </div>
+            <div className="railMetric">
+              <Caption1>在线终端</Caption1>
+              <Text>{onlineCount}</Text>
+            </div>
+            <div className="railMetric">
+              <Caption1>当前筛选</Caption1>
+              <Text>{activeFilterCount ? `${activeFilterCount} 项` : "无"}</Text>
+            </div>
+            <div className="railMetric">
+              <Caption1>上传队列</Caption1>
+              <Text>{visibleUploadJobs.length} 项</Text>
+            </div>
+            <div className="railMetric">
+              <Caption1>下载队列</Caption1>
+              <Text>{downloadingCount} 项</Text>
+            </div>
+            <div className="railMetric">
+              <Caption1>分享链接</Caption1>
+              <Text>{shares.length} 条</Text>
+            </div>
+          </div>
+        </Card>
+      </section>
+    );
+  }
+
+  function renderTerminalsPage() {
+    return (
+      <section className="workspacePage">
+        <Card className="surfaceCard panelCard workspacePageCard">
+          <div className="workspacePageHeader">
+            <div className="workspacePageTitleBlock">
+              <Subtitle1>终端状态</Subtitle1>
+              <Caption1>查看在线情况、路由模式与各存储终端最近心跳。</Caption1>
+            </div>
+            <div className="workspacePageActions">
+              <Badge appearance="outline" color={onlineCount ? "success" : "informative"}>在线 {onlineCount}</Badge>
+              <Badge appearance="outline" color={relayCount ? "warning" : "informative"}>中继 {relayCount}</Badge>
+            </div>
+          </div>
+
+          <div className="miniList workspaceList">
+            {clients.map((client) => (
+              <div key={client.id} className="miniListRow terminalRow workspaceTerminalRow">
+                <div className="miniListMain">
+                  <Text className="miniListTitle">{getClientDisplayName(client.id)}</Text>
+                  <Caption1>ID: {client.id}</Caption1>
+                  <Caption1>{client.lastHeartbeatAt ? `心跳 ${formatRelativeTime(client.lastHeartbeatAt)}` : "无心跳"}</Caption1>
+                  <Caption1>{formatPeerRoleSummary(diagnostics.clients[client.id] || {}) || "暂无角色连接"}</Caption1>
+                </div>
+                <div className="miniListBadges">
+                  <Badge appearance="outline" color={getClientStatusColor(client.status)}>{client.status || "unknown"}</Badge>
+                  <Badge appearance="outline" color={(diagnostics.clients[client.id]?.route || "unknown") === "relay" ? "warning" : "informative"}>{diagnostics.clients[client.id]?.route || "unknown"}</Badge>
+                </div>
+              </div>
+            ))}
+            {!clients.length && <Caption1>暂无终端数据</Caption1>}
+          </div>
+        </Card>
+      </section>
+    );
+  }
+
+  function renderTransfersPage() {
+    return (
+      <section className="workspacePage">
+        <Card className="surfaceCard panelCard workspacePageCard">
+          <div className="workspacePageHeader">
+            <div className="workspacePageTitleBlock">
+              <Subtitle1>传输队列</Subtitle1>
+              <Caption1>统一查看上传与下载任务、传输速率和当前链路。</Caption1>
+            </div>
+            <div className="workspacePageActions">
+              <Badge appearance="outline" color={visibleUploadJobs.length ? "success" : "subtle"}>上传 {visibleUploadJobs.length}</Badge>
+              <Badge appearance="outline" color={downloadJobs.length ? "informative" : "subtle"}>下载 {downloadJobs.length}</Badge>
+            </div>
+          </div>
+
+          <div className="miniList workspaceList">
+            {downloadJobs.map((job) => renderTransferQueueRow(job, "download"))}
+            {visibleUploadJobs.map((job) => renderTransferQueueRow(job, "upload"))}
+            {!downloadJobs.length && !visibleUploadJobs.length && <Caption1>当前没有正在传输的任务</Caption1>}
+          </div>
+        </Card>
+      </section>
+    );
+  }
+
+  function renderSharesPage() {
+    return (
+      <section className="workspacePage">
+        <Card className="surfaceCard panelCard workspacePageCard">
+          <div className="workspacePageHeader">
+            <div className="workspacePageTitleBlock">
+              <Subtitle1>分享管理</Subtitle1>
+              <Caption1>统一维护已生成的分享链接、有效期和访问统计。</Caption1>
+            </div>
+            <div className="workspacePageActions">
+              <Badge appearance="outline" color={shares.length ? "informative" : "subtle"}>{shares.length}</Badge>
+            </div>
+          </div>
+
+          <div className="miniList shareMiniList workspaceList">
+            {shares.map((share) => (
+              <div key={share.id} className="miniListRow shareMiniRow shareManagerRow">
+                <div className="miniListMain shareMiniMain shareManagerMain">
+                  <div className="shareManagerTitleRow">
+                    <span
+                      className={`shareStatusDot ${isShareValid(share.status) ? "valid" : "invalid"}`}
+                      title={isShareValid(share.status) ? "有效" : "无效"}
+                      aria-label={isShareValid(share.status) ? "有效" : "无效"}
+                    />
+                    <Text className="miniListTitle shareManagerTitle">{getShareFileName(share)}</Text>
+                  </div>
+                  <Caption1 className="shareManagerPath">{getShareFilePath(share) || "路径不可用"}</Caption1>
+                  <Caption1 className="shareManagerMetaLine">
+                    创建于 {formatRelativeTime(share.createdAt)} · 访问 {share.accessCount || 0} 次 · {share.expiresAt ? `到期 ${formatRelativeTime(share.expiresAt)}` : "长期有效"}
+                  </Caption1>
+                </div>
+                <div className="miniListBadges shareMiniActions shareManagerActions">
+                  <button
+                    type="button"
+                    className="iconActionButton shareManagerIconButton"
+                    title="复制分享链接"
+                    aria-label="复制分享链接"
+                    onClick={() => copyShareUrl(share.shareUrl)}
+                  >
+                    <CopyRegular />
+                  </button>
+                  <button
+                    type="button"
+                    className="iconActionButton shareManagerIconButton"
+                    title="撤销分享"
+                    aria-label="撤销分享"
+                    disabled={share.status !== "active"}
+                    onClick={() => revokeShare(share.id)}
+                  >
+                    <DismissRegular />
+                  </button>
+                  <button
+                    type="button"
+                    className="iconActionButton shareManagerIconButton danger"
+                    title="删除分享记录"
+                    aria-label="删除分享记录"
+                    onClick={() => deleteShare(share.id)}
+                  >
+                    <DeleteRegular />
+                  </button>
+                </div>
+              </div>
+            ))}
+            {!shares.length && <Caption1>当前还没有已生成的分享链接</Caption1>}
+          </div>
+        </Card>
+      </section>
+    );
+  }
+
+  function renderAdminUsersPage() {
+    return (
+      <section className="workspacePage">
+        <Card className="surfaceCard panelCard workspacePageCard">
+          <div className="workspacePageHeader">
+            <div className="workspacePageTitleBlock">
+              <Subtitle1>后台管理 - 用户</Subtitle1>
+              <Caption1>查看当前系统用户、角色与邮箱信息。</Caption1>
+            </div>
+            <div className="workspacePageActions">
+              <Badge appearance="outline" color={users.length ? "informative" : "subtle"}>{users.length}</Badge>
+            </div>
+          </div>
+          <div className="adminList workspaceList">
+            {users.map((item) => (
+              <div key={item.id} className="simpleRow">
+                <div>
+                  <div className="fileName">{item.displayName} · {item.role}</div>
+                  <div className="fileSub">{item.email}</div>
+                </div>
+              </div>
+            ))}
+            {!users.length && <Caption1>暂无用户数据</Caption1>}
+          </div>
+        </Card>
+      </section>
+    );
+  }
+
+  function renderAdminClientsPage() {
+    return (
+      <section className="workspacePage">
+        <Card className="surfaceCard panelCard workspacePageCard">
+          <div className="workspacePageHeader">
+            <div className="workspacePageTitleBlock">
+              <Subtitle1>后台管理 - 存储终端</Subtitle1>
+              <Caption1>管理终端启停、路由连接和全角色重连。</Caption1>
+            </div>
+            <div className="workspacePageActions">
+              <Badge appearance="outline" color={clients.length ? "informative" : "subtle"}>{clients.length}</Badge>
+            </div>
+          </div>
+          <div className="adminList workspaceList">
+            {clients.map((item) => (
+              <div key={item.id} className="simpleRow withActions">
+                <div>
+                  <div className="fileName">{item.name || item.id}</div>
+                  <div className="fileSub">ID: {item.id}</div>
+                  <div className="fileSub">
+                    状态: {item.status} · 心跳: {formatRelativeTime(item.lastHeartbeatAt)} · 路由: {diagnostics.clients[item.id]?.route || "unknown"}
+                  </div>
+                </div>
+                <div className="row">
+                  <Badge appearance="outline" color={getClientStatusColor(item.status)}>{item.status}</Badge>
+                  <Button size="small" onClick={() => Promise.all(["download", "upload", "preview", "control"].map((role) => p2p?.connectToPeer(item.id, role)))}>全部重连</Button>
+                  <Button size="small" onClick={() => changeClientStatus(item.id, "online")}>启用</Button>
+                  <Button size="small" onClick={() => changeClientStatus(item.id, "disabled")}>禁用</Button>
+                </div>
+              </div>
+            ))}
+            {!clients.length && <Caption1>暂无存储终端数据</Caption1>}
+          </div>
+        </Card>
+      </section>
+    );
+  }
+
+  function renderExplorerPage() {
+    return (
+      <section className="workspacePage filePanel explorerPanel">
+        <Card className="surfaceCard panelCard explorerShell workspacePageCard">
+          <div className="explorerTop">
+            <div className="explorerTitleBlock">
+              <Subtitle1>资源浏览器</Subtitle1>
+              <Caption1>浏览当前目录、切换展示模式并管理目录结构。</Caption1>
+            </div>
+            <div className="explorerToolbar">
+              <div className="toolbarControlGroup">
+                <button
+                  type="button"
+                  className="iconActionButton explorerToolbarButton"
+                  title="新建文件夹"
+                  aria-label="新建文件夹"
+                  onClick={() => openCreateFolderModal()}
+                  disabled={!createFolderClientOptions.length}
+                >
+                  <FolderOpenRegular />
+                </button>
+                <button
+                  type="button"
+                  className={`iconActionButton explorerToolbarButton${viewMode === "grid" ? " active" : ""}`}
+                  title="图标模式"
+                  aria-label="图标模式"
+                  onClick={() => setViewMode("grid")}
+                >
+                  ▦
+                </button>
+                <button
+                  type="button"
+                  className={`iconActionButton explorerToolbarButton${viewMode === "details" ? " active" : ""}`}
+                  title="列表模式"
+                  aria-label="列表模式"
+                  onClick={() => setViewMode("details")}
+                >
+                  ☰
+                </button>
+                <div className="filterToggleWrap">
+                  <button
+                    type="button"
+                    className={`iconActionButton filterToggleButton${filtersExpanded ? " active" : ""}`}
+                    title={filtersExpanded ? "收起筛选与排序" : "展开筛选与排序"}
+                    aria-label={filtersExpanded ? "收起筛选与排序" : "展开筛选与排序"}
+                    onClick={() => setFiltersExpanded((prev) => !prev)}
+                  >
+                    <FilterRegular />
+                  </button>
+                  {activeFilterCount > 0 ? <span className="filterToggleBadge">{activeFilterCount}</span> : null}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="explorerPathBar">
+            <div className="explorerBreadcrumbs">
+              <button
+                type="button"
+                className={`explorerCrumbButton${!currentExplorerPath ? " current" : ""}`}
+                onClick={() => openExplorerFolder("")}
+              >
+                根目录
+              </button>
+              {explorerBreadcrumbs.map((crumb) => (
+                <div key={crumb.path} className="explorerCrumbItem">
+                  <ChevronRightRegular className="explorerCrumbIcon" />
+                  <button
+                    type="button"
+                    className={`explorerCrumbButton${crumb.path === currentExplorerPath ? " current" : ""}`}
+                    onClick={() => openExplorerFolder(crumb.path)}
+                  >
+                    {crumb.label}
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="explorerPathActions">
+              <Caption1>{currentExplorerPath || "当前位于根目录"}</Caption1>
+              <button
+                type="button"
+                className="folderEnterButton pathBackButton"
+                disabled={!currentExplorerPath}
+                onClick={openExplorerParentFolder}
+                aria-label="返回上级"
+                title="返回上级"
+              >
+                <ArrowRightRegular />
+              </button>
+            </div>
+          </div>
+
+          {filtersExpanded && (
+            <div className="filterPanelShell">
+              <div className="filterWorkbench">
+                <Field className="filterField filterControl searchField" label="搜索文件">
+                  <Input
+                    className="filterInput"
+                    value={keyword}
+                    onChange={(_, data) => setKeyword(data.value)}
+                    placeholder="搜索文件名或路径"
+                  />
+                </Field>
+                <Field className="filterField filterControl columnField" label="栏目">
+                  <Dropdown className="filterDropdown" selectedOptions={[columnFilter]} value={getColumnDisplayValue(columnFilter)} onOptionSelect={(_, data) => setColumnFilter(data.optionValue || "all")}>
+                    <Option value="all">全部栏目</Option>
+                    <Option value="none">未分类</Option>
+                    {columns.map((col) => (
+                      <Option key={col.id} value={col.id}>{col.name}</Option>
+                    ))}
+                  </Dropdown>
+                </Field>
+                <Field className="filterField filterControl typeField" label="分类">
+                  <Dropdown className="filterDropdown" selectedOptions={[typeFilter]} value={getTypeDropdownValue(typeFilter)} onOptionSelect={(_, data) => setTypeFilter(data.optionValue || "all")}>
+                    <Option value="all">全部类型</Option>
+                    <Option value="image">图片</Option>
+                    <Option value="video">视频</Option>
+                    <Option value="audio">音频</Option>
+                    <Option value="doc">文档</Option>
+                    <Option value="other">其他</Option>
+                  </Dropdown>
+                </Field>
+                <Field className="filterField filterControl sortField" label="排序">
+                  <Dropdown className="filterDropdown" selectedOptions={[sortBy]} value={getFileSortDropdownValue(sortBy)} onOptionSelect={(_, data) => setSortBy(data.optionValue || "createdAt")}>
+                    {FILE_SORT_OPTIONS.map((item) => (
+                      <Option key={item.value} value={item.value}>{item.label}</Option>
+                    ))}
+                  </Dropdown>
+                </Field>
+                <div className="filterActionBlock filterMetaBlock">
+                  <button
+                    type="button"
+                    className="iconActionButton filterClearButton"
+                    title="清空筛选与排序"
+                    aria-label="清空筛选与排序"
+                    onClick={() => { setKeyword(""); setColumnFilter("all"); setTypeFilter("all"); setSortBy("createdAt"); }}
+                  >
+                    <DismissRegular />
+                  </button>
+                  <Caption1>{activeFilterCount ? `已启用 ${activeFilterCount} 项筛选或排序` : "正在查看全部文件"}</Caption1>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {selectedVisibleFiles.length > 0 && (
+            <div className="bulkToolbar">
+              <div className="bulkToolbarInfo">
+                <Text>已选中 {selectedVisibleFiles.length} 项</Text>
+                <Caption1>{allVisibleSelected ? "当前结果已全选" : "批量收藏、下载、删除"}</Caption1>
+              </div>
+              <div className="bulkToolbarActions">
+                <Button size="small" onClick={toggleSelectAllVisible}>{allVisibleSelected ? "取消全选" : "全选当前结果"}</Button>
+                <Button size="small" onClick={() => setSelectedFileIds([])}>清空选择</Button>
+                <Button size="small" onClick={batchToggleFavorite}>{selectedVisibleAllFavorite ? "批量取消收藏" : "批量切换收藏"}</Button>
+                <Button size="small" onClick={batchDownload}>批量下载</Button>
+                <Button size="small" appearance="primary" onClick={requestBatchDelete}>批量删除</Button>
+              </div>
+            </div>
+          )}
+
+          {viewMode === "details" && (
+            <>
+              {visibleUploadJobs.length > 0 && (
+                <div className="uploadList">
+                  {visibleUploadJobs.map((job) => (
+                    <div key={job.id} className={`fileRow uploadRow status-${job.status || "uploading"}`}>
+                      <div className="thumbFallback">上传</div>
+                      <div className="fileMeta">
+                        <div className="fileName">{job.fileName || "上传任务"}</div>
+                        <div className="fileSub">{job.relativePath} · {getClientDisplayName(job.clientId)} · 发起人: {job.createdByDisplayName || "-"}</div>
+                        <div className="uploadProgressBar">
+                          <div className="uploadProgressInner" style={{ width: `${Math.max(0, Math.min(100, job.progress || 0))}%` }} />
+                        </div>
+                        <div className="fileSub">
+                          {job.message || "处理中"}
+                          {typeof job.progress === "number" ? ` · ${job.progress}%` : ""}
+                          {typeof job.transferredBytes === "number" && typeof job.size === "number" && job.size > 0
+                            ? ` · ${formatBytes(job.transferredBytes)} / ${formatBytes(job.size)}`
+                            : ""}
+                        </div>
+                      </div>
+                      <div className="actions">
+                        <button type="button" className="iconActionButton uploadInlineCancel danger" title="取消上传" aria-label="取消上传" onClick={() => cancelUploadJob(job)}>
+                          <DismissRegular />
+                        </button>
+                        <Badge appearance="outline" color="informative">上传中</Badge>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div
+                className="fileList"
+                ref={fileListRef}
+                onScroll={(event) => setListScrollTop(event.currentTarget.scrollTop)}
+              >
+                <div style={{ paddingTop: detailPaddingTop, paddingBottom: detailPaddingBottom }}>
+                  {detailSlice.map((entry) => entry.kind === "folder" ? (
+                    <div key={entry.key} className="fileRow folderRow" onDoubleClick={() => openExplorerFolder(entry.folder.path)}>
+                      <div className="thumbShell">
+                        <button className="thumbButton folderThumbButton" onClick={() => openExplorerFolder(entry.folder.path)}>
+                          <div className="thumbFallback folderThumbFallback">
+                            <FolderOpenRegular className="folderCoverIcon" />
+                          </div>
+                        </button>
+                      </div>
+                      <div className="fileMeta">
+                        <div className="fileName">{entry.folder.name}</div>
+                        <div className="fileSub">
+                          {entry.folder.path} · 包含 {entry.folder.fileCount} 个文件 · {formatBytes(entry.folder.totalBytes)}
+                        </div>
+                        <div className="fileSub">
+                          {entry.folder.clientCount > 1 ? `${entry.folder.clientCount} 个终端 · ` : ""}最近更新 {formatRelativeTime(entry.folder.latestCreatedAt)}
+                        </div>
+                      </div>
+                      <div className="actions">
+                        {renderFolderActionTray(entry.folder)}
+                        <Caption1 className="actionHint">双击目录卡片也可进入</Caption1>
+                      </div>
+                    </div>
+                  ) : (
+                    <div key={entry.key} className="fileRow">
+                      <div className="thumbShell">
+                        <button className="thumbButton" onClick={() => preview(entry.file)}>
+                          {thumbMap[getThumbKey(entry.file)]?.url ? <img src={thumbMap[getThumbKey(entry.file)].url} className="thumbImg" /> : <div className="thumbFallback">{isUploadingFile(entry.file) ? "上传中" : isImageMime(entry.file.mimeType) ? "图片" : isVideoMime(entry.file.mimeType) ? "视频" : "文件"}</div>}
+                        </button>
+                        {renderSelectionToggle(entry.file)}
+                      </div>
+                      <div className="fileMeta">
+                        <div className="fileName">{entry.file.name}</div>
+                        <div className="fileSub">
+                          {entry.file.path} · {formatBytes(entry.file.size)} · {getClientDisplayName(entry.file.clientId)}
+                        </div>
+                        <div className="fileSub">
+                          栏目: {columnMap.get(entry.file.columnId) || "未分类"} · 上传: {formatRelativeTime(getFileCreatedAt(entry.file))}
+                        </div>
+                      </div>
+                      <div className="actions">
+                        {renderFileActionTray(entry.file)}
+                        <Caption1 className="actionHint">点击缩略图可直接预览</Caption1>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+
+          {viewMode === "grid" && (
+            <div
+              className="fileList fileGridScroller"
+              ref={fileListRef}
+              onScroll={(event) => setListScrollTop(event.currentTarget.scrollTop)}
+            >
+              <div className="fileGrid">
+                {visibleUploadJobs.map((job) => (
+                  <div key={job.id} className="gridItem uploadGridItem">
+                    <div className="thumbFallback">上传</div>
+                    <div className="gridName" title={job.fileName || "上传任务"}>{job.fileName || "上传任务"}</div>
+                    <Caption1>{job.createdByDisplayName || "-"}</Caption1>
+                    <Caption1>{getClientDisplayName(job.clientId)}</Caption1>
+                    <div className="uploadProgressBar">
+                      <div className="uploadProgressInner" style={{ width: `${Math.max(0, Math.min(100, job.progress || 0))}%` }} />
+                    </div>
+                    <Caption1>上传中 {typeof job.progress === "number" ? `${job.progress}%` : ""}</Caption1>
+                    <button type="button" className="iconActionButton uploadGridCancel danger" title="取消上传" aria-label="取消上传" onClick={() => cancelUploadJob(job)}>
+                      <DismissRegular />
+                    </button>
+                  </div>
+                ))}
+                {currentExplorerEntries.map((entry) => entry.kind === "folder" ? (
+                  <div key={entry.key} className="gridItem folderGridItem" onDoubleClick={() => openExplorerFolder(entry.folder.path)}>
+                    <button className="gridThumb folderGridThumb" onClick={() => openExplorerFolder(entry.folder.path)}>
+                      <div className="thumbFallback folderThumbFallback">
+                        <FolderOpenRegular className="folderCoverIcon folderCoverIconLarge" />
+                      </div>
+                    </button>
+                    <div className="gridName" title={entry.folder.name}>{entry.folder.name}</div>
+                    <Caption1 className="gridMetaLine" title={entry.folder.path}>{entry.folder.path}</Caption1>
+                    <Caption1 className="gridMetaLine">{entry.folder.fileCount} 个文件 · {formatBytes(entry.folder.totalBytes)}</Caption1>
+                    <div className="gridCardFooter">
+                      {renderFolderActionTray(entry.folder)}
+                    </div>
+                  </div>
+                ) : (
+                  <div key={entry.key} className="gridItem">
+                    <div className="fileVisualShell">
+                      <button className="gridThumb" onClick={() => preview(entry.file)}>
+                        {thumbMap[getThumbKey(entry.file)]?.url ? <img src={thumbMap[getThumbKey(entry.file)].url} className="thumbImg" /> : <div className="thumbFallback">{isUploadingFile(entry.file) ? "上传中" : isImageMime(entry.file.mimeType) ? "图片" : isVideoMime(entry.file.mimeType) ? "视频" : "文件"}</div>}
+                      </button>
+                      {renderSelectionToggle(entry.file)}
+                    </div>
+                    <div className="gridName" title={entry.file.name}>{entry.file.name}</div>
+                    <Caption1 className="gridMetaLine">{getClientDisplayName(entry.file.clientId)} · {formatBytes(entry.file.size)}</Caption1>
+                    <Caption1 className="gridMetaLine">{columnMap.get(entry.file.columnId) || "未分类"} · {formatRelativeTime(getFileCreatedAt(entry.file))}</Caption1>
+                    <div className="gridCardFooter">
+                      {renderFileActionTray(entry.file)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {!currentExplorerEntries.length && !visibleUploadJobs.length && (
+            <Text>{filteredOnlineFiles.length ? "当前目录下暂无内容，可返回上级继续查看。" : "暂无可用文件，等待在线存储终端上报。"}</Text>
+          )}
+        </Card>
+      </section>
+    );
+  }
+
+  const workspaceTabs = [
+    { id: "explorer", label: "资源浏览器", icon: <EyeRegular />, meta: `${filteredOnlineFiles.length}` },
+    { id: "chat", label: "聊天室", icon: <ChatRegular />, meta: onlineCount ? "live" : "offline" },
+    { id: "overview", label: "系统概览", icon: <AppsListRegular />, meta: diagnostics.wsState || "idle" },
+    { id: "terminals", label: "终端状态", icon: <DesktopRegular />, meta: `${onlineCount}` },
+    { id: "transfers", label: "传输队列", icon: <ArrowSwapRegular />, meta: `${visibleUploadJobs.length + downloadingCount}` },
+    { id: "shares", label: "分享管理", icon: <ShareRegular />, meta: `${shares.length}` },
+    ...(user?.role === "admin"
+      ? [
+          { id: "admin-users", label: "用户管理", icon: <EditRegular />, meta: `${users.length}` },
+          { id: "admin-clients", label: "终端管理", icon: <DesktopRegular />, meta: `${clients.length}` }
+        ]
+      : [])
+  ];
+
+  function handleWorkspaceTabSelect(tabId) {
+    setActiveWorkspaceTab(tabId);
+    setNavExpanded(false);
+  }
+
+  function closeWorkspaceNav() {
+    setNavExpanded(false);
+  }
+
+  function renderActiveWorkspacePage() {
+    if (activeWorkspaceTab === "chat") {
+      return (
+        <ChatRoom
+          currentUser={user}
+          clients={clients}
+          p2p={p2p}
+          setMessage={setMessage}
+          getClientDisplayName={getClientDisplayName}
+          openMediaPreview={preview}
+          saveChatAttachmentToLibrary={saveChatAttachmentToLibrary}
+        />
+      );
+    }
+    if (activeWorkspaceTab === "overview") {
+      return renderOverviewPage();
+    }
+    if (activeWorkspaceTab === "terminals") {
+      return renderTerminalsPage();
+    }
+    if (activeWorkspaceTab === "transfers") {
+      return renderTransfersPage();
+    }
+    if (activeWorkspaceTab === "shares") {
+      return renderSharesPage();
+    }
+    if (activeWorkspaceTab === "admin-users") {
+      return renderAdminUsersPage();
+    }
+    if (activeWorkspaceTab === "admin-clients") {
+      return renderAdminClientsPage();
+    }
+    return renderExplorerPage();
+  }
+
+  function closeEditFileModal() {
+    setEditFileOpen(false);
+    setEditFileDraft(null);
+    setEditFileAdvancedOpen(false);
+  }
+
+  function closeEditFolderModal() {
+    setEditFolderOpen(false);
+    setEditFolderDraft(null);
+  }
+
+  function openEditFile(file) {
+    if (!file) {
+      return;
+    }
+    setEditFileDraft({
+      id: file.id,
+      clientId: file.clientId,
+      currentPath: file.path,
+      currentName: file.name,
+      fileName: file.name,
+      directoryPath: getPathDirectory(file.path),
+      columnId: file.columnId || "",
+      mimeType: file.mimeType || "application/octet-stream",
+      mimePreset: findMimePreset(file.mimeType || "application/octet-stream")?.value || "custom",
+      mimeAdvanced: !findMimePreset(file.mimeType || "application/octet-stream")
+    });
+    setEditFileAdvancedOpen(false);
+    setEditFileOpen(true);
+  }
+
+  function openEditFolder(folder) {
+    if (!folder?.singleClientId) {
+      setMessage("该目录当前聚合了多个终端，暂不支持直接重命名，请先缩小到单一终端后再操作", "warning");
+      return;
+    }
+    setEditFolderDraft({
+      clientId: folder.singleClientId,
+      currentPath: folder.path,
+      currentName: folder.name,
+      folderName: folder.name,
+      parentPath: getPathDirectory(folder.path)
+    });
+    setEditFolderOpen(true);
+  }
+
+  async function submitEditFile() {
+    if (!editFileDraft?.clientId || !editFileDraft?.currentPath) {
+      return;
+    }
+    const nextFileName = sanitizeUploadFileName(editFileDraft.fileName, editFileDraft.currentName || "");
+    const nextDirectoryPath = normalizeFolderPath(editFileDraft.directoryPath);
+    const nextRelativePath = buildUploadTargetPath(nextDirectoryPath, nextFileName);
+    const currentRelativePath = editFileDraft.currentPath;
+    const renamed = nextRelativePath !== currentRelativePath;
+    const nextMimeType = editFileDraft.mimeAdvanced
+      ? String(editFileDraft.mimeType || "application/octet-stream").trim() || "application/octet-stream"
+      : (editFileDraft.mimePreset && editFileDraft.mimePreset !== "custom"
+        ? editFileDraft.mimePreset
+        : String(editFileDraft.mimeType || "application/octet-stream").trim() || "application/octet-stream");
+
+    try {
+      if (renamed) {
+        if (!ensureClientOnline(editFileDraft.clientId)) {
+          return;
+        }
+        if (!(await ensureSignalingReady("control"))) {
+          return;
+        }
+        await p2p.renameFile(editFileDraft.clientId, currentRelativePath, nextRelativePath);
+      }
+
+      await apiRequest("/api/files/update", {
+        method: "POST",
+        token,
+        body: {
+          clientId: editFileDraft.clientId,
+          oldRelativePath: currentRelativePath,
+          newRelativePath: nextRelativePath,
+          columnId: editFileDraft.columnId || "",
+          folderPath: nextDirectoryPath,
+          mimeType: nextMimeType
+        }
+      });
+      closeEditFileModal();
+      await refreshAll();
+      setMessage("文件信息已更新", "success");
+    } catch (error) {
+      setMessage(`更新文件失败: ${error.message}`);
+    }
+  }
+
+  async function submitEditFolder() {
+    if (!editFolderDraft?.clientId || !editFolderDraft?.currentPath) {
+      return;
+    }
+    const nextFolderName = String(editFolderDraft.folderName || "").trim();
+    if (!nextFolderName || nextFolderName === "." || nextFolderName === ".." || /[\\/]/.test(nextFolderName)) {
+      setMessage("请输入合法的文件夹名称");
+      return;
+    }
+    const nextRelativePath = normalizeFolderPath(editFolderDraft.parentPath ? `${editFolderDraft.parentPath}/${nextFolderName}` : nextFolderName);
+    if (!nextRelativePath || nextRelativePath === editFolderDraft.currentPath) {
+      closeEditFolderModal();
+      return;
+    }
+
+    try {
+      if (!ensureClientOnline(editFolderDraft.clientId)) {
+        return;
+      }
+      if (!(await ensureSignalingReady("control"))) {
+        return;
+      }
+      await p2p.renameFolder(editFolderDraft.clientId, editFolderDraft.currentPath, nextRelativePath);
+      closeEditFolderModal();
+      await refreshAll();
+      setMessage("文件夹已重命名", "success");
+    } catch (error) {
+      setMessage(`重命名文件夹失败: ${error.message}`);
+    }
+  }
+
+  async function submitCreateFolder() {
+    const clientId = String(createFolderDraft.clientId || "").trim();
+    const folderName = String(createFolderDraft.folderName || "").trim();
+    if (!clientId) {
+      setMessage("请选择要创建目录的存储终端");
+      return;
+    }
+    if (!folderName) {
+      setMessage("请输入文件夹名称");
+      return;
+    }
+    if (folderName === "." || folderName === ".." || /[\\/]/.test(folderName)) {
+      setMessage("文件夹名称不能包含斜杠，且不能是 . 或 ..");
+      return;
+    }
+    const targetPath = normalizeFolderPath(createFolderContext.basePath ? `${createFolderContext.basePath}/${folderName}` : folderName);
+    if (!targetPath) {
+      setMessage("文件夹路径无效");
+      return;
+    }
+    const alreadyExists = directories.some((directory) => directory.clientId === clientId && normalizeFolderPath(directory.path) === targetPath);
+    if (alreadyExists) {
+      setMessage("该文件夹已存在", "warning");
+      return;
+    }
+
+    try {
+      setCreateFolderSaving(true);
+      if (!ensureClientOnline(clientId)) {
+        return;
+      }
+      if (!(await ensureSignalingReady("control"))) {
+        return;
+      }
+      await p2p.createFolder(clientId, targetPath);
+      closeCreateFolderModal(true);
+      if (createFolderContext.source === "upload") {
+        setUploadFolderPath(normalizeFolderPath(createFolderContext.uploadFolderBasePath ? `${createFolderContext.uploadFolderBasePath}/${folderName}` : folderName));
+      }
+      await refreshAll();
+      if (createFolderContext.source === "explorer") {
+        openExplorerFolder(createFolderContext.basePath);
+      }
+      setMessage(`文件夹已创建: ${targetPath}`, "success");
+    } catch (error) {
+      setMessage(`创建文件夹失败: ${error.message}`);
+    } finally {
+      setCreateFolderSaving(false);
+    }
+  }
+
+  function requestFolderDelete(folder) {
+    if (!folder?.singleClientId) {
+      setMessage("该目录当前聚合了多个终端，暂不支持直接删除，请先缩小到单一终端后再操作", "warning");
+      return;
+    }
+    setDeleteStep(1);
+    setDeleteTarget({ kind: "folder", folders: [folder] });
   }
 
   function dismissToast(id) {
@@ -795,75 +2208,199 @@ export default function App() {
     });
   }
 
-  function getTransferDiag(clientId) {
+  async function saveChatAttachmentToLibrary(attachment, options = {}) {
+    if (!p2p || !attachment?.clientId || !attachment?.path) {
+      setMessage("当前附件无法转存", "error");
+      return;
+    }
+    const sourceClientId = attachment.clientId;
+    const targetClientId = uploadClientId || attachment.clientId;
+    const folderPath = normalizeFolderPath(options.preferredFolderPath || uploadFolderPath || "chat-saved");
+    const columnName = columnMap.get(uploadColumnId) || "";
+    const basePath = normalizeFolderPath([columnName, folderPath].filter(Boolean).join("/"));
+    const uploadName = sanitizeUploadFileName(options.preferredName || attachment.name, attachment.name || "attachment.bin");
+    const targetPath = buildUploadTargetPath(basePath, uploadName);
+
+    if (!ensureClientOnline(sourceClientId) || !ensureClientOnline(targetClientId)) {
+      return;
+    }
+    if (!(await ensureSignalingReady("download")) || !(await ensureSignalingReady("upload"))) {
+      return;
+    }
+
+    let jobId = "";
+    try {
+      setMessage(`正在转存 ${uploadName}...`);
+      const downloadResult = await p2p.downloadFile(sourceClientId, attachment.path);
+      const blob = downloadResult?.blob;
+      if (!blob) {
+        throw new Error("读取附件失败");
+      }
+      const file = new File([blob], uploadName, { type: downloadResult?.meta?.mimeType || attachment.mimeType || blob.type || "application/octet-stream" });
+      const started = await apiRequest("/api/upload-jobs/start", {
+        method: "POST",
+        token,
+        body: {
+          clientId: targetClientId,
+          fileName: uploadName,
+          relativePath: targetPath,
+          size: file.size,
+          mimeType: file.type || "application/octet-stream",
+          columnId: uploadColumnId || "",
+          folderPath: folderPath || ""
+        }
+      });
+      if (started?.job) {
+        jobId = started.job.id;
+        upsertUploadJob(started.job);
+      }
+      await p2p.uploadFile(targetClientId, targetPath, file, {
+        uploadName,
+        onProgress: ({ transferredBytes, progress }) => {
+          if (!jobId) {
+            return;
+          }
+          upsertUploadJob({
+            id: jobId,
+            clientId: targetClientId,
+            relativePath: targetPath,
+            fileName: uploadName,
+            size: file.size,
+            transferredBytes,
+            progress,
+            status: "uploading"
+          });
+        }
+      });
+      if (jobId) {
+        const finished = await apiRequest(`/api/upload-jobs/${jobId}/finish`, {
+          method: "POST",
+          token,
+          body: { message: "转存完成，等待资源列表刷新" }
+        });
+        if (finished?.job) {
+          upsertUploadJob(finished.job);
+        }
+        upsertUploadJob({
+          id: jobId,
+          clientId: targetClientId,
+          relativePath: targetPath,
+          fileName: uploadName,
+          size: file.size,
+          transferredBytes: file.size,
+          progress: 100,
+          status: "completed"
+        });
+      }
+      await refreshAll();
+      const appeared = await waitForFileToAppear(targetClientId, targetPath);
+      if (!appeared) {
+        await refreshAll();
+      }
+      setMessage("已转存到资源列表", "success");
+    } catch (error) {
+      if (jobId) {
+        upsertUploadJob({ id: jobId, status: "failed", error: error?.message || "转存失败" });
+      }
+      setMessage(error?.message || "转存到资源列表失败", "error");
+    }
+  }
+
+  function getTransferDiag(clientId, kind) {
     if (!clientId || typeof clientId !== "string") {
       return {};
     }
-    return diagnostics.clients[clientId] || {};
+    const diag = diagnostics.clients[clientId] || {};
+    const role = kind === "download" ? "download" : kind === "upload" ? "upload" : "";
+    if (!role) {
+      return diag;
+    }
+    return diag.peers?.[role] || diag;
   }
 
   function renderTransferQueueRow(job, kind) {
     const safeJob = job || {};
-    const diag = getTransferDiag(safeJob.clientId);
+    const diag = getTransferDiag(safeJob.clientId, kind);
     const routeLabel = getRouteLabel(diag);
     const speed = kind === "download" ? safeJob.speedBytesPerSec : (safeJob.speedBytesPerSec || 0);
     const progress = Math.max(0, Math.min(100, safeJob.progress || 0));
-    const subStatus = kind === "download"
-      ? `下载中 · ${typeof safeJob.progress === "number" ? `${safeJob.progress}%` : "-"}`
-      : `上传中 · ${typeof safeJob.progress === "number" ? `${safeJob.progress}%` : "-"}`;
+    const subStatus = kind === "download" ? "下载中" : "上传中";
     const extraMode = kind === "download"
       ? (safeJob.mode === "direct-save" ? "直存" : safeJob.mode === "mobile" ? "移动端" : "浏览器")
       : "P2P 上传";
+    const targetPath = safeJob.path || safeJob.relativePath || "-";
     return (
-      <div key={`${kind}-${safeJob.id || safeJob.relativePath || safeJob.fileName || "unknown"}`} className="miniListRow queueRow transferQueueRow">
+      <div key={`${kind}-${safeJob.id || safeJob.relativePath || safeJob.fileName || "unknown"}`} className={`miniListRow queueRow transferQueueRow ${kind === "download" ? "downloadTransferRow" : "uploadTransferRow"}`}>
         <div className="miniListMain">
-          <Text className="miniListTitle" title={safeJob.fileName || safeJob.relativePath}>{safeJob.fileName || `${kind === "download" ? "下载" : "上传"}任务`}</Text>
-          <Caption1>{getClientDisplayName(safeJob.clientId)} · {subStatus}</Caption1>
-          <Caption1>
-            {typeof safeJob.transferredBytes === "number" && typeof safeJob.size === "number" && safeJob.size > 0
+          <div className="transferQueueHeader">
+            <div className="transferQueueTitleBlock">
+              <Text className="miniListTitle transferQueueTitle" title={safeJob.fileName || safeJob.relativePath}>{safeJob.fileName || `${kind === "download" ? "下载" : "上传"}任务`}</Text>
+              <Caption1 className="transferQueuePath" title={targetPath}>{targetPath}</Caption1>
+            </div>
+            <div className="transferQueueBadges">
+              <Badge appearance="outline" color={kind === "download" ? "informative" : "success"}>{subStatus}</Badge>
+              <Badge appearance="outline" color="informative">{typeof safeJob.progress === "number" ? `${safeJob.progress}%` : "-"}</Badge>
+            </div>
+          </div>
+          <div className="transferQueueFacts">
+            <Caption1>{getClientDisplayName(safeJob.clientId)}</Caption1>
+            <Caption1>{typeof safeJob.transferredBytes === "number" && typeof safeJob.size === "number" && safeJob.size > 0
               ? `${formatBytes(safeJob.transferredBytes)} / ${formatBytes(safeJob.size)}`
-              : formatBytes(safeJob.transferredBytes || 0)}
-            {` · ${formatSpeed(speed)}`}
-            {` · ${routeLabel}`}
-            {` · ${extraMode}`}
-          </Caption1>
-          <Caption1>
-            候选: {diag.localCandidateType || "-"} {"->"} {diag.remoteCandidateType || "-"}
-            {` · 下行 ${formatSpeed(diag.currentRecvBps || 0)}`}
-            {` · 上行 ${formatSpeed(diag.currentSendBps || 0)}`}
-          </Caption1>
+              : formatBytes(safeJob.transferredBytes || 0)}</Caption1>
+            <Caption1>{formatSpeed(speed)}</Caption1>
+            <Caption1>{extraMode}</Caption1>
+          </div>
+          <div className="transferQueueFacts detail">
+            <Caption1>{routeLabel}</Caption1>
+            <Caption1>候选 {diag.localCandidateType || "-"} {"->"} {diag.remoteCandidateType || "-"}</Caption1>
+            <Caption1>下行 {formatSpeed(diag.currentRecvBps || 0)}</Caption1>
+            <Caption1>上行 {formatSpeed(diag.currentSendBps || 0)}</Caption1>
+          </div>
           <div className="uploadProgressBar">
             <div className="uploadProgressInner" style={{ width: `${progress}%` }} />
           </div>
         </div>
         {kind === "download" ? (
-          <Button size="small" onClick={() => cancelDownloadJob(safeJob)}>取消</Button>
+          <button type="button" className="iconActionButton queueIconButton danger" title="取消下载" aria-label="取消下载" onClick={() => cancelDownloadJob(safeJob)}>
+            <DismissRegular />
+          </button>
         ) : (
-          <Button size="small" onClick={() => cancelUploadJob(safeJob)}>取消</Button>
+          <button type="button" className="iconActionButton queueIconButton danger" title="取消上传" aria-label="取消上传" onClick={() => cancelUploadJob(safeJob)}>
+            <DismissRegular />
+          </button>
         )}
       </div>
     );
   }
 
-  async function navigatePreview(offset) {
-    if (!previewOpen || previewing || !onlineFiles.length) {
-      return;
-    }
-
-    const currentIndex = onlineFiles.findIndex(
-      (item) => item.path === previewPath && item.clientId === previewClientId
+  function renderPeerDiagnosticCard(clientId, role, diag) {
+    const roleDiag = getPeerRoleDiagnostics(diag, role);
+    const routeLabel = roleDiag.routeLabel || roleDiag.route || "idle";
+    const connectionState = roleDiag.connectionState || roleDiag.iceState || "idle";
+    return (
+      <div key={`${clientId}-${role}`} className="diagRoleCard">
+        <div className="diagRoleHeader">
+          <div>
+            <Caption1>{getPeerRoleLabel(role)}</Caption1>
+            <Text>{routeLabel}</Text>
+            <Caption1>{connectionState}</Caption1>
+          </div>
+          <div className="row">
+            <Button size="small" onClick={() => p2p?.connectToPeer(clientId, role)}>重连</Button>
+            <Button size="small" onClick={() => p2p?.closePeer(clientId, true, role)}>断开</Button>
+          </div>
+        </div>
+        <div className="diagRoleMetrics">
+          <Caption1>候选: {roleDiag.localCandidateType || "-"} {"->"} {roleDiag.remoteCandidateType || "-"}</Caption1>
+          <Caption1>下行吞吐: {formatSpeed(roleDiag.currentRecvBps || 0)}</Caption1>
+          <Caption1>上行吞吐: {formatSpeed(roleDiag.currentSendBps || 0)}</Caption1>
+          <Caption1>累计接收: {formatBytes(roleDiag.totalBytesReceived || 0)}</Caption1>
+          <Caption1>累计发送: {formatBytes(roleDiag.totalBytesSent || 0)}</Caption1>
+          <Caption1>重试: {roleDiag.retries || 0}</Caption1>
+        </div>
+        {roleDiag.lastError ? <Caption1>最近错误: {roleDiag.lastError}</Caption1> : null}
+      </div>
     );
-
-    if (currentIndex < 0) {
-      return;
-    }
-
-    const nextIndex = (currentIndex + offset + onlineFiles.length) % onlineFiles.length;
-    const target = onlineFiles[nextIndex];
-    if (!target) {
-      return;
-    }
-    await preview(target);
   }
 
   async function refreshAll(currentToken = token) {
@@ -873,15 +2410,18 @@ export default function App() {
       const me = await apiRequest("/api/me", { token: currentToken });
       setUser(me.profile);
 
-      const [fileData, clientsData, uploadData] = await Promise.all([
+      const [fileData, clientsData, uploadData, shareData] = await Promise.all([
         apiRequest("/api/files", { token: currentToken }),
         apiRequest("/api/clients", { token: currentToken }),
-        apiRequest("/api/upload-jobs", { token: currentToken })
+        apiRequest("/api/upload-jobs", { token: currentToken }),
+        apiRequest("/api/shares", { token: currentToken })
       ]);
 
-      setFiles(fileData.files);
+      setFiles(sortFiles(fileData.files || [], sortBy || "createdAt"));
+      setDirectories(fileData.directories || []);
       setClients(clientsData.clients);
       setUploadJobs(uploadData.jobs || []);
+      setShares(shareData.shares || []);
       setLastRefreshAt(new Date().toISOString());
 
       const columnData = await apiRequest("/api/columns", { token: currentToken });
@@ -908,6 +2448,29 @@ export default function App() {
       setLoading(false);
     }
   }
+  async function waitForFileToAppear(targetClientId, targetPath, options = {}) {
+    const currentToken = options.currentToken || token;
+    const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 8000;
+    const intervalMs = Number.isFinite(options.intervalMs) ? options.intervalMs : 600;
+    if (!currentToken || !targetClientId || !targetPath) {
+      return false;
+    }
+
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() <= deadline) {
+      const fileData = await apiRequest("/api/files", { token: currentToken });
+      setFiles(sortFiles(fileData.files || [], sortBy || "createdAt"));
+      setDirectories(fileData.directories || []);
+      setLastRefreshAt(new Date().toISOString());
+      const found = (fileData.files || []).some((file) => file.clientId === targetClientId && file.path === targetPath);
+      if (found) {
+        return true;
+      }
+      await sleep(intervalMs);
+    }
+
+    return false;
+  }
 
   useEffect(() => {
     refreshAll();
@@ -919,12 +2482,15 @@ export default function App() {
     let timer;
     const poll = async () => {
       try {
-        const [clientsData, uploadData] = await Promise.all([
+        const [clientsData, uploadData, fileData] = await Promise.all([
           apiRequest("/api/clients", { token }),
-          apiRequest("/api/upload-jobs", { token })
+          apiRequest("/api/upload-jobs", { token }),
+          apiRequest("/api/files", { token })
         ]);
         setClients(clientsData.clients);
         setUploadJobs(uploadData.jobs || []);
+        setFiles(sortFiles(fileData.files || [], sortBy || "createdAt"));
+        setDirectories(fileData.directories || []);
         setLastPollAt(new Date().toISOString());
         consecutiveErrors = 0;
       } catch {
@@ -937,7 +2503,7 @@ export default function App() {
     };
     timer = setTimeout(poll, 5000);
     return () => clearTimeout(timer);
-  }, [token]);
+  }, [sortBy, token]);
 
   useEffect(() => {
     if (!p2p) {
@@ -953,41 +2519,17 @@ export default function App() {
   }, [p2p]);
 
   useEffect(() => {
-    if (!previewOpen) {
-      return;
-    }
-
-    const onKeyDown = (event) => {
-      const targetTag = String(event.target?.tagName || "").toLowerCase();
-      const editable = event.target?.isContentEditable || targetTag === "input" || targetTag === "textarea" || targetTag === "select";
-      if (editable) {
-        return;
-      }
-
-      if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        navigatePreview(-1);
-      } else if (event.key === "ArrowRight") {
-        event.preventDefault();
-        navigatePreview(1);
-      }
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [previewOpen, previewing, onlineFiles, previewPath, previewClientId]);
-
-  useEffect(() => {
     const el = fileListRef.current;
     if (!el) {
+      setListHeight(520);
+      setListScrollTop(0);
       return;
     }
 
     const updateHeight = () => {
       const nextHeight = el.clientHeight || 520;
       setListHeight(nextHeight);
+      setListScrollTop(el.scrollTop || 0);
     };
 
     updateHeight();
@@ -1007,17 +2549,6 @@ export default function App() {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-
-  // Pre-establish P2P connections to online clients
-  useEffect(() => {
-    if (!p2p) return;
-    const onlineClients = clients.filter((c) => c.status === "online");
-    for (const client of onlineClients) {
-      if (!p2p.isPeerConnected(client.id)) {
-        p2p.connectToPeer(client.id);
-      }
-    }
-  }, [p2p, clients]);
 
   useEffect(() => {
     if (!p2p) return;
@@ -1049,7 +2580,7 @@ export default function App() {
     if (fileListRef.current) {
       fileListRef.current.scrollTop = 0;
     }
-  }, [viewMode, onlineFiles.length]);
+  }, [viewMode, currentExplorerPath, currentExplorerEntries.length]);
 
   useEffect(() => {
     setSelectedFileIds((prev) => prev.filter((id) => onlineFiles.some((file) => file.id === id)));
@@ -1058,6 +2589,7 @@ export default function App() {
   useEffect(() => {
     if (!uploadOpen) {
       setUploadStep(1);
+      setUploadAdvancedOpen(false);
     }
   }, [uploadOpen]);
 
@@ -1095,6 +2627,84 @@ export default function App() {
       token
     });
     await refreshAll();
+  }
+
+  function openShareDialog(file) {
+    setShareTarget(file || null);
+    setShareExpiryDays("7");
+    setShareHistoryOpen(false);
+    setShareDialogOpen(true);
+  }
+
+  function closeShareDialog() {
+    setShareDialogOpen(false);
+    setShareTarget(null);
+    setShareExpiryDays("7");
+    setShareHistoryOpen(false);
+  }
+
+  async function copyShareUrl(shareUrl) {
+    const copied = await copyText(shareUrl);
+    if (copied) {
+      setMessage("分享链接已复制到剪贴板", "success");
+    } else {
+      setMessage(`分享链接: ${shareUrl}`);
+    }
+  }
+
+  async function revokeShare(shareId) {
+    if (!shareId) {
+      return;
+    }
+    try {
+      await apiRequest(`/api/shares/${encodeURIComponent(shareId)}/revoke`, {
+        method: "POST",
+        token
+      });
+      setMessage("分享链接已撤销", "success");
+      await refreshAll();
+    } catch (error) {
+      setMessage(`撤销分享失败: ${error.message}`);
+    }
+  }
+
+  async function deleteShare(shareId) {
+    if (!shareId) {
+      return;
+    }
+    try {
+      await apiRequest(`/api/shares/${encodeURIComponent(shareId)}`, {
+        method: "DELETE",
+        token
+      });
+      setShares((prev) => prev.filter((item) => item.id !== shareId));
+      setMessage("分享记录已删除", "success");
+    } catch (error) {
+      setMessage(`删除分享失败: ${error.message}`);
+    }
+  }
+
+  async function shareFile(file = shareTarget) {
+    if (!file || shareLoading) return;
+    setShareLoading(true);
+    try {
+      const expiresInDays = Number(shareExpiryDays || 0);
+      const { share, shareUrl } = await apiRequest(`/api/files/${encodeURIComponent(file.id)}/share`, {
+        method: "POST",
+        token,
+        body: {
+          expiresInDays: expiresInDays > 0 ? expiresInDays : null
+        }
+      });
+      if (share?.id) {
+        setShares((prev) => [share, ...prev.filter((item) => item.id !== share.id)]);
+      }
+      await copyShareUrl(shareUrl);
+    } catch (error) {
+      setMessage(`生成分享链接失败: ${error.message}`);
+    } finally {
+      setShareLoading(false);
+    }
   }
 
   async function createColumn() {
@@ -1172,16 +2782,16 @@ export default function App() {
     }
   }
 
-  async function ensureSignalingReady() {
+  async function ensureSignalingReady(role) {
     if (!p2p) {
       return false;
     }
-    if (p2p.isSocketOpen()) {
+    if (p2p.isSocketOpen(role)) {
       return true;
     }
-    setMessage("信令连接已断开，正在重连...");
+    setMessage(role ? `${getPeerRoleLabel(role)} 信令未就绪，正在建立连接...` : "信令连接已断开，正在重连...");
     try {
-      await p2p.ensureSocketOpen();
+      await p2p.ensureSocketOpen(role);
       return true;
     } catch {
       setMessage("信令连接不可用，请确认 server 正在运行并稍后重试");
@@ -1191,7 +2801,7 @@ export default function App() {
 
   async function download(file) {
     if (!p2p || !ensureClientOnline(file.clientId)) return;
-    if (!(await ensureSignalingReady())) return;
+    if (!(await ensureSignalingReady("download"))) return;
     const jobId = getDownloadJobId(file);
     const onStart = ({ requestId, channelName }) => {
       upsertDownloadJob(file, {
@@ -1281,7 +2891,7 @@ export default function App() {
 
   async function preview(file, options = {}) {
     if (!p2p || !ensureClientOnline(file.clientId)) return;
-    if (!(await ensureSignalingReady())) return;
+    if (!(await ensureSignalingReady("preview"))) return;
     const sessionId = ++previewSessionIdRef.current;
 
     if (previewClientId && previewClientId !== file.clientId) {
@@ -1289,7 +2899,7 @@ export default function App() {
     }
     p2p.cancelClientChannel(file.clientId, "preview");
 
-    if (p2p.isClientBusy(file.clientId)) {
+    if (p2p.isClientBusy(file.clientId, "preview")) {
       setMessage("目标终端正在处理其他任务，预览已排队，请稍候...");
     }
 
@@ -1417,12 +3027,14 @@ export default function App() {
             setPreviewStatusText("正在加载媒体，完成后可拖动进度条...");
           }
           const forceBlobPreview = Number(file.size || 0) <= PREVIEW_FORCE_BLOB_MAX_SIZE;
+          const forceBlobByText = isTextPreviewMime(file.mimeType);
           if (import.meta.env.VITE_P2P_DEBUG === "1") {
             console.log("[web-p2p] preview-mode", {
               file: file.name,
               size: file.size,
               needTranscode,
-              forceBlobPreview
+              forceBlobPreview,
+              forceBlobByText
             });
           }
           const streamOnce = () => withTimeout(
@@ -1443,7 +3055,7 @@ export default function App() {
             }, {
               ...(needTranscode ? { transcode: "mp4" } : {}),
               ...(isVideoMime(file.mimeType) ? { previewProfile: "fast" } : {}),
-              forceBlob: forceBlobPreview,
+              forceBlob: forceBlobPreview || forceBlobByText,
               maxFallbackBytes: PREVIEW_FORCE_BLOB_MAX_SIZE,
               timeoutMs: needTranscode ? Math.max(240000, sizeBasedTimeoutMs) : sizeBasedTimeoutMs,
               onProgress: (status) => {
@@ -1602,9 +3214,37 @@ export default function App() {
 
   async function confirmDelete() {
     if (!deleteTarget) return;
-    if (!(await ensureSignalingReady())) {
+    if (!(await ensureSignalingReady("control"))) {
       setDeleteTarget(null);
       setDeleteStep(1);
+      return;
+    }
+
+    if (deleteTarget.kind === "folder") {
+      const folder = deleteTarget.folders?.[0];
+      try {
+        if (!folder?.singleClientId || !folder?.path) {
+          throw new Error("folder delete target is invalid");
+        }
+        if (!ensureClientOnline(folder.singleClientId)) {
+          setDeleteTarget(null);
+          setDeleteStep(1);
+          return;
+        }
+        setMessage(`正在删除文件夹 ${folder.name || folder.path}...`);
+        await p2p.deleteFolder(folder.singleClientId, folder.path);
+        if (currentExplorerPath === folder.path || currentExplorerPath.startsWith(`${folder.path}/`)) {
+          openExplorerFolder(getPathDirectory(folder.path));
+        }
+        setDeleteTarget(null);
+        setDeleteStep(1);
+        await refreshAll();
+        setMessage("文件夹已删除", "success");
+      } catch (error) {
+        setMessage(`删除文件夹失败: ${error.message}`);
+        setDeleteTarget(null);
+        setDeleteStep(1);
+      }
       return;
     }
 
@@ -1618,7 +3258,7 @@ export default function App() {
           failedCount += 1;
           continue;
         }
-        if (p2p?.isClientBusy(target.clientId)) {
+        if (p2p?.isClientBusy(target.clientId, "control")) {
           setMessage("部分目标终端当前忙，删除请求已排队，请稍候...");
         }
         await p2p.deleteFile(target.clientId, target.path);
@@ -1655,7 +3295,7 @@ export default function App() {
       return;
     }
     if (!ensureClientOnline(uploadClientId)) return;
-    if (!(await ensureSignalingReady())) return;
+    if (!(await ensureSignalingReady("upload"))) return;
 
     const folderPath = normalizeFolderPath(uploadFolderPath);
     const columnName = columnMap.get(uploadColumnId) || "";
@@ -1666,16 +3306,18 @@ export default function App() {
     let failedCount = 0;
     let cancelledCount = 0;
 
-    for (const file of uploadFiles) {
+    for (const uploadItem of uploadFiles) {
       let jobId = "";
       try {
-        const targetPath = basePath ? `${basePath}/${file.name}` : file.name;
+        const file = uploadItem.file;
+        const uploadName = sanitizeUploadFileName(uploadItem.desiredName, file.name);
+        const targetPath = buildUploadTargetPath(basePath, uploadName);
         const started = await apiRequest("/api/upload-jobs/start", {
           method: "POST",
           token,
           body: {
             clientId: uploadClientId,
-            fileName: file.name,
+            fileName: uploadName,
             relativePath: targetPath,
             size: file.size,
             mimeType: file.type || "application/octet-stream",
@@ -1688,8 +3330,9 @@ export default function App() {
           upsertUploadJob(started.job);
         }
 
-        setMessage(`正在上传 ${file.name}...`);
+        setMessage(`正在上传 ${uploadName}...`);
         await p2p.uploadFile(uploadClientId, targetPath, file, {
+          uploadName,
           onProgress: ({ transferredBytes, progress }) => {
             if (!jobId) {
               return;
@@ -1793,17 +3436,12 @@ export default function App() {
       return;
     }
     if (job.id) {
+      removeUploadJobLocal(job.id);
       apiRequest(`/api/upload-jobs/${job.id}/fail`, {
         method: "POST",
         token,
         body: { message: "用户取消上传" }
       }).catch(() => {});
-      upsertUploadJob({
-        id: job.id,
-        status: "failed",
-        message: "用户取消上传",
-        updatedAt: new Date().toISOString()
-      });
     }
     setMessage("上传已取消");
   }
@@ -1814,7 +3452,7 @@ export default function App() {
 
   function toggleSelectAllVisible() {
     setSelectedFileIds((prev) => {
-      const visibleIds = filteredOnlineFiles.map((file) => file.id);
+      const visibleIds = currentFolderFiles.map((file) => file.id);
       if (visibleIds.length === 0) {
         return prev;
       }
@@ -1880,11 +3518,74 @@ export default function App() {
     setToken("");
     setUser(null);
     setFiles([]);
+    setShares([]);
     setUsers([]);
     setClients([]);
     setUploadJobs([]);
+    closeShareDialog();
     clearPreview();
     setPreviewOpen(false);
+  }
+
+  async function saveProfile(draft) {
+    try {
+      setProfileSaving(true);
+      const profilePatch = {
+        displayName: draft.displayName,
+        email: draft.email,
+        avatarUrl: user.avatarUrl || "",
+        avatarClientId: user.avatarClientId || "",
+        avatarPath: user.avatarPath || "",
+        avatarFileId: user.avatarFileId || "",
+        bio: draft.bio
+      };
+
+        const finished = await apiRequest(`/api/upload-jobs/${jobId}/finish`, {
+          method: "POST",
+          token,
+          body: { message: "转存完成，等待资源列表刷新" }
+        });
+        if (finished?.job) {
+          upsertUploadJob(finished.job);
+        }
+      if (draft.avatarFile) {
+        if (!p2p) {
+          throw new Error("当前 P2P 通道尚未就绪，无法上传头像");
+        }
+        const targetClientId = uploadClientId || clients.find((item) => item.status === "online")?.id || "";
+        if (!targetClientId) {
+          throw new Error("没有可用的在线存储终端，无法上传头像");
+        }
+        const ext = (() => {
+          const matched = /\.([a-zA-Z0-9]+)$/.exec(draft.avatarFile.name || "");
+          return matched ? `.${matched[1].toLowerCase()}` : "";
+        })();
+        const avatarRelativePath = `${PROFILE_AVATAR_DIR_NAME}/${sanitizePathSegment(user.id)}/${Date.now()}-${sanitizePathSegment(draft.avatarFile.name || "avatar")}${ext}`;
+        await p2p.uploadFile(targetClientId, avatarRelativePath, draft.avatarFile, {
+          uploadName: draft.avatarFile.name || "avatar"
+        });
+        profilePatch.avatarClientId = targetClientId;
+        profilePatch.avatarPath = avatarRelativePath;
+        profilePatch.avatarFileId = `${targetClientId}:${avatarRelativePath}`;
+        profilePatch.avatarUrl = "";
+      }
+
+      const data = await apiRequest("/api/me", {
+        method: "PATCH",
+        token,
+        body: profilePatch
+      });
+      localStorage.setItem("nas_token", data.token);
+      setToken(data.token);
+      setUser(data.user);
+      setProfileOpen(false);
+      setMessage("个人资料已更新");
+      await refreshAll(data.token);
+    } catch (error) {
+      setMessage(`更新个人资料失败: ${error.message}`);
+    } finally {
+      setProfileSaving(false);
+    }
   }
 
   function renderFileActionTray(file, floating = false) {
@@ -1899,6 +3600,25 @@ export default function App() {
           onClick={() => toggleFavorite(file.id)}
         >
           {file.favorite ? <StarFilled /> : <StarRegular />}
+        </button>
+        <button
+          type="button"
+          className="actionChip"
+          title="编辑"
+          aria-label="编辑"
+          onClick={() => openEditFile(file)}
+        >
+          <EditRegular />
+        </button>
+        <button
+          type="button"
+          className="actionChip"
+          title="分享"
+          aria-label="分享"
+          onClick={() => openShareDialog(file)}
+          disabled={shareLoading}
+        >
+          <ShareRegular />
         </button>
         <button
           type="button"
@@ -1925,6 +3645,44 @@ export default function App() {
           aria-label={deletingDisabled ? "上传中不可删除" : "删除"}
           disabled={deletingDisabled}
           onClick={() => removeFile(file)}
+        >
+          <DeleteRegular />
+        </button>
+      </div>
+    );
+  }
+
+  function renderFolderActionTray(folder) {
+    const disabled = !folder?.singleClientId;
+    const sharedTitle = disabled ? "该目录在多个终端上同时存在，暂不支持直接修改" : "编辑目录";
+    return (
+      <div className="fileActionTray" onClick={(event) => event.stopPropagation()}>
+        <button
+          type="button"
+          className="actionChip actionChipPrimary"
+          title={`进入目录 ${folder?.name || ""}`}
+          aria-label={`进入目录 ${folder?.name || ""}`}
+          onClick={() => openExplorerFolder(folder.path)}
+        >
+          <ArrowRightRegular />
+        </button>
+        <button
+          type="button"
+          className="actionChip"
+          title={sharedTitle}
+          aria-label={sharedTitle}
+          disabled={disabled}
+          onClick={() => openEditFolder(folder)}
+        >
+          <EditRegular />
+        </button>
+        <button
+          type="button"
+          className="actionChip danger"
+          title={disabled ? "该目录在多个终端上同时存在，暂不支持直接删除" : "删除目录"}
+          aria-label={disabled ? "该目录在多个终端上同时存在，暂不支持直接删除" : "删除目录"}
+          disabled={disabled}
+          onClick={() => requestFolderDelete(folder)}
         >
           <DeleteRegular />
         </button>
@@ -1959,7 +3717,20 @@ export default function App() {
     return (
       <div className="toastViewport" aria-live="polite" aria-atomic="true">
         {toasts.map((toast) => (
-          <div key={toast.id} className={`toastItem ${toast.intent}`}>
+          <div
+            key={toast.id}
+            className={`toastItem ${toast.intent}`}
+            role="button"
+            tabIndex={0}
+            title="点击关闭提示"
+            onClick={() => dismissToast(toast.id)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                dismissToast(toast.id);
+              }
+            }}
+          >
             <div className="toastBody">
               <Caption1>{toast.intent === "error" ? "错误" : toast.intent === "success" ? "已完成" : toast.intent === "warning" ? "注意" : "状态"}</Caption1>
               <Text>{toast.text}</Text>
@@ -2140,427 +3911,492 @@ export default function App() {
       {renderToastViewport()}
       <div className="shell appShell">
         <header className="appTopbar surfaceCard">
-          <div className="brandBlock">
-            <div className="brandIdentity">
-              <div className="brandLogo" aria-hidden="true">
-                <span className="brandLogoCore" />
-                <span className="brandLogoOrbit orbitA" />
-                <span className="brandLogoOrbit orbitB" />
-              </div>
-              <div>
+          <div className="topbarStart">
+            <button
+              type="button"
+              className={`workspaceFlyoutTrigger topbarFlyoutTrigger${navExpanded ? " active" : ""}`}
+              aria-label={navExpanded ? "收起工作区导航" : "展开工作区导航"}
+              title={navExpanded ? "收起工作区导航" : "展开工作区导航"}
+              onClick={() => setNavExpanded((prev) => !prev)}
+            >
+              <AppsListRegular />
+            </button>
+            <div className="brandBlock">
+              <div className="brandIdentity compact">
                 <Title3>NAS Console</Title3>
-                <Caption1>{user.displayName} · {user.role === "admin" ? "管理员" : "成员"}</Caption1>
+                <div className="brandMetaRow compact">
+                  <Badge appearance="outline" color={diagnostics.wsState === "open" ? "success" : "informative"}>WS {diagnostics.wsState || "idle"}</Badge>
+                  <Badge appearance="outline" color={onlineCount ? "success" : "informative"}>在线终端 {onlineCount}</Badge>
+                  <Caption1>最近刷新 {formatRelativeTime(lastRefreshAt)}</Caption1>
+                </div>
               </div>
-            </div>
-            <div className="brandMetaRow">
-              <Badge appearance="outline" color={diagnostics.wsState === "open" ? "success" : "informative"}>WS {diagnostics.wsState || "idle"}</Badge>
-              <Badge appearance="outline" color={onlineCount ? "success" : "informative"}>在线终端 {onlineCount}</Badge>
-              <Caption1>最近刷新 {formatRelativeTime(lastRefreshAt)}</Caption1>
             </div>
           </div>
           <div className="topbarActions">
-            <Button appearance="primary" onClick={() => setUploadOpen(true)}>上传文件</Button>
-            <Button onClick={() => refreshAll()}>{loading ? <Spinner size="tiny" /> : "同步索引"}</Button>
-            <Button onClick={logout}>退出</Button>
+            <button type="button" className="profileTrigger" onClick={() => setProfileOpen(true)}>
+              <AvatarFace
+                className="profileTriggerAvatar"
+                displayName={user.displayName}
+                avatarUrl={user.avatarUrl}
+                avatarClientId={user.avatarClientId}
+                avatarPath={user.avatarPath}
+                avatarFileId={user.avatarFileId}
+                p2p={p2p}
+              />
+              <span className="profileTriggerText">
+                <Text>{user.displayName} · {user.role === "admin" ? "管理员" : "成员"}</Text>
+                <Caption1>{user.email}</Caption1>
+              </span>
+            </button>
+            <button type="button" className="iconActionButton topbarIconButton" title="上传文件" aria-label="上传文件" onClick={() => setUploadOpen(true)}>
+              <ArrowDownloadRegular className="topbarUploadIcon" />
+            </button>
+            <button type="button" className="iconActionButton topbarIconButton" title="同步索引" aria-label="同步索引" onClick={() => refreshAll()}>
+              {loading ? <Spinner size="tiny" /> : <ArrowSwapRegular />}
+            </button>
+            <button type="button" className="iconActionButton topbarIconButton" title="退出" aria-label="退出" onClick={logout}>
+              <ArrowRightRegular />
+            </button>
           </div>
         </header>
 
-        <div className="workspaceLayout">
-          <aside className="controlRail">
-            <Card className="surfaceCard panelCard controlCard commandCard">
-              <div className="sectionHeaderCompact">
-                <div>
-                  <Subtitle1>系统概览</Subtitle1>
-                </div>
-                <Badge appearance="filled" color={diagnostics.wsState === "open" ? "success" : "informative"}>{diagnostics.wsState || "idle"}</Badge>
+        <div className={`workspaceLayout${navExpanded ? " navExpanded" : ""}`}>
+          <aside className={`controlRail navRail${navExpanded ? " expanded" : ""}`}>
+            <Card className="surfaceCard panelCard workspaceNavCard">
+              <div className="workspaceNavHeader">
+                <Subtitle1>工作区导航</Subtitle1>
+                <Caption1>左侧切换模块，右侧展示对应页面内容。</Caption1>
               </div>
-              <div className="controlActionGrid">
-                <Button appearance="primary" onClick={() => setUploadOpen(true)}>发起上传</Button>
-                <Button onClick={() => setDiagnosticsOpen(true)}>打开诊断</Button>
-                <Button onClick={() => refreshAll()}>{loading ? <Spinner size="tiny" /> : "同步索引"}</Button>
-                <Button onClick={() => setViewMode((prev) => prev === "grid" ? "details" : "grid")}>{viewMode === "grid" ? "切到详情" : "切到卡片"}</Button>
-              </div>
-              <div className="railMetricList">
-                <div className="railMetric">
-                  <Caption1>信令状态</Caption1>
-                  <Text>{diagnostics.wsState || "idle"}</Text>
-                </div>
-                <div className="railMetric">
-                  <Caption1>轮询更新</Caption1>
-                  <Text>{formatRelativeTime(lastPollAt)}</Text>
-                </div>
-                <div className="railMetric">
-                  <Caption1>当前筛选</Caption1>
-                  <Text>{activeFilterCount ? `${activeFilterCount} 项` : "无"}</Text>
-                </div>
-                <div className="railMetric">
-                  <Caption1>上传队列</Caption1>
-                  <Text>{visibleUploadJobs.length} 项</Text>
-                </div>
-                <div className="railMetric">
-                  <Caption1>下载队列</Caption1>
-                  <Text>{downloadingCount} 项</Text>
-                </div>
-              </div>
-            </Card>
-
-            <Card className="surfaceCard panelCard controlCard">
-              <div className="sectionHeaderCompact">
-                <Subtitle1>终端状态</Subtitle1>
-                <Badge appearance="outline" color={onlineCount ? "success" : "informative"}>在线 {onlineCount}</Badge>
-              </div>
-              <div className="miniList">
-                {spotlightClients.map((client) => (
-                  <div key={client.id} className="miniListRow terminalRow">
-                    <div className="miniListMain">
-                      <Text className="miniListTitle">{getClientDisplayName(client.id)}</Text>
-                      <Caption1>{client.lastHeartbeatAt ? `心跳 ${formatRelativeTime(client.lastHeartbeatAt)}` : "无心跳"}</Caption1>
-                    </div>
-                    <div className="miniListBadges">
-                      <Badge appearance="outline" color={getClientStatusColor(client.status)}>{client.status || "unknown"}</Badge>
-                      <Badge appearance="outline" color={(diagnostics.clients[client.id]?.route || "unknown") === "relay" ? "warning" : "informative"}>{diagnostics.clients[client.id]?.route || "unknown"}</Badge>
-                    </div>
-                  </div>
+              <div className="workspaceNavList" role="tablist" aria-orientation="vertical">
+                {workspaceTabs.map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeWorkspaceTab === tab.id}
+                    className={`workspaceNavButton${activeWorkspaceTab === tab.id ? " active" : ""}`}
+                    onClick={() => handleWorkspaceTabSelect(tab.id)}
+                    title={tab.label}
+                  >
+                    <span className="workspaceNavButtonMain">
+                      <span className="railSectionIcon workspaceNavIcon" aria-hidden="true">{tab.icon}</span>
+                      <span className="workspaceNavText">
+                        <span className="workspaceNavLabel">{tab.label}</span>
+                      </span>
+                    </span>
+                    <Badge appearance="outline" color={activeWorkspaceTab === tab.id ? "informative" : "subtle"}>{tab.meta}</Badge>
+                  </button>
                 ))}
-                {!spotlightClients.length && <Caption1>暂无终端数据</Caption1>}
-              </div>
-            </Card>
-
-            <Card className="surfaceCard panelCard controlCard">
-              <div className="sectionHeaderCompact">
-                <Subtitle1>传输队列</Subtitle1>
-                <Badge appearance="outline" color={visibleUploadJobs.length || downloadingCount ? "warning" : "success"}>{visibleUploadJobs.length + downloadingCount}</Badge>
-              </div>
-              <div className="miniList">
-                          {downloadQueuePreview.map((job) => renderTransferQueueRow(job, "download"))}
-                          {uploadQueuePreview.map((job) => renderTransferQueueRow(job, "upload"))}
-                {!downloadQueuePreview.length && !uploadQueuePreview.length && <Caption1>当前没有正在传输的任务</Caption1>}
               </div>
             </Card>
           </aside>
 
           <main className="mainCanvas">
-            <section className="filePanel explorerPanel">
-              <Card className="surfaceCard panelCard explorerShell">
-                <div className="explorerTop">
-                  <div className="explorerTitleBlock">
-                    <Subtitle1>资源浏览器</Subtitle1>
-                  </div>
-                  <div className="explorerToolbar">
-                    <div className="summaryStrip">
-                      <div className="summaryPill">
-                        <Caption1>文件</Caption1>
-                        <Text>{filteredOnlineFiles.length} / {onlineFiles.length}</Text>
-                      </div>
-                      <div className="summaryPill">
-                        <Caption1>媒体</Caption1>
-                        <Text>{mediaFileCount}</Text>
-                      </div>
-                      <div className="summaryPill">
-                        <Caption1>上传中</Caption1>
-                        <Text>{visibleUploadJobs.length}</Text>
-                      </div>
-                    </div>
-                    <div className="segmentedControl iconSwitch">
-                      <Button
-                        size="small"
-                        appearance={viewMode === "grid" ? "primary" : "secondary"}
-                        onClick={() => setViewMode("grid")}
-                        aria-label="卡片模式"
-                      >
-                        ▦
-                      </Button>
-                      <Button
-                        size="small"
-                        appearance={viewMode === "details" ? "primary" : "secondary"}
-                        onClick={() => setViewMode("details")}
-                        aria-label="详情模式"
-                      >
-                        ☰
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="filterPanelShell">
-                  <div className="filterPanelHeader">
-                    <div>
-                      <Text>筛选与排序</Text>
-                      <Caption1>{activeFilterCount ? `已启用 ${activeFilterCount} 项` : "按需展开"}</Caption1>
-                    </div>
-                    <div className="row">
-                      {activeFilterCount > 0 && <Badge appearance="outline" color="informative">已筛选</Badge>}
-                      <Button size="small" onClick={() => setFiltersExpanded((prev) => !prev)} icon={filtersExpanded ? <ChevronUpRegular /> : <ChevronDownRegular />}>
-                        {filtersExpanded ? "收起筛选" : "展开筛选"}
-                      </Button>
-                    </div>
-                  </div>
-                  {filtersExpanded && (
-                    <>
-                      <div className="filterWorkbench">
-                        <Field className="filterField searchField" label="搜索文件">
-                          <Input
-                            value={keyword}
-                            onChange={(_, data) => setKeyword(data.value)}
-                            placeholder="搜索文件名或路径"
-                          />
-                        </Field>
-                        <Field className="filterField columnField" label="栏目">
-                          <Dropdown selectedOptions={[columnFilter]} value={columnFilter} onOptionSelect={(_, data) => setColumnFilter(data.optionValue || "all")}>
-                            <Option value="all">全部栏目</Option>
-                            <Option value="none">未分类</Option>
-                            {columns.map((col) => (
-                              <Option key={col.id} value={col.id}>{col.name}</Option>
-                            ))}
-                          </Dropdown>
-                        </Field>
-                        <Field className="filterField typeField" label="分类">
-                          <Dropdown selectedOptions={[typeFilter]} value={typeFilter} onOptionSelect={(_, data) => setTypeFilter(data.optionValue || "all")}>
-                            <Option value="all">全部类型</Option>
-                            <Option value="image">图片</Option>
-                            <Option value="video">视频</Option>
-                            <Option value="audio">音频</Option>
-                            <Option value="doc">文档</Option>
-                            <Option value="other">其他</Option>
-                          </Dropdown>
-                        </Field>
-                        <div className="filterActionBlock filterMetaBlock">
-                          <Button size="small" onClick={() => { setKeyword(""); setColumnFilter("all"); setTypeFilter("all"); }}>清空筛选</Button>
-                          <Badge appearance="outline" color={columns.length ? "informative" : "subtle"}>栏目 {columns.length}</Badge>
-                          <Badge appearance="outline" color={relayCount ? "warning" : "success"}>连接 {relayCount ? "含中继" : "直连优先"}</Badge>
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
-
-                {selectedVisibleFiles.length > 0 && (
-                  <div className="bulkToolbar">
-                    <div className="bulkToolbarInfo">
-                      <Text>已选中 {selectedVisibleFiles.length} 项</Text>
-                      <Caption1>{allVisibleSelected ? "当前结果已全选" : "批量收藏、下载、删除"}</Caption1>
-                    </div>
-                    <div className="bulkToolbarActions">
-                      <Button size="small" onClick={toggleSelectAllVisible}>{allVisibleSelected ? "取消全选" : "全选当前结果"}</Button>
-                      <Button size="small" onClick={() => setSelectedFileIds([])}>清空选择</Button>
-                      <Button size="small" onClick={batchToggleFavorite}>{selectedVisibleAllFavorite ? "批量取消收藏" : "批量切换收藏"}</Button>
-                      <Button size="small" onClick={batchDownload}>批量下载</Button>
-                      <Button size="small" appearance="primary" onClick={requestBatchDelete}>批量删除</Button>
-                    </div>
-                  </div>
-                )}
-
-              {viewMode === "details" && (
-                <>
-                  {visibleUploadJobs.length > 0 && (
-                    <div className="uploadList">
-                      {visibleUploadJobs.map((job) => (
-                        <div key={job.id} className={`fileRow uploadRow status-${job.status || "uploading"}`}>
-                          <div className="thumbFallback">上传</div>
-                          <div className="fileMeta">
-                            <div className="fileName">{job.fileName || "上传任务"}</div>
-                            <div className="fileSub">{job.relativePath} · {getClientDisplayName(job.clientId)} · 发起人: {job.createdByDisplayName || "-"}</div>
-                            <div className="uploadProgressBar">
-                              <div className="uploadProgressInner" style={{ width: `${Math.max(0, Math.min(100, job.progress || 0))}%` }} />
-                            </div>
-                            <div className="fileSub">
-                              {job.message || "处理中"}
-                              {typeof job.progress === "number" ? ` · ${job.progress}%` : ""}
-                              {typeof job.transferredBytes === "number" && typeof job.size === "number" && job.size > 0
-                                ? ` · ${formatBytes(job.transferredBytes)} / ${formatBytes(job.size)}`
-                                : ""}
-                            </div>
-                          </div>
-                          <div className="actions">
-                            <Button size="small" appearance="primary" onClick={() => cancelUploadJob(job)}>取消上传</Button>
-                            <Badge appearance="outline" color="informative">上传中</Badge>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div
-                    className="fileList"
-                    ref={fileListRef}
-                    onScroll={(event) => setListScrollTop(event.currentTarget.scrollTop)}
-                  >
-                    <div style={{ paddingTop: detailPaddingTop, paddingBottom: detailPaddingBottom }}>
-                      {detailSlice.map((file) => (
-                        <div key={file.id} className="fileRow">
-                          <div className="thumbShell">
-                            <button className="thumbButton" onClick={() => preview(file)}>
-                              {thumbMap[getThumbKey(file)]?.url ? <img src={thumbMap[getThumbKey(file)].url} className="thumbImg" /> : <div className="thumbFallback">{isUploadingFile(file) ? "上传中" : isImageMime(file.mimeType) ? "图片" : isVideoMime(file.mimeType) ? "视频" : "文件"}</div>}
-                            </button>
-                            {renderSelectionToggle(file)}
-                          </div>
-                          <div className="fileMeta">
-                            <div className="fileName">{file.name}</div>
-                            <div className="fileSub">
-                              {file.path} · {formatBytes(file.size)} · {getClientDisplayName(file.clientId)}
-                            </div>
-                            <div className="fileSub">
-                              栏目: {columnMap.get(file.columnId) || "未分类"} · 上传: {formatRelativeTime(file.updatedAt)}
-                            </div>
-                          </div>
-                          <div className="actions">
-                            {renderFileActionTray(file)}
-                            <Caption1 className="actionHint">点击缩略图可直接预览</Caption1>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {viewMode === "grid" && (
-                <div className="fileGrid">
-                  {visibleUploadJobs.map((job) => (
-                    <div key={job.id} className="gridItem uploadGridItem">
-                      <div className="thumbFallback">上传</div>
-                      <div className="gridName" title={job.fileName || "上传任务"}>{job.fileName || "上传任务"}</div>
-                      <Caption1>{job.createdByDisplayName || "-"}</Caption1>
-                      <Caption1>{getClientDisplayName(job.clientId)}</Caption1>
-                      <div className="uploadProgressBar">
-                        <div className="uploadProgressInner" style={{ width: `${Math.max(0, Math.min(100, job.progress || 0))}%` }} />
-                      </div>
-                      <Caption1>上传中 {typeof job.progress === "number" ? `${job.progress}%` : ""}</Caption1>
-                      <Button size="small" appearance="primary" onClick={() => cancelUploadJob(job)}>取消</Button>
-                    </div>
-                  ))}
-                  {filteredOnlineFiles.map((file) => (
-                    <div key={file.id} className="gridItem">
-                      <div className="fileVisualShell">
-                        <button className="gridThumb" onClick={() => preview(file)}>
-                          {thumbMap[getThumbKey(file)]?.url ? <img src={thumbMap[getThumbKey(file)].url} className="thumbImg" /> : <div className="thumbFallback">{isUploadingFile(file) ? "上传中" : isImageMime(file.mimeType) ? "图片" : isVideoMime(file.mimeType) ? "视频" : "文件"}</div>}
-                        </button>
-                        {renderSelectionToggle(file)}
-                      </div>
-                      <div className="gridName" title={file.name}>{file.name}</div>
-                      <Caption1>{getClientDisplayName(file.clientId)}</Caption1>
-                      <Caption1>{formatBytes(file.size)}</Caption1>
-                      <Caption1>栏目: {columnMap.get(file.columnId) || "未分类"}</Caption1>
-                      <Caption1>上传: {formatRelativeTime(file.updatedAt)}</Caption1>
-                      <div className="gridCardFooter">
-                        {renderFileActionTray(file)}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {!filteredOnlineFiles.length && <Text>暂无可用文件，等待在线存储终端上报。</Text>}
-              </Card>
-            </section>
+            {renderActiveWorkspacePage()}
           </main>
         </div>
 
-        {uploadOpen && (
-          <div className="overlay drawerOverlay" onClick={() => setUploadOpen(false)}>
-            <div className="modalWindow uploadModal drawerSheet" onClick={(event) => event.stopPropagation()}>
+        {shareDialogOpen && shareTarget && (
+          <div className="overlay drawerOverlay dialogOverlayRaised">
+            <div className="modalWindow shareModal drawerSheet dialogModal" onClick={(event) => event.stopPropagation()}>
               <div className="drawerHandle" />
               <div className="modalHeader">
-                <Subtitle1>上传文件</Subtitle1>
-                <Button size="small" onClick={() => setUploadOpen(false)}>关闭</Button>
+                <div>
+                  <Subtitle1>分享链接</Subtitle1>
+                  <Caption1>{shareTarget.name} · {formatBytes(shareTarget.size)} · {getClientDisplayName(shareTarget.clientId)}</Caption1>
+                </div>
+                <Button size="small" className="dialogActionButton dialogIconOnlyButton" icon={<DismissRegular />} aria-label="关闭" title="关闭" onClick={closeShareDialog} />
               </div>
-              <Caption1>目标终端：{getClientDisplayName(uploadClientId) || "未选择"}</Caption1>
+              <div className="drawerSection shareComposerCard shareComposerSolo">
+                <Text className="dialogPathLine" title={shareTarget.path}>{shareTarget.path}</Text>
+                <div>
+                  <Caption1>有效期</Caption1>
+                  <div className="dialogChoiceGrid">
+                    {SHARE_EXPIRY_OPTIONS.map((item) => (
+                      <button
+                        key={item.value}
+                        type="button"
+                        className={`dialogChoicePill${shareExpiryDays === item.value ? " active" : ""}`}
+                        onClick={() => setShareExpiryDays(item.value)}
+                        aria-pressed={shareExpiryDays === item.value}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="drawerFooter dialogFooterInline">
+                <div className="dialogFooterMeta">
+                  <Caption1>{getShareExpiryLabel(shareExpiryDays)}，生成后自动复制</Caption1>
+                </div>
+                <div className="row editFileActions">
+                  <Button className="dialogActionButton dialogIconOnlyButton" icon={<DismissRegular />} aria-label="取消" title="取消" onClick={closeShareDialog} />
+                  <Button className="dialogActionButton dialogPrimaryButton" appearance="primary" icon={<ShareRegular />} onClick={() => shareFile(shareTarget)} disabled={shareLoading}>
+                    {shareLoading ? "生成中..." : "生成并复制链接"}
+                  </Button>
+                </div>
+              </div>
+              <button type="button" className="dialogSecondaryToggle" onClick={() => setShareHistoryOpen((prev) => !prev)}>
+                {shareHistoryOpen ? "收起历史链接" : `查看历史链接${currentFileShares.length ? `（${currentFileShares.length}）` : ""}`}
+              </button>
+              {shareHistoryOpen && (
+                <div className="drawerSection shareHistorySection">
+                  <div className="sectionHeaderCompact">
+                    <Subtitle1>该文件的分享记录</Subtitle1>
+                    <Badge appearance="outline" color={currentFileShares.length ? "informative" : "subtle"}>{currentFileShares.length}</Badge>
+                  </div>
+                  <div className="shareHistoryList">
+                    {currentFileShares.map((share) => (
+                      <div key={share.id} className="shareHistoryRow">
+                        <div className="shareHistoryMeta">
+                          <Text>{share.shareUrl}</Text>
+                          <Caption1>创建于 {formatRelativeTime(share.createdAt)} · 访问 {share.accessCount || 0} 次 · {share.expiresAt ? `到期 ${formatRelativeTime(share.expiresAt)}` : "长期有效"}</Caption1>
+                        </div>
+                        <div className="shareHistoryActions">
+                          <Badge appearance="outline" color={getShareStatusColor(share.status)}>{getShareStatusLabel(share.status)}</Badge>
+                          <Button size="small" className="dialogActionButton" icon={<CopyRegular />} onClick={() => copyShareUrl(share.shareUrl)}>复制</Button>
+                          <Button size="small" className="dialogActionButton" icon={<DismissRegular />} disabled={share.status !== "active"} onClick={() => revokeShare(share.id)}>撤销</Button>
+                          <Button size="small" className="dialogActionButton dangerButton" icon={<DeleteRegular />} onClick={() => deleteShare(share.id)}>删除</Button>
+                        </div>
+                      </div>
+                    ))}
+                    {!currentFileShares.length && <Caption1>还没有为这个文件生成过分享链接。</Caption1>}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {uploadOpen && (
+          <div className="overlay drawerOverlay dialogOverlayRaised">
+            <div className="modalWindow uploadModal drawerSheet dialogModal" onClick={(event) => event.stopPropagation()}>
+              <div className="drawerHandle" />
+              <div className="modalHeader">
+                <div>
+                  <Subtitle1>上传工作台</Subtitle1>
+                  <Caption1>{uploadStep === 1 ? "先选目标终端，再进入本地文件选择。" : "先选本地文件，再按需要补目录和命名。"}</Caption1>
+                </div>
+                <Button size="small" className="dialogActionButton dialogIconOnlyButton" icon={<DismissRegular />} aria-label="关闭" title="关闭" onClick={() => setUploadOpen(false)} />
+              </div>
               <div className="drawerSteps">
                 <div className={`drawerStepBadge${uploadStep === 1 ? " active" : ""}`}>1. 选择目标</div>
-                <div className={`drawerStepBadge${uploadStep === 2 ? " active" : ""}`}>2. 路径与文件</div>
+                <div className={`drawerStepBadge${uploadStep === 2 ? " active" : ""}`}>2. 路径、命名与文件</div>
               </div>
               {uploadStep === 1 && (
-                <div className="drawerSection">
-                  <Field label="目标存储终端">
-                    <Dropdown selectedOptions={uploadClientId ? [uploadClientId] : []} value={uploadClientId} onOptionSelect={(_, data) => setUploadClientId(data.optionValue || "") }>
-                      {clients.map((item) => (
-                        <Option key={item.id} value={item.id}>{getClientDisplayName(item.id)}</Option>
-                      ))}
-                    </Dropdown>
-                  </Field>
-                  <Field label="栏目">
-                    <Dropdown selectedOptions={uploadColumnId ? [uploadColumnId] : ["none"]} value={uploadColumnId || "none"} onOptionSelect={(_, data) => setUploadColumnId(data.optionValue === "none" ? "" : data.optionValue || "") }>
-                      <Option value="none">未分类</Option>
-                      {columns.map((item) => (
-                        <Option key={item.id} value={item.id}>{item.name}</Option>
-                      ))}
-                    </Dropdown>
-                  </Field>
-                  <div className="drawerInlineFields">
-                    <Input value={columnDraftName} onChange={(_, data) => setColumnDraftName(data.value)} placeholder="需要新栏目时再输入" />
-                    <Button size="small" appearance="secondary" onClick={createColumn}>新增栏目</Button>
-                  </div>
-                  <div className="drawerFooterInline">
-                    <Button appearance="primary" disabled={!uploadClientId} onClick={() => setUploadStep(2)}>下一步</Button>
+                <div className="drawerSection uploadTargetSection">
+                  <Text className="dialogPrimaryLine">上传到哪个存储终端</Text>
+                  <Caption1>这里只做一个选择，其他内容下一步再处理。</Caption1>
+                  <div className="uploadTargetRow">
+                    <Field className="filterField filterControl dialogField" label="目标存储终端">
+                      <Dropdown className="filterDropdown dialogDropdown" selectedOptions={uploadClientId ? [uploadClientId] : []} value={getClientDropdownValue(uploadClientId)} onOptionSelect={(_, data) => setUploadClientId(data.optionValue || "") }>
+                        {clients.map((item) => (
+                          <Option key={item.id} value={item.id}>{getClientDisplayName(item.id)}</Option>
+                        ))}
+                      </Dropdown>
+                    </Field>
+                    <Button className="dialogActionButton dialogPrimaryButton uploadTargetContinue" appearance="primary" icon={<ArrowRightRegular />} disabled={!uploadClientId} onClick={() => setUploadStep(2)}>继续</Button>
                   </div>
                 </div>
               )}
               {uploadStep === 2 && (
                 <>
-                  <div className="drawerSection">
-                    <Field label="目标目录（可选）">
-                      <Input value={uploadFolderPath} onChange={(_, data) => setUploadFolderPath(data.value)} placeholder="例如 media/photos" />
-                    </Field>
-                    <Caption1>最终上传路径会按“栏目 / 目录 / 文件名”的顺序组合。</Caption1>
-                  </div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                className="hiddenInput"
-                onChange={(event) => setUploadFiles(Array.from(event.target.files || []))}
-              />
-                  <div className="drawerSection">
-                    <div className="uploadChooser">
-                      <Button appearance="secondary" onClick={() => fileInputRef.current?.click()}>选择文件</Button>
-                      <Text>{uploadFiles.length ? `已选择 ${uploadFiles.length} 个文件` : "未选择文件"}</Text>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    className="hiddenInput"
+                    onChange={(event) => {
+                      appendUploadFiles(event.target.files || []);
+                      event.target.value = "";
+                    }}
+                  />
+                  <div className="drawerSection uploadPrimaryActionBar">
+                    <div>
+                      <Text className="dialogPrimaryLine">先选择本地文件</Text>
+                      <Caption1>{getClientDisplayName(uploadClientId) || "未选择终端"}{uploadFolderPath ? ` / ${uploadFolderPath}` : " / 根目录"}</Caption1>
                     </div>
-                    <div className="uploadPlan">
-                      <div className="uploadPlanCard">
-                        <Caption1>目标终端</Caption1>
-                        <Text>{getClientDisplayName(uploadClientId) || "未选择"}</Text>
-                      </div>
-                      <div className="uploadPlanCard">
-                        <Caption1>目标路径</Caption1>
-                        <Text>{uploadTargetPreview || "/"}</Text>
-                      </div>
-                      <div className="uploadPlanCard">
-                        <Caption1>预计文件数</Caption1>
-                        <Text>{uploadFiles.length}</Text>
-                      </div>
+                    <div className="uploadPrimaryActionButtons">
+                      <Button className="dialogActionButton dialogPrimaryButton uploadPickButton" appearance="primary" icon={<AddRegular />} onClick={() => fileInputRef.current?.click()}>选择本地文件</Button>
+                      <Button className="dialogActionButton" icon={<ArrowSwapRegular />} onClick={() => setUploadStep(1)}>切换目标</Button>
                     </div>
                   </div>
-              {uploadFiles.length > 0 && (
-                <div className="selectedFilesList drawerSection">
-                  {uploadFiles.slice(0, 6).map((file) => (
-                    <div key={`${file.name}-${file.size}-${file.lastModified}`} className="selectedFileRow">
-                      <span className="selectedFileName" title={file.name}>{file.name}</span>
-                      <Caption1>{formatBytes(file.size)}</Caption1>
+                  <div className="uploadWorkbenchGrid uploadWorkbenchStep2">
+                    <div className="drawerSection uploadPanelSection uploadComposerSection">
+                      <Field className="filterField filterControl dialogField" label="上传到哪个目录">
+                        <div className="uploadFolderComposer">
+                          <Dropdown
+                            className="filterDropdown dialogDropdown"
+                            selectedOptions={[normalizeFolderPath(uploadFolderPath) || ROOT_FOLDER_OPTION_VALUE]}
+                            value={normalizeFolderPath(uploadFolderPath) || "根目录"}
+                            onOptionSelect={(_, data) => setUploadFolderPath(data.optionValue === ROOT_FOLDER_OPTION_VALUE ? "" : normalizeFolderPath(data.optionValue || ""))}
+                          >
+                            <Option value={ROOT_FOLDER_OPTION_VALUE}>根目录</Option>
+                            {uploadFolderOptions.filter(Boolean).map((option) => (
+                              <Option key={option} value={option}>{option}</Option>
+                            ))}
+                          </Dropdown>
+                          <Button
+                            className="dialogActionButton"
+                            icon={<AddRegular />}
+                            appearance="secondary"
+                            onClick={() => openCreateFolderModal({
+                              source: "upload",
+                              basePath: uploadTargetPreview,
+                              clientId: uploadClientId,
+                              uploadFolderBasePath: uploadFolderPath
+                            })}
+                            disabled={!uploadClientId}
+                          >
+                            新建目录
+                          </Button>
+                        </div>
+                      </Field>
+                      <div className="uploadFolderBrowser">
+                        <div className="uploadFolderBrowserHeader">
+                          <Caption1>目录导航</Caption1>
+                          <Caption1>{uploadFolderPath || "根目录"}</Caption1>
+                        </div>
+                        <div className="uploadFolderBreadcrumbs">
+                          <button type="button" className={`uploadFolderCrumb${!uploadFolderPath ? " current" : ""}`} onClick={() => setUploadFolderPath("")}>根目录</button>
+                          {uploadFolderBreadcrumbs.map((crumb) => (
+                            <button key={crumb.path} type="button" className={`uploadFolderCrumb${crumb.path === uploadFolderPath ? " current" : ""}`} onClick={() => setUploadFolderPath(crumb.path)}>
+                              {crumb.label}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="uploadFolderTree">
+                          {uploadFolderChildren.length ? uploadFolderChildren.map((folder) => (
+                            <button key={folder.path} type="button" className={`uploadFolderTreeItem${folder.path === uploadFolderPath ? " active" : ""}`} onClick={() => setUploadFolderPath(folder.path)}>
+                              <FolderOpenRegular />
+                              <span>{folder.name}</span>
+                            </button>
+                          )) : <Caption1>当前目录下没有更多子目录，可直接新建目录或手动输入。</Caption1>}
+                        </div>
+                      </div>
+                      <button type="button" className="dialogSecondaryToggle" onClick={() => setUploadAdvancedOpen((prev) => !prev)}>
+                        {uploadAdvancedOpen ? "收起高级设置" : "展开高级设置（栏目、手动路径）"}
+                      </button>
+                      {uploadAdvancedOpen && (
+                        <div className="dialogAdvancedPanel">
+                          <Field className="filterField filterControl dialogField" label="栏目（可选）">
+                            <Dropdown className="filterDropdown dialogDropdown" selectedOptions={uploadColumnId ? [uploadColumnId] : ["none"]} value={getColumnDisplayValue(uploadColumnId || "none")} onOptionSelect={(_, data) => setUploadColumnId(data.optionValue === "none" ? "" : data.optionValue || "") }>
+                              <Option value="none">未分类</Option>
+                              {columns.map((item) => (
+                                <Option key={item.id} value={item.id}>{item.name}</Option>
+                              ))}
+                            </Dropdown>
+                          </Field>
+                          <div className="drawerInlineFields">
+                            <Input className="filterInput dialogInput" value={columnDraftName} onChange={(_, data) => setColumnDraftName(data.value)} placeholder="新建栏目，例如：旅行、工作文档" />
+                            <Button size="small" className="dialogActionButton" appearance="secondary" icon={<AddRegular />} onClick={createColumn}>新增栏目</Button>
+                          </div>
+                          <Field className="filterField filterControl dialogField" label="手动输入子目录">
+                            <Input className="filterInput dialogInput" value={uploadFolderPath} onChange={(_, data) => setUploadFolderPath(normalizeFolderPath(data.value))} placeholder="例如 media/photos" />
+                          </Field>
+                        </div>
+                      )}
                     </div>
-                  ))}
-                  {uploadFiles.length > 6 && <Caption1>还有 {uploadFiles.length - 6} 个文件未展开显示</Caption1>}
-                </div>
-              )}
-              <div className="drawerFooter">
-                <Button onClick={() => setUploadStep(1)}>上一步</Button>
-                <Button appearance="primary" onClick={async () => { await upload(); }}>开始上传</Button>
-              </div>
+                    <div className="drawerSection selectedFilesList uploadSelectionPanel">
+                      <div className="uploadSelectionHeader">
+                        <div>
+                          <Text>待上传文件</Text>
+                          <Caption1>{uploadFiles.length ? `${uploadFiles.length} 个文件，${formatBytes(uploadTotalBytes)}` : "还没有选择本地文件"}</Caption1>
+                        </div>
+                        <div className="uploadListActions">
+                          <Badge appearance="outline" color={uploadFiles.length ? "informative" : "subtle"}>{uploadFiles.length}</Badge>
+                          <Button className="dialogActionButton" appearance="secondary" icon={<DismissRegular />} onClick={() => setUploadFiles([])} disabled={!uploadFiles.length}>清空</Button>
+                        </div>
+                      </div>
+                      {uploadFiles.length > 0 ? uploadFiles.map((item) => {
+                        const finalName = sanitizeUploadFileName(item.desiredName, item.file.name);
+                        return (
+                          <div key={item.id} className="selectedFileRow uploadDraftRow">
+                            <div className="uploadDraftMeta">
+                              <Text className="selectedFileName" title={item.file.name}>{item.file.name}</Text>
+                              <Caption1>{formatBytes(item.file.size)}</Caption1>
+                            </div>
+                            <div className="uploadDraftEditor">
+                              <Field className="filterField filterControl dialogField" label="上传名称">
+                                <Input className="filterInput dialogInput" value={item.desiredName} onChange={(_, data) => updateUploadFileName(item.id, data.value)} />
+                              </Field>
+                              <Caption1 className="uploadDraftPath" title={buildUploadTargetPath(uploadTargetPreview, finalName)}>
+                                最终路径：{buildUploadTargetPath(uploadTargetPreview, finalName)}
+                              </Caption1>
+                            </div>
+                            <Button size="small" className="dialogActionButton dangerButton" icon={<DeleteRegular />} onClick={() => removeUploadDraft(item.id)}>移除</Button>
+                          </div>
+                        );
+                      }) : (
+                        <div className="uploadEmptyState">
+                          <Text>还没有选择本地文件</Text>
+                          <Caption1>先点上面的“选择本地文件”，选择后这里才会出现待上传列表。</Caption1>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="drawerFooter uploadFooterBar">
+                    <div className="dialogFooterMeta">
+                      <Caption1>{uploadFiles.length ? `将上传到 ${uploadTargetPreview || "/"}` : "先选择本地文件"}</Caption1>
+                    </div>
+                    <div className="row editFileActions">
+                      <Button className="dialogActionButton" icon={<ArrowSwapRegular />} onClick={() => setUploadStep(1)}>上一步</Button>
+                      <Button className="dialogActionButton dialogPrimaryButton" appearance="primary" icon={<ArrowRightRegular />} disabled={!uploadFiles.length || !uploadClientId} onClick={async () => { await upload(); }}>开始上传</Button>
+                    </div>
+                  </div>
                 </>
               )}
             </div>
           </div>
         )}
 
+        {editFileOpen && editFileDraft && (
+          <div className="overlay dialogOverlayRaised">
+            <div className="modalWindow editFileModal dialogModal" onClick={(event) => event.stopPropagation()}>
+              <div className="modalHeader">
+                <div>
+                  <Subtitle1>编辑文件</Subtitle1>
+                  <Caption1>{editFileDraft.currentPath}</Caption1>
+                </div>
+                <Button size="small" className="dialogActionButton dialogIconOnlyButton" icon={<DismissRegular />} aria-label="关闭" title="关闭" onClick={closeEditFileModal} />
+              </div>
+              <div className="editFileForm editFileFormSingle">
+                <Field className="filterField filterControl dialogField" label="文件名称">
+                  <Input className="filterInput dialogInput" value={editFileDraft.fileName} onChange={(_, data) => setEditFileDraft((prev) => ({ ...prev, fileName: data.value }))} />
+                </Field>
+                <button type="button" className="dialogSecondaryToggle" onClick={() => setEditFileAdvancedOpen((prev) => !prev)}>
+                  {editFileAdvancedOpen ? "收起更多设置" : "展开更多设置（目录、栏目、文件类型）"}
+                </button>
+                {editFileAdvancedOpen && (
+                  <div className="dialogAdvancedPanel">
+                    <Field className="filterField filterControl dialogField" label="已有目录选择器">
+                      <Dropdown
+                        className="filterDropdown dialogDropdown"
+                        selectedOptions={[normalizeFolderPath(editFileDraft.directoryPath) || ROOT_FOLDER_OPTION_VALUE]}
+                        value={normalizeFolderPath(editFileDraft.directoryPath) || "根目录"}
+                        onOptionSelect={(_, data) => setEditFileDraft((prev) => ({
+                          ...prev,
+                          directoryPath: data.optionValue === ROOT_FOLDER_OPTION_VALUE ? "" : normalizeFolderPath(data.optionValue || "")
+                        }))}
+                      >
+                        {editFolderOptions.map((optionPath) => (
+                          <Option key={optionPath || ROOT_FOLDER_OPTION_VALUE} value={optionPath || ROOT_FOLDER_OPTION_VALUE}>
+                            {optionPath || "根目录"}
+                          </Option>
+                        ))}
+                      </Dropdown>
+                    </Field>
+                    <Field className="filterField filterControl dialogField" label="目标目录">
+                      <Input className="filterInput dialogInput" value={editFileDraft.directoryPath} onChange={(_, data) => setEditFileDraft((prev) => ({ ...prev, directoryPath: normalizeFolderPath(data.value) }))} placeholder="例如 media/photos 或留空放在根目录" />
+                    </Field>
+                    <Field className="filterField filterControl dialogField" label="栏目">
+                      <Dropdown
+                        className="filterDropdown dialogDropdown"
+                        selectedOptions={editFileDraft.columnId ? [editFileDraft.columnId] : ["none"]}
+                        value={getColumnDisplayValue(editFileDraft.columnId || "none")}
+                        onOptionSelect={(_, data) => setEditFileDraft((prev) => ({ ...prev, columnId: data.optionValue === "none" ? "" : data.optionValue || "" }))}
+                      >
+                        <Option value="none">未分类</Option>
+                        {columns.map((item) => (
+                          <Option key={item.id} value={item.id}>{item.name}</Option>
+                        ))}
+                      </Dropdown>
+                    </Field>
+                    <div className="editMimeBlock">
+                      <Field className="filterField filterControl dialogField" label="文件类型预设">
+                        <Dropdown
+                          className="filterDropdown dialogDropdown"
+                          selectedOptions={[editFileDraft.mimeAdvanced ? "custom" : (editFileDraft.mimePreset || "application/octet-stream")]}
+                          value={editFileDraft.mimeAdvanced ? "高级自定义" : getMimeDisplayValue(editFileDraft.mimePreset || editFileDraft.mimeType)}
+                          onOptionSelect={(_, data) => {
+                            const nextValue = data.optionValue || "application/octet-stream";
+                            if (nextValue === "custom") {
+                              setEditFileDraft((prev) => ({ ...prev, mimeAdvanced: true, mimePreset: "custom" }));
+                              return;
+                            }
+                            setEditFileDraft((prev) => ({ ...prev, mimeAdvanced: false, mimePreset: nextValue, mimeType: nextValue }));
+                          }}
+                        >
+                          {MIME_PRESET_OPTIONS.map((item) => (
+                            <Option key={item.value} value={item.value}>{item.label}</Option>
+                          ))}
+                          <Option value="custom">高级自定义</Option>
+                        </Dropdown>
+                      </Field>
+                      <div className="editMimeActions">
+                        <Button size="small" className="dialogActionButton" appearance={editFileDraft.mimeAdvanced ? "primary" : "secondary"} icon={<EditRegular />} onClick={() => setEditFileDraft((prev) => ({ ...prev, mimeAdvanced: !prev.mimeAdvanced, mimePreset: !prev.mimeAdvanced ? "custom" : (findMimePreset(prev.mimeType || "")?.value || "application/octet-stream") }))}>
+                          {editFileDraft.mimeAdvanced ? "关闭高级输入" : "高级输入"}
+                        </Button>
+                        <Caption1>{editFileDraft.mimeAdvanced ? "可手动填写任意 MIME 类型" : "优先使用预设类型，减少误填"}</Caption1>
+                      </div>
+                      {editFileDraft.mimeAdvanced && (
+                        <Field className="filterField filterControl dialogField" label="自定义 MIME 类型">
+                          <Input className="filterInput dialogInput" value={editFileDraft.mimeType} onChange={(_, data) => setEditFileDraft((prev) => ({ ...prev, mimeType: data.value }))} placeholder="例如 application/vnd.custom+json" />
+                        </Field>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="row editFileActions">
+                <Button className="dialogActionButton dialogIconOnlyButton" icon={<DismissRegular />} aria-label="取消" title="取消" onClick={closeEditFileModal} />
+                <Button className="dialogActionButton dialogPrimaryButton" appearance="primary" icon={<EditRegular />} onClick={submitEditFile}>保存修改</Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {editFolderOpen && editFolderDraft && (
+          <div className="overlay dialogOverlayTop" onClick={closeEditFolderModal}>
+            <div className="modalWindow createFolderDialog dialogModal" onClick={(event) => event.stopPropagation()}>
+              <div className="modalHeader">
+                <div>
+                  <Subtitle1>重命名文件夹</Subtitle1>
+                  <Caption1>{editFolderDraft.currentPath}</Caption1>
+                </div>
+                <Button size="small" className="dialogActionButton dialogIconOnlyButton" icon={<DismissRegular />} aria-label="关闭" title="关闭" onClick={closeEditFolderModal} />
+              </div>
+              <Caption1 className="dialogMetaInline">终端：{getClientDisplayName(editFolderDraft.clientId)} · 修改后：{normalizeFolderPath(editFolderDraft.parentPath ? `${editFolderDraft.parentPath}/${String(editFolderDraft.folderName || "").trim()}` : String(editFolderDraft.folderName || "").trim()) || "未填写"}</Caption1>
+              <Field className="filterField filterControl dialogField" label="文件夹名称">
+                <Input
+                  className="filterInput dialogInput"
+                  value={editFolderDraft.folderName}
+                  onChange={(_, data) => setEditFolderDraft((prev) => ({ ...prev, folderName: data.value }))}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      submitEditFolder();
+                    }
+                  }}
+                />
+              </Field>
+              <div className="row editFileActions">
+                <Button className="dialogActionButton dialogIconOnlyButton" icon={<DismissRegular />} aria-label="取消" title="取消" onClick={closeEditFolderModal} />
+                <Button className="dialogActionButton dialogPrimaryButton" appearance="primary" icon={<EditRegular />} onClick={submitEditFolder}>保存修改</Button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {deleteTarget && (
-          <div className="overlay" onClick={() => setDeleteTarget(null)}>
-            <div className="modalWindow dangerModal" onClick={(event) => event.stopPropagation()}>
+          <div className="overlay dialogOverlayTop" onClick={() => setDeleteTarget(null)}>
+            <div className="modalWindow dangerModal dialogModal" onClick={(event) => event.stopPropagation()}>
               <div className="modalHeader">
                 <Subtitle1>删除确认</Subtitle1>
-                <Button size="small" onClick={() => setDeleteTarget(null)}>取消</Button>
+                <Button size="small" className="dialogActionButton dialogIconOnlyButton" icon={<DismissRegular />} aria-label="取消" title="取消" onClick={() => setDeleteTarget(null)} />
               </div>
               {deleteTarget.kind === "batch" ? (
                 <>
                   <Text>将删除 {deleteTarget.files.length} 个已选文件</Text>
                   <Caption1>仅会删除当前可见且不在上传中的文件。</Caption1>
+                </>
+              ) : deleteTarget.kind === "folder" ? (
+                <>
+                  <Text>文件夹：{deleteTarget.folders?.[0]?.name}</Text>
+                  <Caption1>终端：{getClientDisplayName(deleteTarget.folders?.[0]?.singleClientId || "")}</Caption1>
+                  <Caption1>路径：{deleteTarget.folders?.[0]?.path}</Caption1>
+                  <Caption1>将递归删除该目录下的所有文件和子目录。</Caption1>
                 </>
               ) : (
                 <>
@@ -2571,16 +4407,65 @@ export default function App() {
               )}
               {deleteStep === 1 ? (
                 <div className="row" style={{ marginTop: 12 }}>
-                  <Button onClick={() => setDeleteTarget(null)}>取消</Button>
-                  <Button appearance="primary" onClick={() => setDeleteStep(2)}>继续</Button>
+                  <Button className="dialogActionButton dialogIconOnlyButton" icon={<DismissRegular />} aria-label="取消" title="取消" onClick={() => setDeleteTarget(null)} />
+                  <Button className="dialogActionButton dialogPrimaryButton" appearance="primary" icon={<ArrowRightRegular />} onClick={() => setDeleteStep(2)}>继续</Button>
                 </div>
               ) : (
                 <div className="row" style={{ marginTop: 12 }}>
                   <Text>此操作不可恢复，确认删除？</Text>
-                  <Button onClick={() => setDeleteStep(1)}>返回</Button>
-                  <Button appearance="primary" onClick={confirmDelete}>确认删除</Button>
+                  <Button className="dialogActionButton" icon={<ArrowSwapRegular />} onClick={() => setDeleteStep(1)}>返回</Button>
+                  <Button className="dialogActionButton dangerButton" appearance="primary" icon={<DeleteRegular />} onClick={confirmDelete}>确认删除</Button>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {createFolderOpen && (
+          <div className="overlay dialogOverlayTop" onClick={closeCreateFolderModal}>
+            <div className="modalWindow createFolderDialog dialogModal" onClick={(event) => event.stopPropagation()}>
+              <div className="modalHeader">
+                <div>
+                  <Subtitle1>新建文件夹</Subtitle1>
+                  <Caption1>{createFolderContext.basePath || "根目录"}</Caption1>
+                </div>
+                <Button size="small" className="dialogActionButton dialogIconOnlyButton" icon={<DismissRegular />} aria-label="取消" title="取消" onClick={closeCreateFolderModal} disabled={createFolderSaving} />
+              </div>
+              <div className="editFileForm">
+                <Field className="filterField filterControl dialogField" label="目标终端">
+                  <Dropdown
+                    className="filterDropdown dialogDropdown"
+                    selectedOptions={createFolderDraft.clientId ? [createFolderDraft.clientId] : []}
+                    value={createFolderDraft.clientId ? getClientDisplayName(createFolderDraft.clientId) : "请选择终端"}
+                    onOptionSelect={(_, data) => setCreateFolderDraft((prev) => ({ ...prev, clientId: data.optionValue || "" }))}
+                  >
+                    {createFolderClientOptions.map((client) => (
+                      <Option key={client.id} value={client.id}>{getClientDisplayName(client.id)}</Option>
+                    ))}
+                  </Dropdown>
+                </Field>
+                <Field className="filterField filterControl dialogField" label="文件夹名称">
+                  <Input
+                    className="filterInput dialogInput"
+                    value={createFolderDraft.folderName}
+                    onChange={(_, data) => setCreateFolderDraft((prev) => ({ ...prev, folderName: data.value }))}
+                    placeholder="例如 movies 或 projects"
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        submitCreateFolder();
+                      }
+                    }}
+                  />
+                </Field>
+              </div>
+              <Caption1 className="dialogMetaInline">将创建为：{normalizeFolderPath(createFolderContext.basePath ? `${createFolderContext.basePath}/${String(createFolderDraft.folderName || "").trim()}` : String(createFolderDraft.folderName || "").trim()) || "未填写"}</Caption1>
+              <div className="row editFileActions">
+                <Button className="dialogActionButton dialogIconOnlyButton" icon={<DismissRegular />} aria-label="取消" title="取消" onClick={closeCreateFolderModal} disabled={createFolderSaving} />
+                <Button className="dialogActionButton dialogPrimaryButton" appearance="primary" icon={<FolderOpenRegular />} onClick={submitCreateFolder} disabled={createFolderSaving || !createFolderClientOptions.length}>
+                  {createFolderSaving ? <Spinner size="tiny" /> : "创建文件夹"}
+                </Button>
+              </div>
             </div>
           </div>
         )}
@@ -2592,8 +4477,8 @@ export default function App() {
               <div className="modalHeader">
                 <Subtitle1>连接诊断</Subtitle1>
                 <div className="row">
-                  <Button size="small" onClick={() => refreshAll()}>刷新</Button>
-                  <Button size="small" onClick={() => setDiagnosticsOpen(false)}>关闭</Button>
+                  <Button size="small" className="dialogActionButton" icon={<ArrowSwapRegular />} onClick={() => refreshAll()}>刷新</Button>
+                  <Button size="small" className="dialogActionButton dialogIconOnlyButton" icon={<DismissRegular />} aria-label="关闭" title="关闭" onClick={() => setDiagnosticsOpen(false)} />
                 </div>
               </div>
               <div className="diagRow">
@@ -2602,32 +4487,16 @@ export default function App() {
                   <Badge appearance="filled" color={diagnostics.wsState === "open" ? "success" : "informative"}>{diagnostics.wsState}</Badge>
                   <Button
                     size="small"
+                    className="dialogActionButton"
+                    icon={<ArrowRightRegular />}
                     onClick={() => ensureSignalingReady()}
                   >
-                    重连 WS
+                    拉起全部 WS
                   </Button>
                 </div>
               </div>
-              <Caption1>WS URL: {diagnostics.wsUrl || "-"}</Caption1>
               {diagnostics.wsLastError ? <Caption1>最近WS错误: {diagnostics.wsLastError}</Caption1> : null}
-              <div className="diagSummary">
-                <div>
-                  <Caption1>终端总数</Caption1>
-                  <Text>{clients.length}</Text>
-                </div>
-                <div>
-                  <Caption1>在线</Caption1>
-                  <Text>{clients.filter((c) => c.status === "online").length}</Text>
-                </div>
-                <div>
-                  <Caption1>中继</Caption1>
-                  <Text>{clients.filter((c) => (diagnostics.clients[c.id]?.route || "unknown") === "relay").length}</Text>
-                </div>
-                <div>
-                  <Caption1>重试</Caption1>
-                  <Text>{clients.reduce((sum, c) => sum + (diagnostics.clients[c.id]?.retries || 0), 0)}</Text>
-                </div>
-              </div>
+              <Caption1 className="dialogMetaInline">终端 {clients.length} · 在线 {clients.filter((c) => c.status === "online").length} · 中继 {clients.filter((c) => (diagnostics.clients[c.id]?.route || "unknown") === "relay").length} · 重试 {clients.reduce((sum, c) => sum + (diagnostics.clients[c.id]?.retries || 0), 0)}</Caption1>
               <div className="diagList">
                 {clients.map((client) => {
                   const diag = diagnostics.clients[client.id] || {};
@@ -2645,23 +4514,22 @@ export default function App() {
                           <Badge appearance="outline" color={getRouteColor(diag)}>{routeLabel}</Badge>
                         </div>
                       </div>
-                      <div className="diagMetaGrid">
-                        <Caption1>ICE: {diag.iceState || "new"}</Caption1>
-                        <Caption1>Conn: {diag.connectionState || "new"}</Caption1>
-                        <Caption1>候选: {diag.localCandidateType || "-"} {"->"} {diag.remoteCandidateType || "-"}</Caption1>
+                      <div className="diagMetaGrid compact">
                         <Caption1>最近心跳: {formatRelativeTime(client.lastHeartbeatAt)}</Caption1>
-                        <Caption1>重试: {diag.retries || 0}</Caption1>
-                        <Caption1>下行吞吐: {formatSpeed(diag.currentRecvBps || 0)}</Caption1>
-                        <Caption1>上行吞吐: {formatSpeed(diag.currentSendBps || 0)}</Caption1>
-                        <Caption1>累计接收: {formatBytes(diag.totalBytesReceived || 0)}</Caption1>
-                        <Caption1>累计发送: {formatBytes(diag.totalBytesSent || 0)}</Caption1>
+                        <Caption1>总重试: {diag.retries || 0}</Caption1>
+                        <Caption1>主路由: {routeLabel}</Caption1>
+                        <Caption1>活跃角色: {formatPeerRoleSummary(diag) || "暂无"}</Caption1>
                       </div>
-                      {diag.lastError ? <Caption1>最近错误: {diag.lastError}</Caption1> : null}
+                      <div className="diagRoleActions">
+                        {P2P_PEER_ROLES.map((role) => renderPeerDiagnosticCard(client.id, role, diag))}
+                      </div>
                       <div className="diagActions">
-                        <Button size="small" onClick={() => p2p?.connectToPeer(client.id)}>重连</Button>
-                        <Button size="small" onClick={() => p2p?.closePeer(client.id, true)}>断开</Button>
+                        <Button size="small" className="dialogActionButton" icon={<ArrowSwapRegular />} onClick={() => Promise.all(P2P_PEER_ROLES.map((role) => p2p?.connectToPeer(client.id, role)))}>全部重连</Button>
+                        <Button size="small" className="dialogActionButton" icon={<DismissRegular />} onClick={() => p2p?.closePeer(client.id, true)}>全部断开</Button>
                         <Button
                           size="small"
+                          className="dialogActionButton"
+                          icon={<CopyRegular />}
                           onClick={async () => {
                             const ok = await copyText(client.id);
                             if (ok) {
@@ -2717,51 +4585,32 @@ export default function App() {
                   firstFrameAt: prev.firstFrameAt || new Date().toLocaleTimeString()
                 }));
               }}
+              onFavorite={previewTargetFile ? () => toggleFavorite(previewTargetFile.id) : undefined}
+              onEdit={previewTargetFile ? () => openEditFile(previewTargetFile) : undefined}
+              onShare={previewTargetFile ? () => openShareDialog(previewTargetFile) : undefined}
               onDownload={() => download({ name: previewName, path: previewPath, clientId: previewClientId, mimeType: previewMime })}
               getClientDisplayName={getClientDisplayName}
               formatBytes={formatBytes}
+              formatRelativeTime={formatRelativeTime}
               isInlinePreviewMime={isInlinePreviewMime}
+              authToken={token}
+              currentUser={user}
+              previewFileId={previewTargetFile?.id || ""}
+              favorite={Boolean(previewTargetFile?.favorite)}
+              commentsEnabled
             />
           </Suspense>
         )}
 
-        {user.role === "admin" && (
-          <div className="adminGrid">
-            <Card className="surfaceCard panelCard">
-              <CardHeader header={<Subtitle1>后台管理 - 用户</Subtitle1>} />
-              <Divider />
-              {users.map((item) => (
-                <div key={item.id} className="simpleRow">
-                  <div>
-                    <div className="fileName">{item.displayName} · {item.role}</div>
-                    <div className="fileSub">{item.email}</div>
-                  </div>
-                </div>
-              ))}
-            </Card>
-            <Card className="surfaceCard panelCard">
-              <CardHeader header={<Subtitle1>后台管理 - 存储终端</Subtitle1>} />
-              <Divider />
-              {clients.map((item) => (
-                <div key={item.id} className="simpleRow withActions">
-                  <div>
-                    <div className="fileName">{item.name || item.id}</div>
-                    <div className="fileSub">ID: {item.id}</div>
-                    <div className="fileSub">
-                      状态: {item.status} · 心跳: {formatRelativeTime(item.lastHeartbeatAt)} · 路由: {diagnostics.clients[item.id]?.route || "unknown"}
-                    </div>
-                  </div>
-                  <div className="row">
-                    <Badge appearance="outline" color={getClientStatusColor(item.status)}>{item.status}</Badge>
-                    <Button size="small" onClick={() => p2p?.connectToPeer(item.id)}>重连</Button>
-                    <Button size="small" onClick={() => changeClientStatus(item.id, "online")}>启用</Button>
-                    <Button size="small" onClick={() => changeClientStatus(item.id, "disabled")}>禁用</Button>
-                  </div>
-                </div>
-              ))}
-            </Card>
-          </div>
-        )}
+        <ProfileDialog
+          open={profileOpen}
+          user={user}
+          p2p={p2p}
+          saving={profileSaving}
+          onClose={() => setProfileOpen(false)}
+          onSave={saveProfile}
+        />
+
       </div>
     </div>
   );

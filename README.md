@@ -33,6 +33,9 @@ npm install
 - `server` 与 `storage-client` 的注册密钥要一致：
   - `server`: `CLIENT_REGISTRATION_KEY`
   - `storage-client`: `REGISTRATION_KEY`
+- `server` 与 `storage-client` 的 `JWT_SECRET` 也必须一致：
+  - `server`: 用它签发用户 / client / share token
+  - `storage-client`: 用它校验公开分享页的只读访问 token
 
 ### 2.3 本地联调
 
@@ -139,7 +142,16 @@ npm run deploy:stop:linux
 
 1. 配置 `storage-client/.env`：
    - `SERVER_BASE_URL=https://你的域名`
+  - `JWT_SECRET=与 server/.env 完全相同的值`
    - `STORAGE_ROOT=你的存储目录`
+    - （可选）AI Bot 可接 OpenAI 兼容代理，包括 `ericc-ch/copilot-api`
+      - 启动代理：`npx copilot-api@latest start --port 4141`
+      - 在 `storage-client/.env` 里设置：
+        - `AI_PROVIDER=copilot`
+        - `COPILOT_API_BASE_URL=http://127.0.0.1:4141/v1`
+        - `COPILOT_MODEL=你在 /v1/models 里看到的模型 id`
+        - `COPILOT_API_KEY=dummy`（如代理未要求真实 token，可直接用默认值）
+      - 如果所选模型支持看图，再额外设置 `COPILOT_MULTIMODAL_MODEL`
   - （可选，建议）启用转码预览：
     - `ENABLE_TRANSCODE=1`
     - `FFMPEG_PATH=ffmpeg`（或 ffmpeg 可执行文件完整路径）

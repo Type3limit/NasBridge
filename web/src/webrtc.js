@@ -1,6 +1,115 @@
 import { toWsUrl } from "./api";
 
 const FILE_TRANSFER_TIMEOUT_MS = 300_000;
+const PEER_IDLE_CLOSE_MS = 60_000;
+const DEFAULT_CHANNEL_NAMES = ["file", "thumb", "preview", "upload", "control"];
+const PEER_ROLE_ORDER = ["download", "upload", "preview", "control"];
+const PEER_ROLE_CONFIG = {
+  download: { name: "downloadPeer", channelNames: ["file"] },
+  upload: { name: "uploadPeer", channelNames: ["upload"] },
+  preview: { name: "previewPeer", channelNames: ["thumb", "preview"] },
+  control: { name: "controlPeer", channelNames: ["control"] }
+};
+const CHANNEL_ROLE_MAP = {
+  file: "download",
+  upload: "upload",
+  thumb: "preview",
+  preview: "preview",
+  control: "control"
+};
+
+function createEmptyDiagnostics() {
+  return {
+    wsState: "idle",
+    wsUrl: "",
+    wsLastError: "",
+    clients: {}
+  };
+}
+
+function pickPreferredClientDiagnostics(roleEntries) {
+  for (const role of PEER_ROLE_ORDER) {
+    const entry = roleEntries.find((item) => item.role === role);
+    if (!entry?.diag) {
+      continue;
+    }
+    const connectionState = String(entry.diag.connectionState || "");
+    const iceState = String(entry.diag.iceState || "");
+    const route = String(entry.diag.route || "unknown");
+    if (connectionState === "connected" || iceState === "connected" || iceState === "completed" || route !== "unknown") {
+      return entry;
+    }
+  }
+  return roleEntries[0] || null;
+}
+
+function mergeDiagnosticsSnapshots(roleSnapshots) {
+  const snapshots = roleSnapshots || {};
+  const wsStates = PEER_ROLE_ORDER.map((role) => snapshots[role]?.wsState || "idle");
+  let wsState = "idle";
+  if (wsStates.every((state) => state === "open")) {
+    wsState = "open";
+  } else if (wsStates.some((state) => state === "connecting")) {
+    wsState = "connecting";
+  } else if (wsStates.some((state) => state === "open")) {
+    wsState = "degraded";
+  } else if (wsStates.some((state) => state === "error")) {
+    wsState = "error";
+  } else if (wsStates.some((state) => state === "closed")) {
+    wsState = "closed";
+  }
+
+  const wsUrl = PEER_ROLE_ORDER
+    .map((role) => `${role}:${snapshots[role]?.wsUrl || "-"}`)
+    .join(" | ");
+  const wsLastError = PEER_ROLE_ORDER
+    .map((role) => snapshots[role]?.wsLastError ? `${role}:${snapshots[role].wsLastError}` : "")
+    .filter(Boolean)
+    .join(" | ");
+
+  const clientIds = new Set();
+  for (const role of PEER_ROLE_ORDER) {
+    for (const clientId of Object.keys(snapshots[role]?.clients || {})) {
+      clientIds.add(clientId);
+    }
+  }
+
+  const clients = {};
+  for (const clientId of clientIds) {
+    const roleEntries = PEER_ROLE_ORDER
+      .map((role) => ({
+        role,
+        diag: snapshots[role]?.clients?.[clientId] || null
+      }))
+      .filter((entry) => entry.diag);
+    const preferredEntry = pickPreferredClientDiagnostics(roleEntries);
+    const preferred = preferredEntry?.diag || {};
+    const peers = Object.fromEntries(roleEntries.map((entry) => [entry.role, { ...entry.diag }]));
+    clients[clientId] = {
+      ...preferred,
+      route: preferred.route || "unknown",
+      routeLabel: preferred.routeLabel || preferred.route || "unknown",
+      retries: roleEntries.reduce((sum, entry) => sum + Number(entry.diag?.retries || 0), 0),
+      currentSendBps: roleEntries.reduce((sum, entry) => sum + Number(entry.diag?.currentSendBps || 0), 0),
+      currentRecvBps: roleEntries.reduce((sum, entry) => sum + Number(entry.diag?.currentRecvBps || 0), 0),
+      totalBytesSent: roleEntries.reduce((sum, entry) => sum + Number(entry.diag?.totalBytesSent || 0), 0),
+      totalBytesReceived: roleEntries.reduce((sum, entry) => sum + Number(entry.diag?.totalBytesReceived || 0), 0),
+      lastError: roleEntries.map((entry) => entry.diag?.lastError || "").find(Boolean) || "",
+      peers
+    };
+  }
+
+  return {
+    wsState,
+    wsUrl,
+    wsLastError,
+    clients
+  };
+}
+
+function resolvePeerRole(channelOrRole) {
+  return PEER_ROLE_CONFIG[channelOrRole] ? channelOrRole : (CHANNEL_ROLE_MAP[channelOrRole] || "control");
+}
 
 function buildIceServers() {
   const servers = [];
@@ -29,9 +138,81 @@ function buildIceServers() {
   return servers;
 }
 
+function readIceCandidatePoolSize() {
+  const raw = Number(import.meta.env.VITE_ICE_CANDIDATE_POOL_SIZE);
+  if (!Number.isFinite(raw)) {
+    return 2;
+  }
+  return Math.max(0, Math.min(10, Math.floor(raw)));
+}
+
+function readCandidateDelayMs(value, fallback = 0) {
+  const raw = Number(value);
+  if (!Number.isFinite(raw)) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(10_000, Math.floor(raw)));
+}
+
+function readSrflxCandidateDelayMs() {
+  const legacy = readCandidateDelayMs(import.meta.env.VITE_P2P_HOST_FIRST_DELAY_MS, 0);
+  return readCandidateDelayMs(import.meta.env.VITE_P2P_SRFLX_DELAY_MS, legacy);
+}
+
+function readRelayCandidateDelayMs() {
+  const legacy = readCandidateDelayMs(import.meta.env.VITE_P2P_HOST_FIRST_DELAY_MS, 0);
+  return readCandidateDelayMs(import.meta.env.VITE_P2P_RELAY_DELAY_MS, legacy);
+}
+
+function readRelayUpgradeDelayMs() {
+  return readCandidateDelayMs(import.meta.env.VITE_P2P_RELAY_UPGRADE_DELAY_MS, 5000);
+}
+
+function extractCandidateAddress(candidate) {
+  const direct = String(candidate?.address || candidate?.ip || "").trim();
+  if (direct) {
+    return direct;
+  }
+  const parts = String(candidate?.candidate || "").trim().split(/\s+/);
+  return String(parts[4] || "").trim();
+}
+
+function extractCandidateType(candidate) {
+  const direct = String(candidate?.type || candidate?.candidateType || "").trim();
+  if (direct) {
+    return direct;
+  }
+  const parts = String(candidate?.candidate || "").trim().split(/\s+/);
+  const typeIndex = parts.indexOf("typ");
+  return typeIndex >= 0 ? String(parts[typeIndex + 1] || "").trim() : "";
+}
+
+function isLoopbackCandidateAddress(address = "") {
+  const value = String(address || "").trim().toLowerCase();
+  return value === "127.0.0.1" || value === "::1" || value === "localhost";
+}
+
+function isLinkLocalCandidateAddress(address = "") {
+  const value = String(address || "").trim().toLowerCase();
+  return value.startsWith("169.254.") || value.startsWith("fe80:");
+}
+
+function getCandidateSignalDelayMs(candidateType, delays) {
+  if (candidateType === "relay") {
+    return delays.relay;
+  }
+  if (candidateType === "srflx") {
+    return delays.srflx;
+  }
+  return 0;
+}
+
 export class P2PBridge {
-  constructor(token) {
+  constructor(token, options = {}) {
     this.token = token;
+    this.accessToken = options.accessToken || "";
+    this.name = options.name || "peer";
+    this.role = options.role || "default";
     this.socket = null;
     this.socketReady = null;
     this.peers = new Map();
@@ -39,11 +220,21 @@ export class P2PBridge {
     this.currentOp = new Map();
     this.clientQueues = new Map();
     this.iceServers = buildIceServers();
+    this.iceCandidatePoolSize = readIceCandidatePoolSize();
+    this.candidateSignalDelayMs = {
+      srflx: readSrflxCandidateDelayMs(),
+      relay: readRelayCandidateDelayMs()
+    };
+    this.relayUpgradeDelayMs = readRelayUpgradeDelayMs();
     this.statsTimers = new Map();
     this.keepaliveTimers = new Map();
     this.lastPongTime = new Map();
     this.activeUploads = new Map();
     this.routeSamples = new Map();
+    this.lastSelectedPairLog = new Map();
+    this.relayUpgradeTimers = new Map();
+    this.lastClientActivity = new Map();
+    this.idleSweepTimer = setInterval(() => this.sweepIdlePeers(), 15_000);
     this.diagnostics = {
       wsState: "idle",
       wsUrl: "",
@@ -51,10 +242,24 @@ export class P2PBridge {
       clients: {}
     };
     this.diagnosticsListener = null;
-    this.channelNames = ["file", "thumb", "preview", "upload", "control"];
+    this.serverMessageListeners = new Set();
+    this.channelNames = Array.isArray(options.channelNames) && options.channelNames.length
+      ? [...options.channelNames]
+      : [...DEFAULT_CHANNEL_NAMES];
     this.disposed = false;
     this.debug = import.meta.env.VITE_P2P_DEBUG === "1";
     this.wsReconnectDelay = 2000;
+  }
+
+  buildRequestPayload(payload = {}, options = {}) {
+    const accessToken = options.accessToken || this.accessToken || "";
+    if (!accessToken) {
+      return payload;
+    }
+    return {
+      ...payload,
+      accessToken
+    };
   }
 
   getActiveClientOpCount(clientId) {
@@ -70,6 +275,38 @@ export class P2PBridge {
 
   hasActiveClientTransfer(clientId) {
     return this.getActiveClientOpCount(clientId) > 0 || this.isClientBusy(clientId);
+  }
+
+  markClientActivity(clientId) {
+    if (!clientId) {
+      return;
+    }
+    this.lastClientActivity.set(clientId, Date.now());
+  }
+
+  sweepIdlePeers() {
+    if (this.disposed) {
+      return;
+    }
+    const now = Date.now();
+    for (const [clientId, peer] of this.peers.entries()) {
+      if (!peer?.pc) {
+        continue;
+      }
+      if (this.isClientBusy(clientId) || this.pendingPeers.has(clientId)) {
+        continue;
+      }
+      const connState = peer.pc.connectionState;
+      if (connState === "closed" || connState === "failed") {
+        continue;
+      }
+      const lastActiveAt = this.lastClientActivity.get(clientId) || peer.createdAt || now;
+      if (now - lastActiveAt < PEER_IDLE_CLOSE_MS) {
+        continue;
+      }
+      this.updateClientDiagnostics(clientId, { lastError: `idle-close after ${Math.round(PEER_IDLE_CLOSE_MS / 1000)}s` });
+      this.closePeer(clientId, true);
+    }
   }
 
   waitAnyChannelOpen(channels) {
@@ -129,16 +366,16 @@ export class P2PBridge {
   }
   log(...args) {
     if (this.debug) {
-      console.log("[web-p2p]", ...args);
+      console.log(`[web-p2p:${this.name}]`, ...args);
     }
   }
 
   logInfo(...args) {
-    console.info("[web-p2p]", ...args);
+    console.info(`[web-p2p:${this.name}]`, ...args);
   }
 
   logWarn(...args) {
-    console.warn("[web-p2p]", ...args);
+    console.warn(`[web-p2p:${this.name}]`, ...args);
   }
 
   sleep(ms) {
@@ -152,6 +389,25 @@ export class P2PBridge {
   setDiagnosticsListener(listener) {
     this.diagnosticsListener = listener;
     this.emitDiagnostics();
+  }
+
+  addServerMessageListener(listener) {
+    if (typeof listener !== "function") {
+      return () => {};
+    }
+    this.serverMessageListeners.add(listener);
+    return () => {
+      this.serverMessageListeners.delete(listener);
+    };
+  }
+
+  emitServerMessage(message) {
+    for (const listener of this.serverMessageListeners) {
+      try {
+        listener(message);
+      } catch {
+      }
+    }
   }
 
   emitDiagnostics() {
@@ -190,11 +446,12 @@ export class P2PBridge {
       this.socket = null;
       this.socketReady = null;
     }
-    const socket = new WebSocket(toWsUrl(this.token));
-    this.log("ws-connect", toWsUrl(this.token));
+    const wsUrl = toWsUrl(this.token, { bridgeRole: this.role });
+    const socket = new WebSocket(wsUrl);
+    this.log("ws-connect", wsUrl);
     this.socket = socket;
     this.diagnostics.wsState = "connecting";
-    this.diagnostics.wsUrl = toWsUrl(this.token);
+    this.diagnostics.wsUrl = wsUrl;
     this.diagnostics.wsLastError = "";
     this.emitDiagnostics();
 
@@ -243,6 +500,7 @@ export class P2PBridge {
           return;
         }
         if (message.type !== "signal") {
+          this.emitServerMessage(message);
           return;
         }
         await this.handleSignal(message.fromId, message.payload);
@@ -274,6 +532,10 @@ export class P2PBridge {
 
   dispose() {
     this.disposed = true;
+    if (this.idleSweepTimer) {
+      clearInterval(this.idleSweepTimer);
+      this.idleSweepTimer = null;
+    }
     for (const clientId of [...this.peers.keys()]) {
       this.closePeer(clientId);
     }
@@ -331,6 +593,11 @@ export class P2PBridge {
     this.socket.send(JSON.stringify({ type: "signal", targetId, payload }));
   }
 
+  async sendServerMessage(message) {
+    await this.ensureSocketOpen();
+    this.socket.send(JSON.stringify(message));
+  }
+
   // soft=true: fire normal (retryable) errors to sibling ops so they can retry.
   // soft=false (default): fire intentionalClose so sibling ops abort immediately
   //   (used for true intentional closes: dispose, client-offline notification).
@@ -358,11 +625,20 @@ export class P2PBridge {
         }
       }
       this.stopKeepalive(clientId);
+      const relayUpgradeTimer = this.relayUpgradeTimers.get(clientId);
+      if (relayUpgradeTimer) {
+        clearTimeout(relayUpgradeTimer);
+        this.relayUpgradeTimers.delete(clientId);
+      }
+      this.routeSamples.delete(clientId);
+      this.lastSelectedPairLog.delete(clientId);
+      this.lastClientActivity.delete(clientId);
       this.updateClientDiagnostics(clientId, { iceState: "closed", route: "unknown" });
       return;
     }
 
     this.peers.delete(clientId);
+    this.lastClientActivity.delete(clientId);
 
     const timer = this.statsTimers.get(clientId);
     if (timer) {
@@ -390,6 +666,13 @@ export class P2PBridge {
       }
     }
     this.stopKeepalive(clientId);
+    const relayUpgradeTimer = this.relayUpgradeTimers.get(clientId);
+    if (relayUpgradeTimer) {
+      clearTimeout(relayUpgradeTimer);
+      this.relayUpgradeTimers.delete(clientId);
+    }
+    this.routeSamples.delete(clientId);
+    this.lastSelectedPairLog.delete(clientId);
     this.updateClientDiagnostics(clientId, { iceState: "closed", route: "unknown" });
   }
 
@@ -421,6 +704,8 @@ export class P2PBridge {
 
       const localType = localCandidate?.candidateType || "unknown";
       const remoteType = remoteCandidate?.candidateType || "unknown";
+      const localAddress = String(localCandidate?.address || localCandidate?.ip || "?").trim() || "?";
+      const remoteAddress = String(remoteCandidate?.address || remoteCandidate?.ip || "?").trim() || "?";
       const route = localType === "relay" || remoteType === "relay" ? "relay" : (localType === "unknown" ? "unknown" : "direct");
       const routeLabel = route === "direct"
         ? `direct(${localType}-${remoteType})`
@@ -441,18 +726,75 @@ export class P2PBridge {
         }
       }
       this.routeSamples.set(clientId, { timestamp, bytesSent, bytesReceived });
+      const selectedPairLabel = `${routeLabel}|${localAddress}|${remoteAddress}`;
+      if (selectedPairLabel !== this.lastSelectedPairLog.get(clientId)) {
+        this.lastSelectedPairLog.set(clientId, selectedPairLabel);
+        this.logInfo("selected-pair", clientId, routeLabel, `local=${localAddress}`, `remote=${remoteAddress}`);
+      }
       this.updateClientDiagnostics(clientId, {
         route,
         routeLabel,
         localCandidateType: localType,
         remoteCandidateType: remoteType,
+        localCandidateAddress: localAddress,
+        remoteCandidateAddress: remoteAddress,
         currentSendBps: sendBps,
         currentRecvBps: recvBps,
         totalBytesSent: bytesSent,
         totalBytesReceived: bytesReceived
       });
+      const livePeer = this.peers.get(clientId);
+      if (route === "relay") {
+        this.maybeScheduleRelayUpgrade(clientId, livePeer);
+      } else {
+        this.cancelRelayUpgrade(clientId);
+      }
     } catch {
     }
+  }
+
+  cancelRelayUpgrade(clientId) {
+    const timer = this.relayUpgradeTimers.get(clientId);
+    if (!timer) {
+      return;
+    }
+    clearTimeout(timer);
+    this.relayUpgradeTimers.delete(clientId);
+  }
+
+  maybeScheduleRelayUpgrade(clientId, peer) {
+    if (!peer?.initiator || peer.relayUpgradeAttempted || this.relayUpgradeTimers.has(clientId)) {
+      return;
+    }
+    if (String(peer.pc?.connectionState || "") !== "connected") {
+      return;
+    }
+    if (this.relayUpgradeDelayMs <= 0) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      this.relayUpgradeTimers.delete(clientId);
+      const livePeer = this.peers.get(clientId);
+      if (!livePeer?.pc || !livePeer.initiator || livePeer.relayUpgradeAttempted) {
+        return;
+      }
+      if (String(livePeer.pc.connectionState || "") !== "connected") {
+        return;
+      }
+      if (String(this.diagnostics.clients?.[clientId]?.route || "unknown") !== "relay") {
+        return;
+      }
+      if (this.hasActiveClientTransfer(clientId)) {
+        return;
+      }
+      if ((livePeer.restartAttempts || 0) >= 2) {
+        return;
+      }
+      livePeer.relayUpgradeAttempted = true;
+      this.logInfo("relay-upgrade-retry", clientId, `${this.relayUpgradeDelayMs}ms`);
+      this.restartIceAndOffer(clientId, livePeer).catch(() => {});
+    }, this.relayUpgradeDelayMs);
+    this.relayUpgradeTimers.set(clientId, timer);
   }
 
   startStatsTimer(clientId, pc) {
@@ -492,6 +834,8 @@ export class P2PBridge {
     const pc = peer.pc;
     let disconnectTimer = null;
     let restartTimer = null;
+    let delayedCandidates = [];
+    let delayedCandidateTimer = null;
 
     const armRestartTimer = () => {
       if (!peer.initiator || peer.restartAttempts >= 2) {
@@ -508,14 +852,66 @@ export class P2PBridge {
       }, 15000);
     };
 
+    const scheduleDelayedCandidateFlush = () => {
+      if (delayedCandidateTimer) {
+        clearTimeout(delayedCandidateTimer);
+        delayedCandidateTimer = null;
+      }
+      if (!delayedCandidates.length) {
+        return;
+      }
+      const nextReleaseAt = delayedCandidates.reduce((min, entry) => Math.min(min, entry.releaseAt), delayedCandidates[0].releaseAt);
+      delayedCandidateTimer = setTimeout(() => {
+        flushDelayedCandidates();
+      }, Math.max(0, nextReleaseAt - Date.now()));
+    };
+
+    const flushDelayedCandidates = (force = false) => {
+      if (delayedCandidateTimer) {
+        clearTimeout(delayedCandidateTimer);
+        delayedCandidateTimer = null;
+      }
+      const now = Date.now();
+      const pending = force
+        ? delayedCandidates
+        : delayedCandidates.filter((entry) => entry.releaseAt <= now);
+      delayedCandidates = force
+        ? []
+        : delayedCandidates.filter((entry) => entry.releaseAt > now);
+      for (const entry of pending) {
+        this.sendSignal(clientId, { kind: "ice", candidate: entry.candidate }).catch(() => {});
+      }
+      if (delayedCandidates.length) {
+        scheduleDelayedCandidateFlush();
+      }
+    };
+
+    const sendIceCandidate = (candidate) => {
+      const candidateType = extractCandidateType(candidate);
+      const candidateAddress = extractCandidateAddress(candidate);
+      if (candidateType === "host" && (isLoopbackCandidateAddress(candidateAddress) || isLinkLocalCandidateAddress(candidateAddress))) {
+        this.logInfo("ice-candidate-skip", clientId, candidateType, candidateAddress || "?");
+        return;
+      }
+      const candidateDelayMs = getCandidateSignalDelayMs(candidateType, this.candidateSignalDelayMs);
+      if (candidateDelayMs > 0) {
+        delayedCandidates.push({ candidate, releaseAt: Date.now() + candidateDelayMs });
+        scheduleDelayedCandidateFlush();
+        this.logInfo("ice-candidate-delay", clientId, candidateType, candidateAddress || "?", `${candidateDelayMs}ms`);
+        return;
+      }
+      this.sendSignal(clientId, { kind: "ice", candidate }).catch(() => {});
+    };
+
     pc.onicecandidate = (event) => {
       if (!event.candidate) {
         this.logInfo("ice-gathering-complete", clientId);
+        flushDelayedCandidates(true);
         return;
       }
       const c = event.candidate;
       this.logInfo("ice-candidate", clientId, c.type, c.protocol, c.address || c.ip || "?", c.port);
-      this.sendSignal(clientId, { kind: "ice", candidate: c }).catch(() => {});
+      sendIceCandidate(c);
     };
 
     pc.oniceconnectionstatechange = () => {
@@ -560,7 +956,6 @@ export class P2PBridge {
     };
 
     this.startStatsTimer(clientId, pc);
-    armRestartTimer();
   }
 
   async restartIceAndOffer(clientId, peer) {
@@ -576,7 +971,10 @@ export class P2PBridge {
   }
 
   initPeer(clientId, { initiator }) {
-    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
+    const pc = new RTCPeerConnection({
+      iceServers: this.iceServers,
+      iceCandidatePoolSize: this.iceCandidatePoolSize
+    });
     this.logInfo("peer-create", clientId, "iceServers:", this.iceServers.map((s) => s.urls).flat().join(","));
     const channels = {};
     const peer = {
@@ -585,10 +983,12 @@ export class P2PBridge {
       ready: Promise.resolve(),
       createdAt: Date.now(),
       initiator: Boolean(initiator),
-      restartAttempts: 0
+      restartAttempts: 0,
+      relayUpgradeAttempted: false
     };
     this.peers.set(clientId, peer);
     this.updateClientDiagnostics(clientId, { iceState: "connecting" });
+    this.markClientActivity(clientId);
     this.bindPeerEvents(clientId, peer);
 
     if (initiator) {
@@ -684,6 +1084,7 @@ export class P2PBridge {
 
   startKeepalive(clientId) {
     this.stopKeepalive(clientId);
+    this.markClientActivity(clientId);
     this.lastPongTime.set(clientId, Date.now());
     const timer = setInterval(() => {
       const peer = this.peers.get(clientId);
@@ -1009,6 +1410,7 @@ export class P2PBridge {
 
     channel.addEventListener("open", () => {
       this.logInfo("channel-open", clientId, channelName);
+      this.markClientActivity(clientId);
       this.startKeepalive(clientId);
     });
     channel.addEventListener("close", () => {
@@ -1059,6 +1461,8 @@ export class P2PBridge {
         return;
       }
 
+      this.markClientActivity(clientId);
+
       const op = this.currentOp.get(this.opKey(clientId, channelName));
       if (!op) {
         return;
@@ -1071,6 +1475,11 @@ export class P2PBridge {
       if (message.type === "file-end") op.onEnd?.(message);
       if (message.type === "put-file-ack") op.onAck?.(message);
       if (message.type === "put-file-finish") op.onFinish?.(message);
+      if (message.type === "chat-append-result") op.onChatAppendResult?.(message);
+      if (message.type === "bot-catalog-result") op.onBotCatalogResult?.(message);
+      if (message.type === "bot-job-accepted") op.onBotJobAccepted?.(message);
+      if (message.type === "bot-job-result") op.onBotJobResult?.(message);
+      if (message.type === "bot-job-cancelled") op.onBotJobCancelled?.(message);
       if (message.type === "put-file-cancelled") {
         const err = new Error("上传已取消");
         err.cancelled = true;
@@ -1078,6 +1487,10 @@ export class P2PBridge {
         op.onError?.(err);
       }
       if (message.type === "delete-file-result") op.onDeleteResult?.(message);
+      if (message.type === "rename-file-result") op.onRenameResult?.(message);
+      if (message.type === "delete-folder-result") op.onDeleteFolderResult?.(message);
+      if (message.type === "rename-folder-result") op.onRenameFolderResult?.(message);
+      if (message.type === "create-folder-result") op.onCreateFolderResult?.(message);
       if (message.type === "hls-manifest") op.onHlsManifest?.(message);
       if (message.type === "transcode-status") op.onProgress?.(message);
       if (message.type === "error") {
@@ -1124,6 +1537,7 @@ export class P2PBridge {
   }
 
   async downloadFile(clientId, relativePath, options = {}) {
+    this.markClientActivity(clientId);
     return this.enqueueTransferTask(clientId, async () => this.enqueueClientTask(clientId, "file", async () => this.withPeerRetry(clientId, async (peer) => {
       const { channel, opChannelName } = await this.getChannelForOp(peer, "file");
       const requestId = this.generateRequestId();
@@ -1179,12 +1593,13 @@ export class P2PBridge {
 
         this.currentOp.set(opKey, ctx);
         this.logInfo("op-send", "get-file", clientId, opChannelName, `ch=${channel.readyState}`, relativePath);
-        channel.send(JSON.stringify({ type: "get-file", path: relativePath, requestId }));
+        channel.send(JSON.stringify(this.buildRequestPayload({ type: "get-file", path: relativePath, requestId }, options)));
       });
     })));
   }
 
   async downloadFileStream(clientId, relativePath, options = {}) {
+    this.markClientActivity(clientId);
     const writable = options.writable;
     if (!writable) {
       throw new Error("writable stream required");
@@ -1293,12 +1708,13 @@ export class P2PBridge {
 
         this.currentOp.set(opKey, ctx);
         this.logInfo("op-send", "get-file", clientId, opChannelName, `ch=${channel.readyState}`, relativePath);
-        channel.send(JSON.stringify({ type: "get-file", path: relativePath, requestId }));
+        channel.send(JSON.stringify(this.buildRequestPayload({ type: "get-file", path: relativePath, requestId }, options)));
       });
     })));
   }
 
-  async thumbnailFile(clientId, relativePath) {
+  async thumbnailFile(clientId, relativePath, options = {}) {
+    this.markClientActivity(clientId);
     return this.enqueueClientTask(clientId, "thumb", async () => this.withPeerRetry(clientId, async (peer) => {
       const { channel, opChannelName } = await this.getChannelForOp(peer, "thumb");
       const requestId = this.generateRequestId();
@@ -1333,12 +1749,13 @@ export class P2PBridge {
 
         this.currentOp.set(opKey, ctx);
         this.logInfo("op-send", "get-thumbnail", clientId, opChannelName, `ch=${channel.readyState}`, relativePath);
-        channel.send(JSON.stringify({ type: "get-thumbnail", path: relativePath, requestId }));
+        channel.send(JSON.stringify(this.buildRequestPayload({ type: "get-thumbnail", path: relativePath, requestId }, options)));
       });
     }));
   }
 
-  async previewImageCompressed(clientId, relativePath) {
+  async previewImageCompressed(clientId, relativePath, options = {}) {
+    this.markClientActivity(clientId);
     return this.enqueueClientTask(clientId, "preview", async () => this.withPeerRetry(clientId, async (peer) => {
       const { channel, opChannelName } = await this.getChannelForOp(peer, "preview");
       const requestId = this.generateRequestId();
@@ -1373,12 +1790,13 @@ export class P2PBridge {
 
         this.currentOp.set(opKey, ctx);
         this.logInfo("op-send", "get-image-preview", clientId, opChannelName, `ch=${channel.readyState}`, relativePath);
-        channel.send(JSON.stringify({ type: "get-image-preview", path: relativePath, requestId }));
+        channel.send(JSON.stringify(this.buildRequestPayload({ type: "get-image-preview", path: relativePath, requestId }, options)));
       });
     }));
   }
 
   async getHlsManifest(clientId, relativePath, options = {}) {
+    this.markClientActivity(clientId);
     return this.enqueueClientTask(clientId, "preview", async () => this.withPeerRetry(clientId, async (peer) => {
       const { channel, opChannelName } = await this.getChannelForOp(peer, "preview");
       const requestId = this.generateRequestId();
@@ -1412,17 +1830,18 @@ export class P2PBridge {
         };
         this.currentOp.set(opKey, ctx);
         this.logInfo("op-send", "get-hls-manifest", clientId, opChannelName, `ch=${channel.readyState}`, relativePath);
-        channel.send(JSON.stringify({
+        channel.send(JSON.stringify(this.buildRequestPayload({
           type: "get-hls-manifest",
           path: relativePath,
           requestId,
           profile: options.profile || "720p"
-        }));
+        }, options)));
       });
     }));
   }
 
-  async getHlsSegment(clientId, hlsId, segmentName) {
+  async getHlsSegment(clientId, hlsId, segmentName, options = {}) {
+    this.markClientActivity(clientId);
     return this.enqueueClientTask(clientId, "preview", async () => this.withPeerRetry(clientId, async (peer) => {
       const { channel, opChannelName } = await this.getChannelForOp(peer, "preview");
       const requestId = this.generateRequestId();
@@ -1456,17 +1875,18 @@ export class P2PBridge {
         };
         this.currentOp.set(opKey, ctx);
         this.logInfo("op-send", "get-hls-segment", clientId, opChannelName, `ch=${channel.readyState}`, `${hlsId}/${segmentName}`);
-        channel.send(JSON.stringify({
+        channel.send(JSON.stringify(this.buildRequestPayload({
           type: "get-hls-segment",
           requestId,
           hlsId,
           segment: segmentName
-        }));
+        }, options)));
       });
     }));
   }
 
   async streamPreviewFile(clientId, relativePath, onReady, options = {}) {
+    this.markClientActivity(clientId);
     return this.enqueueClientTask(clientId, "preview", async () => this.withPeerRetry(clientId, async (peer) => {
       const { channel, opChannelName } = await this.getChannelForOp(peer, "preview");
       const requestId = this.generateRequestId();
@@ -1703,19 +2123,20 @@ export class P2PBridge {
         this.currentOp.set(opKey, streamCtx);
         this.logInfo("op-send", "get-file-stream", clientId, opChannelName, `ch=${channel.readyState}`, relativePath, options.transcode || "direct");
         channel.send(
-          JSON.stringify({
+          JSON.stringify(this.buildRequestPayload({
             type: "get-file-stream",
             path: relativePath,
             requestId,
             transcode: options.transcode || null,
             previewProfile: options.previewProfile || null
-          })
+          }, options))
         );
       });
     }));
   }
 
   async uploadFile(clientId, relativePath, file, options = {}) {
+    this.markClientActivity(clientId);
     const uploadKey = `${clientId}::${relativePath}`;
     return this.enqueueTransferTask(clientId, async () => this.enqueueClientTask(clientId, "upload", async () => this.withPeerRetry(clientId, async (peer) => {
       const { channel, opChannelName } = await this.getChannelForOp(peer, "upload");
@@ -1835,7 +2256,7 @@ export class P2PBridge {
         channel.send(JSON.stringify({
           type: "put-file-start",
           path: relativePath,
-          name: file.name,
+          name: options.uploadName || file.name,
           size: file.size,
           mimeType: file.type || "application/octet-stream",
           requestId
@@ -1891,6 +2312,7 @@ export class P2PBridge {
   }
 
   async deleteFile(clientId, relativePath) {
+    this.markClientActivity(clientId);
     return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
       const { channel, opChannelName } = await this.getChannelForOp(peer, "control");
       const requestId = this.generateRequestId();
@@ -1924,5 +2346,484 @@ export class P2PBridge {
         channel.send(JSON.stringify({ type: "delete-file", path: relativePath, requestId }));
       });
     }));
+  }
+
+  async renameFile(clientId, relativePath, nextRelativePath) {
+    this.markClientActivity(clientId);
+    return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
+      const { channel, opChannelName } = await this.getChannelForOp(peer, "control");
+      const requestId = this.generateRequestId();
+      this.log("op-start", "rename", clientId, `${relativePath} -> ${nextRelativePath}`, requestId);
+      return new Promise((resolve, reject) => {
+        const timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 60_000);
+        const opKey = this.opKey(clientId, opChannelName);
+        const ctx = {
+          requestId,
+          onRenameResult: (message) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            if (message.ok) {
+              this.log("op-done", "rename", clientId, requestId, nextRelativePath);
+              resolve({ ok: true, path: message.path || nextRelativePath });
+            } else {
+              reject(new Error(message.message || "rename failed"));
+            }
+          },
+          onError: (error) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            this.log("op-error", "rename", clientId, requestId, error?.message || error);
+            reject(error);
+          }
+        };
+        this.currentOp.set(opKey, ctx);
+        channel.send(JSON.stringify({ type: "rename-file", path: relativePath, nextPath: nextRelativePath, requestId }));
+      });
+    }));
+  }
+
+  async createFolder(clientId, relativePath) {
+    this.markClientActivity(clientId);
+    return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
+      const { channel, opChannelName } = await this.getChannelForOp(peer, "control");
+      const requestId = this.generateRequestId();
+      this.log("op-start", "create-folder", clientId, relativePath, requestId);
+      return new Promise((resolve, reject) => {
+        const timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 60_000);
+        const opKey = this.opKey(clientId, opChannelName);
+        const ctx = {
+          requestId,
+          onCreateFolderResult: (message) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            if (message.ok) {
+              this.log("op-done", "create-folder", clientId, requestId, message.path || relativePath);
+              resolve({ ok: true, path: message.path || relativePath });
+            } else {
+              reject(new Error(message.message || "create folder failed"));
+            }
+          },
+          onError: (error) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            this.log("op-error", "create-folder", clientId, requestId, error?.message || error);
+            reject(error);
+          }
+        };
+        this.currentOp.set(opKey, ctx);
+        channel.send(JSON.stringify({ type: "create-folder", path: relativePath, requestId }));
+      });
+    }));
+  }
+
+  async deleteFolder(clientId, relativePath) {
+    this.markClientActivity(clientId);
+    return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
+      const { channel, opChannelName } = await this.getChannelForOp(peer, "control");
+      const requestId = this.generateRequestId();
+      this.log("op-start", "delete-folder", clientId, relativePath, requestId);
+      return new Promise((resolve, reject) => {
+        const timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 60_000);
+        const opKey = this.opKey(clientId, opChannelName);
+        const ctx = {
+          requestId,
+          onDeleteFolderResult: (message) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            if (message.ok) {
+              this.log("op-done", "delete-folder", clientId, requestId, message.path || relativePath);
+              resolve({ ok: true, path: message.path || relativePath });
+            } else {
+              reject(new Error(message.message || "delete folder failed"));
+            }
+          },
+          onError: (error) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            this.log("op-error", "delete-folder", clientId, requestId, error?.message || error);
+            reject(error);
+          }
+        };
+        this.currentOp.set(opKey, ctx);
+        channel.send(JSON.stringify({ type: "delete-folder", path: relativePath, requestId }));
+      });
+    }));
+  }
+
+  async renameFolder(clientId, relativePath, nextRelativePath) {
+    this.markClientActivity(clientId);
+    return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
+      const { channel, opChannelName } = await this.getChannelForOp(peer, "control");
+      const requestId = this.generateRequestId();
+      this.log("op-start", "rename-folder", clientId, `${relativePath} -> ${nextRelativePath}`, requestId);
+      return new Promise((resolve, reject) => {
+        const timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 60_000);
+        const opKey = this.opKey(clientId, opChannelName);
+        const ctx = {
+          requestId,
+          onRenameFolderResult: (message) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            if (message.ok) {
+              this.log("op-done", "rename-folder", clientId, requestId, message.path || nextRelativePath);
+              resolve({ ok: true, path: message.path || nextRelativePath });
+            } else {
+              reject(new Error(message.message || "rename folder failed"));
+            }
+          },
+          onError: (error) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            this.log("op-error", "rename-folder", clientId, requestId, error?.message || error);
+            reject(error);
+          }
+        };
+        this.currentOp.set(opKey, ctx);
+        channel.send(JSON.stringify({ type: "rename-folder", path: relativePath, nextPath: nextRelativePath, requestId }));
+      });
+    }));
+  }
+
+  async appendChatMessage(clientId, relativePath, entry) {
+    this.markClientActivity(clientId);
+    return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
+      const { channel, opChannelName } = await this.getChannelForOp(peer, "control");
+      const requestId = this.generateRequestId();
+      this.log("op-start", "chat-append", clientId, relativePath, requestId);
+      return new Promise((resolve, reject) => {
+        const timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 60_000);
+        const opKey = this.opKey(clientId, opChannelName);
+        const ctx = {
+          requestId,
+          onChatAppendResult: (message) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            if (message.ok) {
+              this.log("op-done", "chat-append", clientId, requestId, relativePath);
+              resolve({ ok: true, path: message.path || relativePath });
+            } else {
+              reject(new Error(message.message || "chat append failed"));
+            }
+          },
+          onError: (error) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            this.log("op-error", "chat-append", clientId, requestId, error?.message || error);
+            reject(error);
+          }
+        };
+        this.currentOp.set(opKey, ctx);
+        channel.send(JSON.stringify({ type: "append-chat-message", path: relativePath, entry, requestId }));
+      });
+    }));
+  }
+
+  async getBotCatalog(clientId) {
+    this.markClientActivity(clientId);
+    return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
+      const { channel, opChannelName } = await this.getChannelForOp(peer, "control");
+      const requestId = this.generateRequestId();
+      return new Promise((resolve, reject) => {
+        const timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 30_000);
+        const opKey = this.opKey(clientId, opChannelName);
+        const ctx = {
+          requestId,
+          onBotCatalogResult: (message) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            resolve({ bots: Array.isArray(message.bots) ? message.bots : [] });
+          },
+          onError: (error) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            reject(error);
+          }
+        };
+        this.currentOp.set(opKey, ctx);
+        channel.send(JSON.stringify({ type: "get-bot-catalog", requestId }));
+      });
+    }));
+  }
+
+  async invokeBot(clientId, payload = {}) {
+    this.markClientActivity(clientId);
+    return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
+      const { channel, opChannelName } = await this.getChannelForOp(peer, "control");
+      const requestId = this.generateRequestId();
+      return new Promise((resolve, reject) => {
+        const timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 60_000);
+        const opKey = this.opKey(clientId, opChannelName);
+        const ctx = {
+          requestId,
+          onBotJobAccepted: (message) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            resolve({ job: message.job || null });
+          },
+          onError: (error) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            reject(error);
+          }
+        };
+        this.currentOp.set(opKey, ctx);
+        channel.send(JSON.stringify({
+          type: "invoke-bot",
+          requestId,
+          ...payload
+        }));
+      });
+    }));
+  }
+
+  async getBotJob(clientId, jobId) {
+    this.markClientActivity(clientId);
+    return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
+      const { channel, opChannelName } = await this.getChannelForOp(peer, "control");
+      const requestId = this.generateRequestId();
+      return new Promise((resolve, reject) => {
+        const timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 30_000);
+        const opKey = this.opKey(clientId, opChannelName);
+        const ctx = {
+          requestId,
+          onBotJobResult: (message) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            resolve({ job: message.job || null });
+          },
+          onError: (error) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            reject(error);
+          }
+        };
+        this.currentOp.set(opKey, ctx);
+        channel.send(JSON.stringify({ type: "get-bot-job", requestId, jobId }));
+      });
+    }));
+  }
+
+  async cancelBotJob(clientId, jobId) {
+    this.markClientActivity(clientId);
+    return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
+      const { channel, opChannelName } = await this.getChannelForOp(peer, "control");
+      const requestId = this.generateRequestId();
+      return new Promise((resolve, reject) => {
+        const timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 30_000);
+        const opKey = this.opKey(clientId, opChannelName);
+        const ctx = {
+          requestId,
+          onBotJobCancelled: (message) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            resolve({ jobId: message.jobId || jobId, status: message.status || "cancelled" });
+          },
+          onError: (error) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            reject(error);
+          }
+        };
+        this.currentOp.set(opKey, ctx);
+        channel.send(JSON.stringify({ type: "cancel-bot-job", requestId, jobId }));
+      });
+    }));
+  }
+}
+
+export class P2PBridgePool {
+  constructor(token, options = {}) {
+    this.token = token;
+    this.accessToken = options.accessToken || "";
+    this.diagnosticsListener = null;
+    this.roleSnapshots = Object.fromEntries(PEER_ROLE_ORDER.map((role) => [role, createEmptyDiagnostics()]));
+    this.bridges = new Map(
+      PEER_ROLE_ORDER.map((role) => {
+        const config = PEER_ROLE_CONFIG[role];
+        const bridge = new P2PBridge(token, {
+          role,
+          name: config.name,
+          channelNames: config.channelNames,
+          accessToken: this.accessToken
+        });
+        bridge.setDiagnosticsListener((snapshot) => {
+          this.roleSnapshots[role] = snapshot;
+          this.emitDiagnostics();
+        });
+        return [role, bridge];
+      })
+    );
+  }
+
+  getBridge(roleOrChannel) {
+    return this.bridges.get(resolvePeerRole(roleOrChannel)) || this.bridges.get("control");
+  }
+
+  setDiagnosticsListener(listener) {
+    this.diagnosticsListener = listener;
+    this.emitDiagnostics();
+  }
+
+  onServerMessage(listener) {
+    return this.getBridge("control").addServerMessageListener(listener);
+  }
+
+  emitDiagnostics() {
+    if (typeof this.diagnosticsListener !== "function") {
+      return;
+    }
+    this.diagnosticsListener(mergeDiagnosticsSnapshots(this.roleSnapshots));
+  }
+
+  connect() {
+    for (const bridge of this.bridges.values()) {
+      bridge.connect();
+    }
+  }
+
+  dispose() {
+    this.diagnosticsListener = null;
+    for (const [role, bridge] of this.bridges.entries()) {
+      bridge.setDiagnosticsListener(null);
+      bridge.dispose();
+      this.roleSnapshots[role] = createEmptyDiagnostics();
+    }
+  }
+
+  async ensureSocketOpen(role) {
+    if (role) {
+      return this.getBridge(role).ensureSocketOpen();
+    }
+    await Promise.all([...this.bridges.values()].map((bridge) => bridge.ensureSocketOpen()));
+  }
+
+  isSocketOpen(role) {
+    if (role) {
+      return this.getBridge(role).isSocketOpen();
+    }
+    return [...this.bridges.values()].every((bridge) => bridge.isSocketOpen());
+  }
+
+  connectToPeer(clientId, role) {
+    if (role) {
+      return this.getBridge(role).connectToPeer(clientId);
+    }
+    return Promise.all(PEER_ROLE_ORDER.map((peerRole) => this.getBridge(peerRole).connectToPeer(clientId)));
+  }
+
+  closePeer(clientId, soft = false, role) {
+    if (role) {
+      this.getBridge(role).closePeer(clientId, soft);
+      return;
+    }
+    for (const bridge of this.bridges.values()) {
+      bridge.closePeer(clientId, soft);
+    }
+  }
+
+  isPeerConnected(clientId, role) {
+    if (role) {
+      return this.getBridge(role).isPeerConnected(clientId);
+    }
+    return PEER_ROLE_ORDER.every((peerRole) => this.getBridge(peerRole).isPeerConnected(clientId));
+  }
+
+  isClientBusy(clientId, role) {
+    if (role) {
+      return this.getBridge(role).isClientBusy(clientId);
+    }
+    return [...this.bridges.values()].some((bridge) => bridge.isClientBusy(clientId));
+  }
+
+  cancelOperation(clientId, channelName, requestId = "") {
+    return this.getBridge(channelName).cancelOperation(clientId, channelName, requestId);
+  }
+
+  cancelClientChannel(clientId, channelName) {
+    this.getBridge(channelName).cancelClientChannel(clientId, channelName);
+  }
+
+  downloadFile(clientId, relativePath, options = {}) {
+    return this.getBridge("download").downloadFile(clientId, relativePath, options);
+  }
+
+  createFolder(clientId, relativePath) {
+    return this.getBridge("control").createFolder(clientId, relativePath);
+  }
+
+  deleteFolder(clientId, relativePath) {
+    return this.getBridge("control").deleteFolder(clientId, relativePath);
+  }
+
+  renameFolder(clientId, relativePath, nextRelativePath) {
+    return this.getBridge("control").renameFolder(clientId, relativePath, nextRelativePath);
+  }
+
+  downloadFileStream(clientId, relativePath, options = {}) {
+    return this.getBridge("download").downloadFileStream(clientId, relativePath, options);
+  }
+
+  thumbnailFile(clientId, relativePath, options = {}) {
+    return this.getBridge("preview").thumbnailFile(clientId, relativePath, options);
+  }
+
+  previewImageCompressed(clientId, relativePath, options = {}) {
+    return this.getBridge("preview").previewImageCompressed(clientId, relativePath, options);
+  }
+
+  getHlsManifest(clientId, relativePath, options = {}) {
+    return this.getBridge("preview").getHlsManifest(clientId, relativePath, options);
+  }
+
+  getHlsSegment(clientId, hlsId, segmentName, options = {}) {
+    return this.getBridge("preview").getHlsSegment(clientId, hlsId, segmentName, options);
+  }
+
+  streamPreviewFile(clientId, relativePath, onReady, options = {}) {
+    return this.getBridge("preview").streamPreviewFile(clientId, relativePath, onReady, options);
+  }
+
+  uploadFile(clientId, relativePath, file, options = {}) {
+    return this.getBridge("upload").uploadFile(clientId, relativePath, file, options);
+  }
+
+  cancelUpload(clientId, relativePath) {
+    return this.getBridge("upload").cancelUpload(clientId, relativePath);
+  }
+
+  cancelAllUploads(clientId) {
+    return this.getBridge("upload").cancelAllUploads(clientId);
+  }
+
+  deleteFile(clientId, relativePath) {
+    return this.getBridge("control").deleteFile(clientId, relativePath);
+  }
+
+  renameFile(clientId, relativePath, nextRelativePath) {
+    return this.getBridge("control").renameFile(clientId, relativePath, nextRelativePath);
+  }
+
+  appendChatMessage(clientId, relativePath, entry) {
+    return this.getBridge("control").appendChatMessage(clientId, relativePath, entry);
+  }
+
+  getBotCatalog(clientId) {
+    return this.getBridge("control").getBotCatalog(clientId);
+  }
+
+  invokeBot(clientId, payload = {}) {
+    return this.getBridge("control").invokeBot(clientId, payload);
+  }
+
+  getBotJob(clientId, jobId) {
+    return this.getBridge("control").getBotJob(clientId, jobId);
+  }
+
+  cancelBotJob(clientId, jobId) {
+    return this.getBridge("control").cancelBotJob(clientId, jobId);
+  }
+
+  sendServerMessage(message) {
+    return this.getBridge("control").sendServerMessage(message);
   }
 }

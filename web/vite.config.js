@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import path from "node:path";
 
 const proxyTarget =
   process.env.VITE_DEV_PROXY_TARGET ||
@@ -15,6 +16,10 @@ export default defineConfig({
   build: {
     chunkSizeWarningLimit: 600,
     rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, "index.html"),
+        share: path.resolve(__dirname, "share.html")
+      },
       output: {
         manualChunks(id) {
           if (id.includes("hls.js")) {

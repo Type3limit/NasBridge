@@ -2,6 +2,7 @@ import jwt from "jsonwebtoken";
 
 const USER_TOKEN_EXPIRES_IN = "7d";
 const CLIENT_TOKEN_EXPIRES_IN = "14d";
+const SHARE_TOKEN_EXPIRES_IN = "7d";
 
 export function signUserToken(user) {
   return jwt.sign(
@@ -27,6 +28,26 @@ export function signClientToken(client) {
     },
     process.env.JWT_SECRET,
     { expiresIn: CLIENT_TOKEN_EXPIRES_IN }
+  );
+}
+
+export function signShareToken(share, file, options = {}) {
+  const expiresIn = options.expiresIn || SHARE_TOKEN_EXPIRES_IN;
+  return jwt.sign(
+    {
+      sub: share.id,
+      role: "share",
+      type: "share",
+      shareId: share.id,
+      fileId: file.id,
+      clientId: file.clientId,
+      path: file.path,
+      fileName: file.name,
+      mimeType: file.mimeType || "application/octet-stream",
+      permissions: ["preview", "download"]
+    },
+    process.env.JWT_SECRET,
+    { expiresIn }
   );
 }
 

@@ -10,16 +10,20 @@ import {
   createUser,
   ensureAdmin,
   getUserByEmail,
+  getUserById,
   listUsers,
   registerClient,
   listClients,
   touchClient,
   setClientStatus,
   replaceClientFiles,
+  replaceClientDirectories,
   listFiles,
+  listDirectories,
   listColumns,
   createColumn,
   upsertFileMeta,
+  moveFileMeta,
   getFileMetaMap,
   listFavoritesByUser,
   toggleFavorite,
@@ -28,21 +32,244 @@ import {
   updateUploadJobProgress,
   finishUploadJob,
   failUploadJob,
-  finalizeStaleUploadingJobs
+  finalizeStaleUploadingJobs,
+  createFileShare,
+  getFileShareById,
+  incrementShareAccessCount,
+  listFileShares,
+  revokeFileShare,
+  deleteFileShare,
+  getFileById,
+  updateUserProfile,
+  listFileComments,
+  getFileCommentById,
+  createFileComment,
+  setCommentReaction,
+  listFileDanmaku,
+  createFileDanmaku
 } from "./db.js";
-import { signUserToken, signClientToken } from "./auth.js";
+import { signUserToken, signClientToken, signShareToken } from "./auth.js";
 import { requireAuth, requireRole } from "./middleware.js";
 import { initWsHub } from "./wsHub.js";
 
 const app = express();
 const server = http.createServer(app);
-initWsHub(server);
+const wsHub = initWsHub(server);
 const serverDebug = process.env.SERVER_DEBUG === "1";
+
+function trimTrailingSlash(value = "") {
+  return String(value || "").replace(/\/+$/, "");
+}
+
+function isLoopbackHost(hostname = "") {
+  const host = String(hostname || "").toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+function resolveShareWebOrigin(req) {
+  const configuredOrigins = String(process.env.SHARE_WEB_ORIGIN || process.env.PUBLIC_WEB_ORIGIN || process.env.WEB_ORIGIN || "")
+    .split(",")
+    .map((item) => trimTrailingSlash(item.trim()))
+    .filter(Boolean);
+  const preferredConfigured = configuredOrigins.find((item) => {
+    try {
+      return !isLoopbackHost(new URL(item).hostname);
+    } catch {
+      return false;
+    }
+  }) || configuredOrigins[0];
+  const originHeader = trimTrailingSlash(req.get("origin") || "");
+  const forwardedProto = String(req.get("x-forwarded-proto") || "").split(",")[0].trim();
+  const forwardedHost = String(req.get("x-forwarded-host") || "").split(",")[0].trim();
+  const host = forwardedHost || req.get("host") || "localhost:5173";
+  const protocol = forwardedProto || req.protocol || "http";
+  const requestOrigin = originHeader || `${protocol}://${host}`;
+  let requestIsExternal = false;
+  try {
+    requestIsExternal = !isLoopbackHost(new URL(requestOrigin).hostname);
+  } catch {
+  }
+
+  if (preferredConfigured) {
+    try {
+      const configuredIsLoopback = isLoopbackHost(new URL(preferredConfigured).hostname);
+      if (configuredIsLoopback && requestIsExternal) {
+        return requestOrigin;
+      }
+    } catch {
+    }
+    return preferredConfigured;
+  }
+
+  return requestOrigin;
+}
+
+function getShareStatus(share) {
+  if (!share) {
+    return "missing";
+  }
+  if (share.revokedAt) {
+    return "revoked";
+  }
+  if (share.expiresAt && new Date(share.expiresAt).getTime() <= Date.now()) {
+    return "expired";
+  }
+  return "active";
+}
+
+function enrichShareRecord(share, req) {
+  if (!share) {
+    return null;
+  }
+  const file = getFileById(share.fileId);
+  const shareOrigin = resolveShareWebOrigin(req);
+  return {
+    ...share,
+    status: getShareStatus(share),
+    shareUrl: `${trimTrailingSlash(shareOrigin)}/share.html?share=${encodeURIComponent(share.id)}`,
+    file: file
+      ? {
+          id: file.id,
+          clientId: file.clientId,
+          path: file.path,
+          name: file.name,
+          size: Number(file.size || 0),
+          mimeType: file.mimeType || "application/octet-stream",
+          updatedAt: file.updatedAt
+        }
+      : share.fileName || share.filePath || share.clientId
+        ? {
+            id: share.fileId,
+            clientId: share.clientId || "",
+            path: share.filePath || "",
+            name: share.fileName || path.basename(share.filePath || share.fileId || "") || "文件已移除",
+            size: 0,
+            mimeType: "application/octet-stream",
+            updatedAt: ""
+          }
+        : null
+  };
+}
 
 function serverLog(...args) {
   if (serverDebug) {
     console.log("[server]", ...args);
   }
+}
+
+function sanitizeAvatarResponse(user) {
+  const rawAvatarUrl = String(user?.avatarUrl || "");
+  const isInlineAvatar = /^data:/i.test(rawAvatarUrl);
+  return {
+    avatarUrl: isInlineAvatar ? "" : rawAvatarUrl,
+    avatarClientId: user?.avatarClientId || "",
+    avatarPath: user?.avatarPath || "",
+    avatarFileId: user?.avatarFileId || ""
+  };
+}
+
+function serializeUser(user) {
+  if (!user) {
+    return null;
+  }
+  const avatar = sanitizeAvatarResponse(user);
+  return {
+    id: user.id,
+    email: user.email,
+    displayName: user.displayName,
+    role: user.role,
+    avatarUrl: avatar.avatarUrl,
+    avatarClientId: avatar.avatarClientId,
+    avatarPath: avatar.avatarPath,
+    avatarFileId: avatar.avatarFileId,
+    bio: user.bio || "",
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt || user.createdAt
+  };
+}
+
+function sanitizeProfilePatch(body = {}) {
+  const displayName = String(body.displayName || "").trim();
+  const email = String(body.email || "").trim().toLowerCase();
+  const avatarUrl = String(body.avatarUrl || "").trim();
+  const bio = String(body.bio || "").trim();
+  return {
+    displayName: displayName.slice(0, 48),
+    email: email.slice(0, 160),
+    avatarUrl: avatarUrl.slice(0, 8_000_000),
+    avatarClientId: String(body.avatarClientId || "").trim().slice(0, 120),
+    avatarPath: String(body.avatarPath || "").trim().slice(0, 400),
+    avatarFileId: String(body.avatarFileId || "").trim().slice(0, 400),
+    bio: bio.slice(0, 240)
+  };
+}
+
+function buildCommentTree(comments, currentUserId) {
+  const nodes = comments.map((item) => {
+    const reactions = Array.isArray(item.reactions) ? item.reactions : [];
+    const likes = reactions.filter((entry) => entry.value === 1).length;
+    const dislikes = reactions.filter((entry) => entry.value === -1).length;
+    const currentUserReaction = reactions.find((entry) => entry.userId === currentUserId)?.value || 0;
+    const rawAvatarUrl = String(item.createdByAvatarUrl || "");
+    const isInlineAvatar = /^data:/i.test(rawAvatarUrl);
+    return {
+      id: item.id,
+      fileId: item.fileId,
+      parentId: item.parentId || null,
+      content: item.content,
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+      author: {
+        id: item.createdByUserId,
+        displayName: item.createdByDisplayName || "匿名用户",
+        avatarUrl: isInlineAvatar ? "" : rawAvatarUrl,
+        avatarClientId: item.createdByAvatarClientId || "",
+        avatarPath: item.createdByAvatarPath || "",
+        avatarFileId: item.createdByAvatarFileId || ""
+      },
+      reactions: {
+        likes,
+        dislikes,
+        currentUserReaction
+      },
+      replies: []
+    };
+  });
+  const map = new Map(nodes.map((item) => [item.id, item]));
+  const roots = [];
+  for (const node of nodes) {
+    if (node.parentId && map.has(node.parentId)) {
+      map.get(node.parentId).replies.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+  return roots;
+}
+
+function serializeDanmakuItems(items = []) {
+  return items.map((item) => {
+    const rawAvatarUrl = String(item.createdByAvatarUrl || "");
+    const isInlineAvatar = /^data:/i.test(rawAvatarUrl);
+    return {
+      id: item.id,
+      fileId: item.fileId,
+      content: item.content,
+      timeSec: Math.max(0, Number(item.timeSec || 0)),
+      color: item.color || "#FFFFFF",
+      mode: item.mode || "scroll",
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+      author: {
+        id: item.createdByUserId,
+        displayName: item.createdByDisplayName || "匿名用户",
+        avatarUrl: isInlineAvatar ? "" : rawAvatarUrl,
+        avatarClientId: item.createdByAvatarClientId || "",
+        avatarPath: item.createdByAvatarPath || "",
+        avatarFileId: item.createdByAvatarFileId || ""
+      }
+    };
+  });
 }
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -81,7 +308,7 @@ app.post("/api/auth/register", async (req, res) => {
   const passwordHash = await bcrypt.hash(password, 10);
   const user = createUser({ email, passwordHash, displayName });
   const token = signUserToken(user);
-  return res.json({ token, user: { id: user.id, email: user.email, displayName: user.displayName, role: user.role } });
+  return res.json({ token, user: serializeUser(user) });
 });
 
 app.post("/api/auth/login", async (req, res) => {
@@ -95,16 +322,152 @@ app.post("/api/auth/login", async (req, res) => {
     return res.status(401).json({ message: "invalid credentials" });
   }
   const token = signUserToken(user);
-  return res.json({ token, user: { id: user.id, email: user.email, displayName: user.displayName, role: user.role } });
+  return res.json({ token, user: serializeUser(user) });
 });
 
 app.get("/api/me", requireAuth, (req, res) => {
+  const user = getUserById(req.auth.sub);
+  if (!user) {
+    return res.status(404).json({ message: "user not found" });
+  }
   const favorites = listFavoritesByUser(req.auth.sub);
-  return res.json({ profile: req.auth, favorites });
+  return res.json({ profile: serializeUser(user), favorites });
+});
+
+app.patch("/api/me", requireAuth, (req, res) => {
+  const currentUser = getUserById(req.auth.sub);
+  if (!currentUser) {
+    return res.status(404).json({ message: "user not found" });
+  }
+  const patch = sanitizeProfilePatch(req.body || {});
+  if (!patch.displayName || !patch.email) {
+    return res.status(400).json({ message: "displayName and email are required" });
+  }
+  const existing = getUserByEmail(patch.email);
+  if (existing && existing.id !== currentUser.id) {
+    return res.status(409).json({ message: "email already exists" });
+  }
+  const updated = updateUserProfile(currentUser.id, patch);
+  const token = signUserToken(updated);
+  return res.json({ token, user: serializeUser(updated) });
+});
+
+app.get("/api/file-comments", requireAuth, (req, res) => {
+  const fileId = String(req.query.fileId || "").trim();
+  if (!fileId) {
+    return res.status(400).json({ message: "fileId is required" });
+  }
+  const file = getFileById(fileId);
+  if (!file) {
+    return res.status(404).json({ message: "file not found" });
+  }
+  const comments = buildCommentTree(listFileComments(fileId), req.auth.sub);
+  return res.json({ comments });
+});
+
+app.post("/api/file-comments", requireAuth, (req, res) => {
+  const fileId = String(req.body?.fileId || "").trim();
+  const parentId = String(req.body?.parentId || "").trim() || null;
+  const content = String(req.body?.content || "").trim();
+  if (!fileId || !content) {
+    return res.status(400).json({ message: "fileId and content are required" });
+  }
+  const file = getFileById(fileId);
+  if (!file) {
+    return res.status(404).json({ message: "file not found" });
+  }
+  if (parentId) {
+    const parent = getFileCommentById(parentId);
+    if (!parent || parent.fileId !== fileId) {
+      return res.status(400).json({ message: "invalid parent comment" });
+    }
+  }
+  const user = getUserById(req.auth.sub);
+  const created = createFileComment({
+    fileId,
+    parentId,
+    content: content.slice(0, 1200),
+    createdByUserId: req.auth.sub,
+    createdByDisplayName: user?.displayName || req.auth.displayName,
+    createdByAvatarUrl: user?.avatarUrl || "",
+    createdByAvatarClientId: user?.avatarClientId || "",
+    createdByAvatarPath: user?.avatarPath || "",
+    createdByAvatarFileId: user?.avatarFileId || ""
+  });
+  return res.json({
+    comment: buildCommentTree([created], req.auth.sub)[0],
+    comments: buildCommentTree(listFileComments(fileId), req.auth.sub)
+  });
+});
+
+app.post("/api/file-comments/:commentId/reaction", requireAuth, (req, res) => {
+  const comment = getFileCommentById(req.params.commentId);
+  if (!comment) {
+    return res.status(404).json({ message: "comment not found" });
+  }
+  const rawValue = Number(req.body?.value || 0);
+  const value = rawValue === 1 || rawValue === -1 ? rawValue : 0;
+  setCommentReaction(comment.id, req.auth.sub, value);
+  return res.json({ comments: buildCommentTree(listFileComments(comment.fileId), req.auth.sub) });
+});
+
+app.get("/api/file-danmaku", requireAuth, (req, res) => {
+  const fileId = String(req.query.fileId || "").trim();
+  if (!fileId) {
+    return res.status(400).json({ message: "fileId is required" });
+  }
+  const file = getFileById(fileId);
+  if (!file) {
+    return res.status(404).json({ message: "file not found" });
+  }
+  return res.json({ danmaku: serializeDanmakuItems(listFileDanmaku(fileId)) });
+});
+
+app.post("/api/file-danmaku", requireAuth, (req, res) => {
+  const fileId = String(req.body?.fileId || "").trim();
+  const content = String(req.body?.content || "").trim();
+  const timeSec = Math.max(0, Number(req.body?.timeSec || 0));
+  const color = /^#([0-9a-f]{6})$/i.test(String(req.body?.color || "").trim())
+    ? String(req.body.color).trim().toUpperCase()
+    : "#FFFFFF";
+  const mode = ["scroll", "top", "bottom"].includes(String(req.body?.mode || "").trim())
+    ? String(req.body.mode).trim()
+    : "scroll";
+  if (!fileId || !content) {
+    return res.status(400).json({ message: "fileId and content are required" });
+  }
+  const file = getFileById(fileId);
+  if (!file) {
+    return res.status(404).json({ message: "file not found" });
+  }
+  const user = getUserById(req.auth.sub);
+  const created = createFileDanmaku({
+    fileId,
+    content: content.slice(0, 120),
+    timeSec,
+    color,
+    mode,
+    createdByUserId: req.auth.sub,
+    createdByDisplayName: user?.displayName || req.auth.displayName,
+    createdByAvatarUrl: user?.avatarUrl || "",
+    createdByAvatarClientId: user?.avatarClientId || "",
+    createdByAvatarPath: user?.avatarPath || "",
+    createdByAvatarFileId: user?.avatarFileId || ""
+  });
+  const serializedItem = serializeDanmakuItems([created])[0];
+  wsHub.broadcastToAppUsers({
+    type: "file-danmaku-created",
+    payload: serializedItem
+  });
+  return res.json({
+    item: serializedItem,
+    danmaku: serializeDanmakuItems(listFileDanmaku(fileId))
+  });
 });
 
 app.get("/api/files", requireAuth, (req, res) => {
   const files = listFiles();
+  const directories = listDirectories();
   const favorites = new Set(listFavoritesByUser(req.auth.sub));
   const metaMap = getFileMetaMap();
   const enriched = files.map((file) => {
@@ -113,10 +476,40 @@ app.get("/api/files", requireAuth, (req, res) => {
       ...file,
       favorite: favorites.has(file.id),
       columnId: meta.columnId || "",
-      folderPath: meta.folderPath || ""
+      folderPath: meta.folderPath || "",
+      mimeType: meta.mimeType || file.mimeType,
+      originalMimeType: file.mimeType
     };
   });
-  return res.json({ files: enriched });
+  return res.json({ files: enriched, directories });
+});
+
+app.post("/api/files/update", requireAuth, (req, res) => {
+  const {
+    clientId,
+    oldRelativePath,
+    newRelativePath,
+    columnId,
+    folderPath,
+    mimeType
+  } = req.body || {};
+  if (!clientId || !oldRelativePath) {
+    return res.status(400).json({ message: "clientId/oldRelativePath required" });
+  }
+
+  const oldFileId = `${clientId}:${oldRelativePath}`;
+  const nextRelativePath = newRelativePath || oldRelativePath;
+  const newFileId = `${clientId}:${nextRelativePath}`;
+  const patch = {
+    columnId: columnId || "",
+    folderPath: folderPath || "",
+    mimeType: mimeType || ""
+  };
+
+  const meta = nextRelativePath !== oldRelativePath
+    ? moveFileMeta(oldFileId, newFileId, patch)
+    : upsertFileMeta(oldFileId, patch);
+  return res.json({ ok: true, fileId: newFileId, meta });
 });
 
 app.get("/api/columns", requireAuth, (req, res) => {
@@ -145,6 +538,106 @@ app.get("/api/clients", requireAuth, (_, res) => {
 app.post("/api/favorites/:fileId", requireAuth, (req, res) => {
   const favorite = toggleFavorite({ userId: req.auth.sub, fileId: req.params.fileId });
   return res.json({ favorite });
+});
+
+app.post("/api/files/:fileId/share", requireAuth, (req, res) => {
+  const { fileId } = req.params;
+  const { expiresInDays } = req.body || {};
+  const file = getFileById(fileId);
+  if (!file) {
+    return res.status(404).json({ message: "file not found" });
+  }
+  const share = createFileShare({
+    fileId,
+    fileName: file.name,
+    filePath: file.path,
+    clientId: file.clientId,
+    createdByUserId: req.auth.sub,
+    createdByDisplayName: req.auth.displayName,
+    expiresInDays: expiresInDays || null
+  });
+  const shareOrigin = resolveShareWebOrigin(req);
+  const shareUrl = `${trimTrailingSlash(shareOrigin)}/share.html?share=${encodeURIComponent(share.id)}`;
+  serverLog("file-share-create", req.reqId, share.id, fileId);
+  return res.json({ share: enrichShareRecord(share, req), shareUrl });
+});
+
+app.get("/api/shares", requireAuth, (req, res) => {
+  const items = listFileShares()
+    .filter((item) => req.auth.role === "admin" || item.createdByUserId === req.auth.sub)
+    .sort((left, right) => (right.createdAt || "").localeCompare(left.createdAt || ""))
+    .map((item) => enrichShareRecord(item, req));
+  return res.json({ shares: items });
+});
+
+app.post("/api/shares/:shareId/revoke", requireAuth, (req, res) => {
+  const share = listFileShares().find((item) => item.id === req.params.shareId);
+  if (!share) {
+    return res.status(404).json({ message: "share not found" });
+  }
+  if (req.auth.role !== "admin" && share.createdByUserId !== req.auth.sub) {
+    return res.status(403).json({ message: "forbidden" });
+  }
+  const revoked = revokeFileShare(req.params.shareId, req.auth.sub);
+  return res.json({ share: enrichShareRecord(revoked, req) });
+});
+
+app.delete("/api/shares/:shareId", requireAuth, (req, res) => {
+  const share = listFileShares().find((item) => item.id === req.params.shareId);
+  if (!share) {
+    return res.status(404).json({ message: "share not found" });
+  }
+  if (req.auth.role !== "admin" && share.createdByUserId !== req.auth.sub) {
+    return res.status(403).json({ message: "forbidden" });
+  }
+  const deleted = deleteFileShare(req.params.shareId);
+  return res.json({ share: deleted, ok: true });
+});
+
+app.get("/api/share/:shareId", (req, res) => {
+  const { shareId } = req.params;
+  const share = getFileShareById(shareId);
+  if (!share) {
+    return res.status(404).json({ message: "share not found or expired" });
+  }
+  const file = getFileById(share.fileId);
+  if (!file) {
+    return res.status(404).json({ message: "file not found" });
+  }
+  const incremented = incrementShareAccessCount(shareId);
+  const metaMap = getFileMetaMap();
+  const meta = metaMap.get(file.id) || {};
+  const shareToken = signShareToken(share, {
+    ...file,
+    mimeType: meta.mimeType || file.mimeType
+  });
+  const client = listClients().find((item) => item.id === file.clientId) || null;
+  const enrichedFile = {
+    ...file,
+    columnId: meta.columnId || "",
+    folderPath: meta.folderPath || "",
+    mimeType: meta.mimeType || file.mimeType,
+    originalMimeType: file.mimeType
+  };
+  serverLog("file-share-access", shareId, file.id, `accessCount=${incremented?.accessCount || 1}`);
+  return res.json({
+    file: enrichedFile,
+    share: {
+      ...share,
+      status: getShareStatus(share),
+      shareUrl: `${trimTrailingSlash(resolveShareWebOrigin(req))}/share.html?share=${encodeURIComponent(share.id)}`,
+      accessCount: incremented?.accessCount ?? share.accessCount ?? 0
+    },
+    shareToken,
+    client: client
+      ? {
+          id: client.id,
+          name: client.name,
+          status: client.status,
+          lastHeartbeatAt: client.lastHeartbeatAt
+        }
+      : null
+  });
 });
 
 app.post("/api/upload/prepare", requireAuth, (req, res) => {
@@ -246,6 +739,8 @@ app.post("/api/client/heartbeat", requireAuth, requireRole("client"), (req, res)
 
 app.post("/api/client/filesync", requireAuth, requireRole("client"), (req, res) => {
   const files = Array.isArray(req.body.files) ? req.body.files : [];
+  const directories = Array.isArray(req.body.directories) ? req.body.directories : [];
+  const now = new Date().toISOString();
   const sanitized = files
     .filter((item) => item.path)
     .map((item) => ({
@@ -253,20 +748,26 @@ app.post("/api/client/filesync", requireAuth, requireRole("client"), (req, res) 
       name: item.name ?? path.basename(item.path),
       size: Number(item.size ?? 0),
       mimeType: item.mimeType ?? "application/octet-stream",
-      updatedAt: item.updatedAt ?? new Date().toISOString()
+      createdAt: item.createdAt ?? item.updatedAt ?? now,
+      updatedAt: item.updatedAt ?? item.createdAt ?? now
+    }));
+  const sanitizedDirectories = directories
+    .filter((item) => item.path)
+    .map((item) => ({
+      path: item.path,
+      name: item.name ?? path.basename(item.path),
+      createdAt: item.createdAt ?? item.updatedAt ?? now,
+      updatedAt: item.updatedAt ?? item.createdAt ?? now
     }));
   const saved = replaceClientFiles(req.auth.sub, sanitized);
-  serverLog("client-filesync", req.reqId, req.auth.sub, `count=${saved.length}`);
-  return res.json({ count: saved.length });
+  const savedDirectories = replaceClientDirectories(req.auth.sub, sanitizedDirectories);
+  serverLog("client-filesync", req.reqId, req.auth.sub, `files=${saved.length}`, `dirs=${savedDirectories.length}`);
+  return res.json({ count: saved.length, directoryCount: savedDirectories.length });
 });
 
 app.get("/api/admin/users", requireAuth, requireRole("admin"), (_, res) => {
   const users = listUsers().map((item) => ({
-    id: item.id,
-    email: item.email,
-    displayName: item.displayName,
-    role: item.role,
-    createdAt: item.createdAt
+    ...serializeUser(item)
   }));
   return res.json({ users });
 });

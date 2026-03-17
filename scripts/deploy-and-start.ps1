@@ -26,6 +26,46 @@ function Ensure-Command {
   }
 }
 
+function Get-EnvValue {
+  param(
+    [string]$Path,
+    [string]$Name
+  )
+  if (-not (Test-Path $Path)) {
+    return ""
+  }
+  $line = Get-Content $Path | Where-Object { $_ -match "^$Name=" } | Select-Object -First 1
+  if (-not $line) {
+    return ""
+  }
+  return ($line -replace "^$Name=", "").Trim()
+}
+
+function Set-EnvValue {
+  param(
+    [string]$Path,
+    [string]$Name,
+    [string]$Value
+  )
+  if (-not (Test-Path $Path)) {
+    return
+  }
+  $content = Get-Content $Path
+  $matched = $false
+  $updated = foreach ($line in $content) {
+    if ($line -match "^$Name=") {
+      $matched = $true
+      "$Name=$Value"
+    } else {
+      $line
+    }
+  }
+  if (-not $matched) {
+    $updated += "$Name=$Value"
+  }
+  Set-Content -Path $Path -Value $updated
+}
+
 Write-Host "[1/6] Checking prerequisites..." -ForegroundColor Cyan
 Ensure-Command -Name "node"
 Ensure-Command -Name "npm"
@@ -34,6 +74,13 @@ Write-Host "[2/6] Preparing env files..." -ForegroundColor Cyan
 Ensure-FileFromExample -Target $ServerEnvPath -Example "server/.env.example"
 Ensure-FileFromExample -Target $ClientEnvPath -Example "storage-client/.env.example"
 Ensure-FileFromExample -Target $WebEnvPath -Example "web/.env.example"
+
+$serverJwt = Get-EnvValue -Path $ServerEnvPath -Name "JWT_SECRET"
+$clientJwt = Get-EnvValue -Path $ClientEnvPath -Name "JWT_SECRET"
+if ($serverJwt -and (-not $clientJwt -or $clientJwt -eq "replace-this-with-the-same-secret-as-server")) {
+  Set-EnvValue -Path $ClientEnvPath -Name "JWT_SECRET" -Value $serverJwt
+  Write-Host "Synced JWT_SECRET from $ServerEnvPath to $ClientEnvPath for share-token validation." -ForegroundColor Yellow
+}
 
 if ($EnableTurn) {
   Write-Host "[3/6] Starting TURN (coturn) with Docker..." -ForegroundColor Cyan

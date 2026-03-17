@@ -1,5 +1,53 @@
-import { useEffect, useRef } from "react";
-import { Button, Caption1, Spinner, Subtitle1, Text } from "@fluentui/react-components";
+import { useEffect, useRef, useState } from "react";
+import { Badge, Button, Caption1, Input, Spinner, Subtitle1, Text } from "@fluentui/react-components";
+import { ArrowDownloadRegular, ArrowReplyRegular, BugRegular, ChevronDownRegular, ChevronUpRegular, DismissRegular, EditRegular, SendRegular, SettingsRegular, ShareRegular, StarFilled, StarRegular } from "@fluentui/react-icons";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { apiRequest } from "../api";
+import AvatarFace from "./AvatarFace";
+import VideoPlayerControls, { VideoDanmakuComposer } from "./VideoPlayerControls";
+import VideoViewportSurface from "./VideoViewportSurface";
+
+function isTextPreviewMime(mimeType = "") {
+  const normalized = String(mimeType || "").toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.startsWith("text/")) {
+    return true;
+  }
+  if (normalized === "application/json" || normalized === "application/xml") {
+    return true;
+  }
+  if (normalized.includes("markdown") || normalized.includes("md")) {
+    return true;
+  }
+  if (normalized.endsWith("+json") || normalized.endsWith("+xml")) {
+    return true;
+  }
+  return false;
+}
+
+function formatTextPreview(text, mimeType = "") {
+  const normalized = String(mimeType || "").toLowerCase();
+  if (normalized === "application/json" || normalized.endsWith("+json")) {
+    try {
+      return JSON.stringify(JSON.parse(text), null, 2);
+    } catch {
+      return text;
+    }
+  }
+  return text;
+}
+
+function isMarkdownPreview({ mimeType = "", previewName = "", previewPath = "" } = {}) {
+  const normalizedMime = String(mimeType || "").toLowerCase();
+  if (normalizedMime.includes("markdown")) {
+    return true;
+  }
+  const target = `${previewName} ${previewPath}`.toLowerCase();
+  return /(^|[\s/\\])[^\s/\\]+\.(md|markdown|mdown|mkd|mdx)$/i.test(target);
+}
 
 function buildP2pHlsSegmentUrl(clientId, hlsId, segmentName) {
   return `https://p2p-hls.local/segment/${encodeURIComponent(clientId)}/${encodeURIComponent(hlsId)}/${encodeURIComponent(segmentName)}`;
@@ -39,6 +87,186 @@ function createHlsLoaderStats() {
   };
 }
 
+function getInitials(name = "") {
+  const text = String(name || "").trim();
+  if (!text) {
+    return "NA";
+  }
+  const parts = text.split(/\s+/).slice(0, 2);
+  return parts.map((item) => item[0]?.toUpperCase() || "").join("");
+}
+
+function fallbackRelativeTime(value) {
+  if (!value) return "刚刚";
+  const ts = Date.parse(value);
+  if (!Number.isFinite(ts)) return "刚刚";
+  const diff = Date.now() - ts;
+  if (diff < 10_000) return "刚刚";
+  if (diff < 60_000) return `${Math.floor(diff / 1000)}秒前`;
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}小时前`;
+  return `${Math.floor(diff / 86_400_000)}天前`;
+}
+
+const DANMAKU_SCROLL_DURATION_MS = 9000;
+const DANMAKU_FIXED_DURATION_MS = 4200;
+const DANMAKU_SCROLL_LANES = 8;
+const DANMAKU_FIXED_LANES = 3;
+const VIDEO_SEEK_STEP_SEC = 5;
+const DANMAKU_SETTINGS_STORAGE_PREFIX = "nas_preview_danmaku_settings_v1";
+const DEFAULT_DANMAKU_SETTINGS = {
+  color: "#FFFFFF",
+  mode: "scroll",
+  visible: true,
+  backgroundOpacity: 0.12,
+  fontScale: 1,
+  textOpacity: 1
+};
+
+function clampNumber(value, min, max, fallback = min) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, numeric));
+}
+
+function getDanmakuSettingsStorageKey(currentUser) {
+  const userId = String(currentUser?.id || currentUser?.username || currentUser?.name || "guest");
+  return `${DANMAKU_SETTINGS_STORAGE_PREFIX}:${userId}`;
+}
+
+function loadDanmakuSettings(currentUser) {
+  if (typeof window === "undefined") {
+    return { ...DEFAULT_DANMAKU_SETTINGS };
+  }
+  try {
+    const raw = window.localStorage.getItem(getDanmakuSettingsStorageKey(currentUser));
+    if (!raw) {
+      return { ...DEFAULT_DANMAKU_SETTINGS };
+    }
+    const parsed = JSON.parse(raw);
+    return {
+      color: /^#([0-9a-f]{6})$/i.test(String(parsed?.color || "").trim()) ? String(parsed.color).trim().toUpperCase() : DEFAULT_DANMAKU_SETTINGS.color,
+      mode: ["scroll", "top", "bottom"].includes(String(parsed?.mode || "")) ? String(parsed.mode) : DEFAULT_DANMAKU_SETTINGS.mode,
+      visible: parsed?.visible !== false,
+      backgroundOpacity: clampNumber(parsed?.backgroundOpacity, 0, 0.9, DEFAULT_DANMAKU_SETTINGS.backgroundOpacity),
+      fontScale: clampNumber(parsed?.fontScale, 0.8, 1.6, DEFAULT_DANMAKU_SETTINGS.fontScale),
+      textOpacity: clampNumber(parsed?.textOpacity, 0.2, 1, DEFAULT_DANMAKU_SETTINGS.textOpacity)
+    };
+  } catch {
+    return { ...DEFAULT_DANMAKU_SETTINGS };
+  }
+}
+
+function saveDanmakuSettings(currentUser, settings) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(getDanmakuSettingsStorageKey(currentUser), JSON.stringify(settings));
+  } catch {
+  }
+}
+
+function isEditableTarget(target) {
+  const tagName = String(target?.tagName || "").toLowerCase();
+  if (target?.isContentEditable) {
+    return true;
+  }
+  if (tagName === "textarea" || tagName === "select") {
+    return true;
+  }
+  if (tagName !== "input") {
+    return false;
+  }
+  const inputType = String(target?.type || "").toLowerCase();
+  return !["button", "range", "color", "checkbox", "radio", "file", "submit", "reset"].includes(inputType);
+}
+
+function getFullscreenElement() {
+  if (typeof document === "undefined") {
+    return null;
+  }
+  return document.fullscreenElement || document.webkitFullscreenElement || null;
+}
+
+async function requestElementFullscreen(element) {
+  if (!element) {
+    return;
+  }
+  if (typeof element.requestFullscreen === "function") {
+    await element.requestFullscreen();
+    return;
+  }
+  if (typeof element.webkitRequestFullscreen === "function") {
+    await element.webkitRequestFullscreen();
+  }
+}
+
+async function exitElementFullscreen() {
+  if (typeof document === "undefined") {
+    return;
+  }
+  if (typeof document.exitFullscreen === "function") {
+    await document.exitFullscreen();
+    return;
+  }
+  if (typeof document.webkitExitFullscreen === "function") {
+    await document.webkitExitFullscreen();
+  }
+}
+
+function toAlphaColor(alpha = 0.12) {
+  return `rgba(2, 6, 23, ${clampNumber(alpha, 0, 0.9, 0.12)})`;
+}
+
+function formatDanmakuClock(timeSec = 0) {
+  const totalSeconds = Math.max(0, Math.floor(Number(timeSec || 0)));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, "0");
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  if (hours > 0) {
+    return `${hours}:${minutes}:${seconds}`;
+  }
+  return `${minutes}:${seconds}`;
+}
+
+function normalizeDanmakuItems(items = []) {
+  return (Array.isArray(items) ? items : [])
+    .map((item) => ({
+      id: String(item?.id || ""),
+      fileId: String(item?.fileId || ""),
+      content: String(item?.content || "").trim(),
+      timeSec: Math.max(0, Number(item?.timeSec || 0)),
+      color: /^#([0-9a-f]{6})$/i.test(String(item?.color || "").trim()) ? String(item.color).trim().toUpperCase() : "#FFFFFF",
+      mode: ["scroll", "top", "bottom"].includes(String(item?.mode || "")) ? String(item.mode) : "scroll",
+      createdAt: String(item?.createdAt || ""),
+      updatedAt: String(item?.updatedAt || ""),
+      author: {
+        id: String(item?.author?.id || ""),
+        displayName: String(item?.author?.displayName || "匿名用户"),
+        avatarUrl: String(item?.author?.avatarUrl || ""),
+        avatarClientId: String(item?.author?.avatarClientId || ""),
+        avatarPath: String(item?.author?.avatarPath || ""),
+        avatarFileId: String(item?.author?.avatarFileId || "")
+      }
+    }))
+    .filter((item) => item.id && item.content)
+    .sort((left, right) => left.timeSec - right.timeSec || left.createdAt.localeCompare(right.createdAt));
+}
+
+function mergeDanmakuItems(existing = [], incoming = []) {
+  const map = new Map();
+  for (const item of normalizeDanmakuItems(existing)) {
+    map.set(item.id, item);
+  }
+  for (const item of normalizeDanmakuItems(incoming)) {
+    map.set(item.id, item);
+  }
+  return [...map.values()].sort((left, right) => left.timeSec - right.timeSec || left.createdAt.localeCompare(right.createdAt));
+}
+
 export default function PreviewModal({
   previewing,
   previewName,
@@ -58,18 +286,341 @@ export default function PreviewModal({
   setPreviewStatusText,
   onClose,
   onFirstFrame,
+  onFavorite,
+  onEdit,
+  onShare,
   onDownload,
   getClientDisplayName,
   formatBytes,
-  isInlinePreviewMime
+  formatRelativeTime,
+  isInlinePreviewMime,
+  authToken,
+  currentUser,
+  previewFileId,
+  favorite = false,
+  commentsEnabled = false
 }) {
+  const previewModalRef = useRef(null);
+  const previewViewportRef = useRef(null);
   const previewVideoRef = useRef(null);
   const previewHlsRef = useRef(null);
   const hlsReadyRef = useRef(false);
+  const [textPreviewContent, setTextPreviewContent] = useState("");
+  const [textPreviewError, setTextPreviewError] = useState("");
+  const [diagnosticsPopupOpen, setDiagnosticsPopupOpen] = useState(false);
+  const [comments, setComments] = useState([]);
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [commentDraft, setCommentDraft] = useState("");
+  const [replyDrafts, setReplyDrafts] = useState({});
+  const [replyTargetId, setReplyTargetId] = useState("");
+  const [expandedReplies, setExpandedReplies] = useState({});
+  const [commentBusyId, setCommentBusyId] = useState("");
+  const [commentError, setCommentError] = useState("");
+  const [danmakuItems, setDanmakuItems] = useState([]);
+  const [danmakuLoading, setDanmakuLoading] = useState(false);
+  const [danmakuError, setDanmakuError] = useState("");
+  const [danmakuDraft, setDanmakuDraft] = useState("");
+  const [danmakuColor, setDanmakuColor] = useState(DEFAULT_DANMAKU_SETTINGS.color);
+  const [danmakuMode, setDanmakuMode] = useState(DEFAULT_DANMAKU_SETTINGS.mode);
+  const [danmakuVisible, setDanmakuVisible] = useState(DEFAULT_DANMAKU_SETTINGS.visible);
+  const [danmakuBackgroundOpacity, setDanmakuBackgroundOpacity] = useState(DEFAULT_DANMAKU_SETTINGS.backgroundOpacity);
+  const [danmakuFontScale, setDanmakuFontScale] = useState(DEFAULT_DANMAKU_SETTINGS.fontScale);
+  const [danmakuTextOpacity, setDanmakuTextOpacity] = useState(DEFAULT_DANMAKU_SETTINGS.textOpacity);
+  const [danmakuSettingsOpen, setDanmakuSettingsOpen] = useState(false);
+  const [danmakuSettingsReady, setDanmakuSettingsReady] = useState(false);
+  const [activeDanmaku, setActiveDanmaku] = useState([]);
+  const [videoCurrentTime, setVideoCurrentTime] = useState(0);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [videoBufferedTime, setVideoBufferedTime] = useState(0);
+  const [videoPlaying, setVideoPlaying] = useState(false);
+  const [pictureInPictureActive, setPictureInPictureActive] = useState(false);
+  const [pageFillActive, setPageFillActive] = useState(false);
+  const [playerFullscreenActive, setPlayerFullscreenActive] = useState(false);
+  const danmakuFiredRef = useRef(new Set());
+  const danmakuScrollLaneRef = useRef(0);
+  const danmakuTopLaneRef = useRef(0);
+  const danmakuBottomLaneRef = useRef(0);
+  const danmakuSequenceRef = useRef(0);
+  const danmakuTimersRef = useRef(new Map());
+  const lastVideoTimeRef = useRef(0);
+  const formatCommentTime = typeof formatRelativeTime === "function" ? formatRelativeTime : fallbackRelativeTime;
+  const markdownPreview = isMarkdownPreview({ mimeType: previewMime, previewName, previewPath });
+  const canUseComments = Boolean(commentsEnabled && authToken && previewFileId);
+  const canUsePictureInPicture = previewMime.startsWith("video/")
+    && typeof document !== "undefined"
+    && Boolean(document.pictureInPictureEnabled);
+
+  useEffect(() => {
+    const settings = loadDanmakuSettings(currentUser);
+    setDanmakuColor(settings.color);
+    setDanmakuMode(settings.mode);
+    setDanmakuVisible(settings.visible);
+    setDanmakuBackgroundOpacity(settings.backgroundOpacity);
+    setDanmakuFontScale(settings.fontScale);
+    setDanmakuTextOpacity(settings.textOpacity);
+    setDanmakuSettingsReady(true);
+  }, [currentUser?.id, currentUser?.name, currentUser?.username]);
+
+  useEffect(() => {
+    if (!danmakuSettingsReady) {
+      return;
+    }
+    saveDanmakuSettings(currentUser, {
+      color: danmakuColor,
+      mode: danmakuMode,
+      visible: danmakuVisible,
+      backgroundOpacity: danmakuBackgroundOpacity,
+      fontScale: danmakuFontScale,
+      textOpacity: danmakuTextOpacity
+    });
+  }, [currentUser, danmakuBackgroundOpacity, danmakuColor, danmakuFontScale, danmakuMode, danmakuSettingsReady, danmakuTextOpacity, danmakuVisible]);
+
+  function clearActiveDanmaku() {
+    for (const timer of danmakuTimersRef.current.values()) {
+      clearTimeout(timer);
+    }
+    danmakuTimersRef.current.clear();
+    setActiveDanmaku([]);
+  }
+
+  function enqueueDanmaku(item) {
+    const overlayId = `${item.id}:${danmakuSequenceRef.current++}`;
+    const isScroll = item.mode === "scroll";
+    const lane = isScroll
+      ? danmakuScrollLaneRef.current++ % DANMAKU_SCROLL_LANES
+      : item.mode === "top"
+        ? danmakuTopLaneRef.current++ % DANMAKU_FIXED_LANES
+        : danmakuBottomLaneRef.current++ % DANMAKU_FIXED_LANES;
+    const durationMs = isScroll ? DANMAKU_SCROLL_DURATION_MS : DANMAKU_FIXED_DURATION_MS;
+    const next = {
+      ...item,
+      overlayId,
+      lane,
+      durationMs
+    };
+    setActiveDanmaku((prev) => [...prev, next]);
+    const timer = window.setTimeout(() => {
+      danmakuTimersRef.current.delete(overlayId);
+      setActiveDanmaku((prev) => prev.filter((entry) => entry.overlayId !== overlayId));
+    }, durationMs + 400);
+    danmakuTimersRef.current.set(overlayId, timer);
+  }
+
+  useEffect(() => {
+    let disposed = false;
+    if (previewing || !previewUrl || !isTextPreviewMime(previewMime)) {
+      setTextPreviewContent("");
+      setTextPreviewError("");
+      return () => {
+        disposed = true;
+      };
+    }
+
+    fetch(previewUrl)
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`文本预览加载失败: ${response.status}`);
+        }
+        return response.text();
+      })
+      .then((text) => {
+        if (disposed) {
+          return;
+        }
+        setTextPreviewContent(markdownPreview ? text : formatTextPreview(text, previewMime));
+        setTextPreviewError("");
+      })
+      .catch((error) => {
+        if (disposed) {
+          return;
+        }
+        setTextPreviewContent("");
+        setTextPreviewError(error?.message || "文本预览加载失败");
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [markdownPreview, previewMime, previewUrl, previewing]);
+
+  useEffect(() => {
+    setDiagnosticsPopupOpen(false);
+    setReplyTargetId("");
+    setExpandedReplies({});
+    setCommentDraft("");
+    setReplyDrafts({});
+    setCommentError("");
+    setDanmakuDraft("");
+    setDanmakuError("");
+    setDanmakuSettingsOpen(false);
+    setDanmakuItems([]);
+    setVideoCurrentTime(0);
+    setVideoDuration(0);
+    setVideoBufferedTime(0);
+    setVideoPlaying(false);
+    setPageFillActive(false);
+    danmakuFiredRef.current = new Set();
+    danmakuScrollLaneRef.current = 0;
+    danmakuTopLaneRef.current = 0;
+    danmakuBottomLaneRef.current = 0;
+    lastVideoTimeRef.current = 0;
+    clearActiveDanmaku();
+  }, [previewFileId, previewClientId, previewPath]);
+
+  useEffect(() => {
+    const modal = previewModalRef.current;
+    if (!modal) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      modal.focus({ preventScroll: true });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [previewFileId, previewPath, previewMime, previewing]);
+
+  useEffect(() => {
+    let disposed = false;
+    if (!canUseComments) {
+      setComments([]);
+      setCommentsLoading(false);
+      return () => {
+        disposed = true;
+      };
+    }
+
+    async function loadComments() {
+      try {
+        setCommentsLoading(true);
+        setCommentError("");
+        const data = await apiRequest(`/api/file-comments?fileId=${encodeURIComponent(previewFileId)}`, {
+          token: authToken
+        });
+        if (disposed) {
+          return;
+        }
+        setComments(Array.isArray(data.comments) ? data.comments : []);
+      } catch (error) {
+        if (disposed) {
+          return;
+        }
+        setComments([]);
+        setCommentError(error?.message || "评论加载失败");
+      } finally {
+        if (!disposed) {
+          setCommentsLoading(false);
+        }
+      }
+    }
+
+    loadComments();
+    return () => {
+      disposed = true;
+    };
+  }, [authToken, canUseComments, previewFileId]);
+
+  useEffect(() => {
+    let disposed = false;
+    if (!canUseComments || !String(previewMime || "").startsWith("video/")) {
+      setDanmakuItems([]);
+      setDanmakuLoading(false);
+      return () => {
+        disposed = true;
+      };
+    }
+
+    async function loadDanmaku() {
+      try {
+        setDanmakuLoading(true);
+        setDanmakuError("");
+        const data = await apiRequest(`/api/file-danmaku?fileId=${encodeURIComponent(previewFileId)}`, {
+          token: authToken
+        });
+        if (disposed) {
+          return;
+        }
+        setDanmakuItems((prev) => mergeDanmakuItems(prev, data.danmaku));
+      } catch (error) {
+        if (disposed) {
+          return;
+        }
+        setDanmakuItems([]);
+        setDanmakuError(error?.message || "弹幕加载失败");
+      } finally {
+        if (!disposed) {
+          setDanmakuLoading(false);
+        }
+      }
+    }
+
+    loadDanmaku();
+    return () => {
+      disposed = true;
+    };
+  }, [authToken, canUseComments, previewFileId, previewMime]);
+
+  useEffect(() => {
+    if (!p2p || !canUseComments || !String(previewMime || "").startsWith("video/")) {
+      return undefined;
+    }
+    return p2p.onServerMessage((message) => {
+      if (message?.type !== "file-danmaku-created" || !message.payload) {
+        return;
+      }
+      const created = normalizeDanmakuItems([message.payload])[0];
+      if (!created || created.fileId !== previewFileId) {
+        return;
+      }
+      setDanmakuItems((prev) => mergeDanmakuItems(prev, [created]));
+      const currentTime = Number.isFinite(previewVideoRef.current?.currentTime)
+        ? Number(previewVideoRef.current.currentTime)
+        : Number(videoCurrentTime || 0);
+      if (danmakuVisible && Math.abs(currentTime - created.timeSec) <= 0.8 && !danmakuFiredRef.current.has(created.id)) {
+        danmakuFiredRef.current.add(created.id);
+        enqueueDanmaku(created);
+      }
+    });
+  }, [canUseComments, danmakuVisible, p2p, previewFileId, previewMime, videoCurrentTime]);
+
+  useEffect(() => {
+    if (previewing || !previewMime.startsWith("video/")) {
+      setPictureInPictureActive(false);
+      setPageFillActive(false);
+      setPlayerFullscreenActive(false);
+      return undefined;
+    }
+    const video = previewVideoRef.current;
+    const syncPictureInPictureState = () => {
+      if (typeof document === "undefined") {
+        setPictureInPictureActive(false);
+        return;
+      }
+      setPictureInPictureActive(document.pictureInPictureElement === video);
+    };
+    const syncFullscreenState = () => {
+      const fullscreenElement = getFullscreenElement();
+      const viewport = previewViewportRef.current;
+      setPlayerFullscreenActive(Boolean(fullscreenElement && viewport && (fullscreenElement === viewport || viewport.contains(fullscreenElement))));
+    };
+
+    syncPictureInPictureState();
+    syncFullscreenState();
+    document.addEventListener("fullscreenchange", syncFullscreenState);
+    document.addEventListener("webkitfullscreenchange", syncFullscreenState);
+    video?.addEventListener("enterpictureinpicture", syncPictureInPictureState);
+    video?.addEventListener("leavepictureinpicture", syncPictureInPictureState);
+
+    return () => {
+      document.removeEventListener("fullscreenchange", syncFullscreenState);
+      document.removeEventListener("webkitfullscreenchange", syncFullscreenState);
+      video?.removeEventListener("enterpictureinpicture", syncPictureInPictureState);
+      video?.removeEventListener("leavepictureinpicture", syncPictureInPictureState);
+    };
+  }, [previewMime, previewing]);
 
   useEffect(() => {
     return () => {
       hlsReadyRef.current = false;
+      clearActiveDanmaku();
       if (previewHlsRef.current) {
         previewHlsRef.current.destroy();
         previewHlsRef.current = null;
@@ -202,7 +753,9 @@ export default function PreviewModal({
                   hlsState: "segment-loading"
                 }));
 
-                const response = await p2p.getHlsSegment(parsed.clientId, parsed.hlsId, parsed.segmentName);
+                const response = await p2p.getHlsSegment(parsed.clientId, parsed.hlsId, parsed.segmentName, {
+                  accessToken: previewHlsSource?.accessToken || ""
+                });
                 const data = await response.blob.arrayBuffer();
                 const now = performance.now();
                 stats.loading.first = stats.loading.first || now;
@@ -220,6 +773,21 @@ export default function PreviewModal({
                 }));
                 callbacks.onSuccess({ url: context.url, data }, stats, context, null);
               } catch (error) {
+                const isCancelled = this.aborted
+                  || disposed
+                  || error?.cancelled
+                  || error?.intentionalClose
+                  || /cancelled|operation cancelled|aborted/i.test(String(error?.message || ""));
+                if (isCancelled) {
+                  stats.aborted = true;
+                  stats.loading.end = performance.now();
+                  setPreviewDebug((prev) => ({
+                    ...prev,
+                    lastHlsEvent: `loader-cancelled:${context?.type || "unknown"}`,
+                    hlsState: "cancelled"
+                  }));
+                  return;
+                }
                 const errorText = error?.message || "hls load failed";
                 stats.loading.end = performance.now();
                 setPreviewDebug((prev) => ({
@@ -390,21 +958,627 @@ export default function PreviewModal({
     return () => clearInterval(timer);
   }, [previewMime, previewing, setPreviewDebug]);
 
+  useEffect(() => {
+    if (previewing || !previewMime.startsWith("video/")) {
+      return undefined;
+    }
+    const video = previewVideoRef.current;
+    if (!video) {
+      return undefined;
+    }
+
+    const syncPlaybackState = () => {
+      const currentTime = Number.isFinite(video.currentTime) ? Number(video.currentTime) : 0;
+      const duration = Number.isFinite(video.duration) ? Number(video.duration) : 0;
+      let bufferedEnd = currentTime;
+      try {
+        for (let idx = 0; idx < video.buffered.length; idx += 1) {
+          const start = video.buffered.start(idx);
+          const end = video.buffered.end(idx);
+          if (currentTime >= start && currentTime <= end) {
+            bufferedEnd = end;
+            break;
+          }
+          if (end > bufferedEnd) {
+            bufferedEnd = end;
+          }
+        }
+      } catch {
+      }
+      setVideoCurrentTime(currentTime);
+      setVideoDuration(duration);
+      setVideoBufferedTime(bufferedEnd);
+      setVideoPlaying(!video.paused && !video.ended);
+    };
+
+    syncPlaybackState();
+    video.addEventListener("timeupdate", syncPlaybackState);
+    video.addEventListener("loadedmetadata", syncPlaybackState);
+    video.addEventListener("durationchange", syncPlaybackState);
+    video.addEventListener("progress", syncPlaybackState);
+    video.addEventListener("play", syncPlaybackState);
+    video.addEventListener("pause", syncPlaybackState);
+    video.addEventListener("ended", syncPlaybackState);
+
+    return () => {
+      video.removeEventListener("timeupdate", syncPlaybackState);
+      video.removeEventListener("loadedmetadata", syncPlaybackState);
+      video.removeEventListener("durationchange", syncPlaybackState);
+      video.removeEventListener("progress", syncPlaybackState);
+      video.removeEventListener("play", syncPlaybackState);
+      video.removeEventListener("pause", syncPlaybackState);
+      video.removeEventListener("ended", syncPlaybackState);
+    };
+  }, [previewMime, previewing]);
+
+  useEffect(() => {
+    if (previewing || !previewMime.startsWith("video/")) {
+      return undefined;
+    }
+    const video = previewVideoRef.current;
+    if (!video) {
+      return undefined;
+    }
+
+    const syncDanmaku = () => {
+      const currentTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+      const previousTime = lastVideoTimeRef.current;
+      const rewound = currentTime + 0.8 < previousTime;
+      if (rewound) {
+        danmakuFiredRef.current = new Set();
+        danmakuScrollLaneRef.current = 0;
+        danmakuTopLaneRef.current = 0;
+        danmakuBottomLaneRef.current = 0;
+        clearActiveDanmaku();
+      }
+      const lowerBound = rewound ? Math.max(0, currentTime - 0.1) : previousTime;
+      const upperBound = currentTime + 0.12;
+      setVideoCurrentTime(currentTime);
+      if (danmakuVisible) {
+        for (const item of danmakuItems) {
+          if (danmakuFiredRef.current.has(item.id)) {
+            continue;
+          }
+          if (item.timeSec >= lowerBound && item.timeSec <= upperBound) {
+            danmakuFiredRef.current.add(item.id);
+            enqueueDanmaku(item);
+          }
+        }
+      }
+      lastVideoTimeRef.current = currentTime;
+    };
+
+    const resetForReplay = () => {
+      lastVideoTimeRef.current = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+      setVideoCurrentTime(lastVideoTimeRef.current);
+    };
+
+    video.addEventListener("timeupdate", syncDanmaku);
+    video.addEventListener("seeked", syncDanmaku);
+    video.addEventListener("loadedmetadata", resetForReplay);
+    video.addEventListener("play", syncDanmaku);
+    resetForReplay();
+
+    return () => {
+      video.removeEventListener("timeupdate", syncDanmaku);
+      video.removeEventListener("seeked", syncDanmaku);
+      video.removeEventListener("loadedmetadata", resetForReplay);
+      video.removeEventListener("play", syncDanmaku);
+    };
+  }, [danmakuItems, danmakuVisible, previewMime, previewing]);
+
+  useEffect(() => {
+    if (previewing || !previewMime.startsWith("video/")) {
+      return undefined;
+    }
+
+    const onKeyDown = (event) => {
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || isEditableTarget(event.target)) {
+        return;
+      }
+      if (event.key === " " || event.code === "Space") {
+        event.preventDefault();
+        toggleVideoPlayback();
+        return;
+      }
+      if (event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        toggleVideoPlayback();
+        return;
+      }
+      if (event.key.toLowerCase() === "i") {
+        event.preventDefault();
+        togglePictureInPicture().catch(() => {});
+        return;
+      }
+      if (event.key.toLowerCase() === "w") {
+        event.preventDefault();
+        toggleDocumentFullscreen().catch(() => {});
+        return;
+      }
+      if (event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        togglePlayerFullscreen().catch(() => {});
+        return;
+      }
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        seekVideoBy(-VIDEO_SEEK_STEP_SEC);
+        return;
+      }
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        seekVideoBy(VIDEO_SEEK_STEP_SEC);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [previewMime, previewing, videoDuration]);
+
+  function seekVideoTo(nextTime) {
+    const video = previewVideoRef.current;
+    if (!video) {
+      return;
+    }
+    const duration = Number.isFinite(video.duration) ? Number(video.duration) : Number(videoDuration || 0);
+    const maxTime = duration > 0 ? duration : Math.max(0, Number(nextTime || 0));
+    const safeTime = clampNumber(nextTime, 0, maxTime, 0);
+    video.currentTime = safeTime;
+    setVideoCurrentTime(safeTime);
+  }
+
+  function seekVideoBy(offsetSec) {
+    const video = previewVideoRef.current;
+    if (!video) {
+      return;
+    }
+    const currentTime = Number.isFinite(video.currentTime) ? Number(video.currentTime) : Number(videoCurrentTime || 0);
+    seekVideoTo(currentTime + Number(offsetSec || 0));
+  }
+
+  function toggleVideoPlayback() {
+    const video = previewVideoRef.current;
+    if (!video) {
+      return;
+    }
+    if (video.paused || video.ended) {
+      video.play().catch(() => {});
+      return;
+    }
+    video.pause();
+  }
+
+  async function togglePictureInPicture() {
+    const video = previewVideoRef.current;
+    if (!video || typeof document === "undefined" || !document.pictureInPictureEnabled) {
+      return;
+    }
+    if (document.pictureInPictureElement === video) {
+      await document.exitPictureInPicture();
+      return;
+    }
+    if (typeof video.requestPictureInPicture === "function") {
+      await video.requestPictureInPicture();
+    }
+  }
+
+  async function toggleDocumentFullscreen() {
+    setPageFillActive((prev) => !prev);
+  }
+
+  async function togglePlayerFullscreen() {
+    const video = previewVideoRef.current;
+    const viewport = previewViewportRef.current || video;
+    if (!video || !viewport) {
+      return;
+    }
+    const fullscreenElement = getFullscreenElement();
+    if (fullscreenElement && (fullscreenElement === viewport || viewport.contains(fullscreenElement))) {
+      await exitElementFullscreen();
+      return;
+    }
+    if (typeof video.webkitEnterFullscreen === "function" && typeof viewport.requestFullscreen !== "function") {
+      video.webkitEnterFullscreen();
+      return;
+    }
+    await requestElementFullscreen(viewport);
+  }
+
+  async function submitComment(parentId = null) {
+    const draft = parentId ? (replyDrafts[parentId] || "") : commentDraft;
+    const content = String(draft || "").trim();
+    if (!content || !authToken || !previewFileId) {
+      return;
+    }
+    try {
+      setCommentBusyId(parentId || "root");
+      setCommentError("");
+      const data = await apiRequest("/api/file-comments", {
+        method: "POST",
+        token: authToken,
+        body: {
+          fileId: previewFileId,
+          parentId,
+          content
+        }
+      });
+      setComments(Array.isArray(data.comments) ? data.comments : []);
+      if (parentId) {
+        setReplyDrafts((prev) => ({ ...prev, [parentId]: "" }));
+        setExpandedReplies((prev) => ({ ...prev, [parentId]: true }));
+        setReplyTargetId("");
+      } else {
+        setCommentDraft("");
+      }
+    } catch (error) {
+      setCommentError(error?.message || "评论提交失败");
+    } finally {
+      setCommentBusyId("");
+    }
+  }
+
+  async function reactToComment(commentId, value) {
+    if (!authToken || !commentId) {
+      return;
+    }
+    try {
+      setCommentBusyId(commentId);
+      setCommentError("");
+      const data = await apiRequest(`/api/file-comments/${encodeURIComponent(commentId)}/reaction`, {
+        method: "POST",
+        token: authToken,
+        body: { value }
+      });
+      setComments(Array.isArray(data.comments) ? data.comments : []);
+    } catch (error) {
+      setCommentError(error?.message || "评论互动失败");
+    } finally {
+      setCommentBusyId("");
+    }
+  }
+
+  async function submitDanmaku() {
+    const content = String(danmakuDraft || "").trim();
+    if (!content || !authToken || !previewFileId) {
+      return;
+    }
+    try {
+      setDanmakuError("");
+      const currentTime = Number.isFinite(previewVideoRef.current?.currentTime)
+        ? Number(previewVideoRef.current.currentTime)
+        : Number(videoCurrentTime || 0);
+      const data = await apiRequest("/api/file-danmaku", {
+        method: "POST",
+        token: authToken,
+        body: {
+          fileId: previewFileId,
+          content,
+          timeSec: currentTime,
+          color: danmakuColor,
+          mode: danmakuMode
+        }
+      });
+      setDanmakuItems((prev) => mergeDanmakuItems(prev, data.danmaku));
+      setDanmakuDraft("");
+      const created = normalizeDanmakuItems([data.item])[0];
+      if (created) {
+        danmakuFiredRef.current.add(created.id);
+        if (danmakuVisible) {
+          enqueueDanmaku(created);
+        }
+      }
+    } catch (error) {
+      setDanmakuError(error?.message || "弹幕发送失败");
+    }
+  }
+
+  function handleComposerKeyDown(event, submit) {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent?.isComposing) {
+      return;
+    }
+    event.preventDefault();
+    submit().catch(() => {});
+  }
+
+  function renderDanmakuLayer() {
+    if (!danmakuVisible || !activeDanmaku.length) {
+      return null;
+    }
+    return (
+      <div className="previewDanmakuLayer" aria-hidden="true">
+        {activeDanmaku.map((item) => (
+          <div
+            key={item.overlayId}
+            className={`previewDanmakuItem ${item.mode}`}
+            style={{
+              color: item.color,
+              fontSize: `${Math.round(24 * danmakuFontScale)}px`,
+                opacity: danmakuTextOpacity,
+              top: item.mode === "scroll" ? `${14 + item.lane * 9}%` : item.mode === "top" ? `${8 + item.lane * 10}%` : "auto",
+              bottom: item.mode === "bottom" ? `${10 + item.lane * 10}%` : "auto",
+              animationDuration: `${item.durationMs}ms`
+            }}
+          >
+            <span style={{ backgroundColor: toAlphaColor(danmakuBackgroundOpacity) }}>{item.content}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  function renderDanmakuControls() {
+    if (!previewMime.startsWith("video/")) {
+      return null;
+    }
+    return (
+      <VideoPlayerControls
+        currentTime={videoCurrentTime}
+        duration={videoDuration}
+        bufferedTime={videoBufferedTime}
+        playing={videoPlaying}
+        pictureInPictureActive={pictureInPictureActive}
+        pageFillActive={pageFillActive}
+        fullscreenActive={playerFullscreenActive}
+        canUsePictureInPicture={canUsePictureInPicture}
+        onTogglePlay={toggleVideoPlayback}
+        onSeek={seekVideoTo}
+        onTogglePictureInPicture={() => togglePictureInPicture().catch(() => {})}
+        onTogglePageFill={() => toggleDocumentFullscreen().catch(() => {})}
+        onToggleFullscreen={() => togglePlayerFullscreen().catch(() => {})}
+      >
+        <VideoDanmakuComposer
+          danmakuVisible={danmakuVisible}
+          danmakuItemsCount={danmakuItems.length}
+          danmakuMode={danmakuMode}
+          onDanmakuModeChange={setDanmakuMode}
+          onToggleDanmakuVisible={() => setDanmakuVisible((prev) => !prev)}
+          draft={danmakuDraft}
+          onDraftChange={setDanmakuDraft}
+          onDraftKeyDown={(event) => handleComposerKeyDown(event, submitDanmaku)}
+          danmakuSettingsOpen={danmakuSettingsOpen}
+          onToggleDanmakuSettings={() => setDanmakuSettingsOpen((prev) => !prev)}
+          danmakuColor={danmakuColor}
+          onDanmakuColorChange={setDanmakuColor}
+          danmakuBackgroundOpacity={danmakuBackgroundOpacity}
+          onDanmakuBackgroundOpacityChange={(value) => setDanmakuBackgroundOpacity(clampNumber(value, 0, 0.9, danmakuBackgroundOpacity))}
+          danmakuTextOpacity={danmakuTextOpacity}
+          onDanmakuTextOpacityChange={(value) => setDanmakuTextOpacity(clampNumber(value, 0.2, 1, danmakuTextOpacity))}
+          danmakuFontScale={danmakuFontScale}
+          onDanmakuFontScaleChange={(value) => setDanmakuFontScale(clampNumber(value, 0.8, 1.6, danmakuFontScale))}
+          onSubmit={() => submitDanmaku().catch(() => {})}
+          sendDisabled={!authToken || !String(danmakuDraft || "").trim()}
+          inputNode={(
+            <div className="previewDanmakuInputShell">
+              <span className="previewDanmakuInputGlyph" aria-hidden="true">A</span>
+              <Input
+                className="previewDanmakuInput previewDanmakuInputBili"
+                value={danmakuDraft}
+                placeholder="发个友善的弹幕见证当下"
+                onChange={(_, data) => setDanmakuDraft(data.value)}
+                onKeyDown={(event) => handleComposerKeyDown(event, submitDanmaku)}
+              />
+            </div>
+          )}
+        />
+      </VideoPlayerControls>
+    );
+  }
+
+  function renderCommentComposer(parentId = null) {
+    const draft = parentId ? (replyDrafts[parentId] || "") : commentDraft;
+    const busy = commentBusyId === (parentId || "root");
+    return (
+      <div className={`commentComposer${parentId ? " nested" : ""}`}>
+        <Input
+          value={draft}
+          placeholder={parentId ? "写下回复..." : "写下你对这个文件的看法..."}
+          onChange={(_, data) => {
+            if (parentId) {
+              setReplyDrafts((prev) => ({ ...prev, [parentId]: data.value }));
+            } else {
+              setCommentDraft(data.value);
+            }
+          }}
+          onKeyDown={(event) => handleComposerKeyDown(event, () => submitComment(parentId))}
+        />
+        <div className="commentComposerActions">
+          {parentId ? <button type="button" className="iconActionButton commentIconButton" onClick={() => setReplyTargetId("")} aria-label="取消回复" title="取消回复"><DismissRegular /></button> : null}
+          <button
+            type="button"
+            className="iconActionButton commentIconButton primary"
+            disabled={busy || !String(draft || "").trim()}
+            onClick={() => submitComment(parentId)}
+            aria-label={parentId ? "发送回复" : "发送评论"}
+            title={parentId ? "发送回复" : "发送评论"}
+          >
+            <SendRegular />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  function renderCommentNode(comment, depth = 0) {
+    const hasReplies = Array.isArray(comment.replies) && comment.replies.length > 0;
+    const repliesExpanded = !!expandedReplies[comment.id];
+    return (
+      <div key={comment.id} className={`commentCard depth-${depth}`}>
+        <div className="commentHeader">
+          <div className="commentAuthorBlock">
+            <AvatarFace
+              className="commentAvatar"
+              displayName={comment.author?.displayName}
+              avatarUrl={comment.author?.avatarUrl}
+              avatarClientId={comment.author?.avatarClientId}
+              avatarPath={comment.author?.avatarPath}
+              avatarFileId={comment.author?.avatarFileId}
+              p2p={p2p}
+            />
+            <div className="commentAuthorMeta">
+              <Text>{comment.author?.displayName || "匿名用户"}</Text>
+              <Caption1>{formatCommentTime(comment.createdAt)}</Caption1>
+            </div>
+          </div>
+          {hasReplies ? <Caption1 className="commentReplyMeta">{comment.replies.length} 条回复</Caption1> : null}
+        </div>
+        <div className="commentContent">
+          <Text>{comment.content}</Text>
+        </div>
+        <div className="commentActionsBar">
+          <button
+            type="button"
+            className={`iconActionButton commentIconButton${comment.reactions?.currentUserReaction === 1 ? " active" : ""}`}
+            disabled={commentBusyId === comment.id}
+            onClick={() => reactToComment(comment.id, comment.reactions?.currentUserReaction === 1 ? 0 : 1)}
+            aria-label="点赞"
+            title="点赞"
+          >
+            <ArrowUpRegular />
+          </button>
+          <Caption1>{comment.reactions?.likes || 0}</Caption1>
+          <button
+            type="button"
+            className={`iconActionButton commentIconButton${comment.reactions?.currentUserReaction === -1 ? " active" : ""}`}
+            disabled={commentBusyId === comment.id}
+            onClick={() => reactToComment(comment.id, comment.reactions?.currentUserReaction === -1 ? 0 : -1)}
+            aria-label="点踩"
+            title="点踩"
+          >
+            <ArrowDownRegular />
+          </button>
+          <Caption1>{comment.reactions?.dislikes || 0}</Caption1>
+          <button type="button" className={`iconActionButton commentIconButton${replyTargetId === comment.id ? " active" : ""}`} onClick={() => setReplyTargetId((prev) => prev === comment.id ? "" : comment.id)} aria-label="回复" title="回复">
+            <ArrowReplyRegular />
+          </button>
+          {hasReplies ? (
+            <button type="button" className={`iconActionButton commentIconButton${repliesExpanded ? " active" : ""}`} onClick={() => setExpandedReplies((prev) => ({ ...prev, [comment.id]: !prev[comment.id] }))} aria-label={repliesExpanded ? "收起回复" : "展开回复"} title={repliesExpanded ? "收起回复" : "展开回复"}>
+              {repliesExpanded ? <ChevronUpRegular /> : <ChevronDownRegular />}
+            </button>
+          ) : null}
+          {hasReplies ? <Caption1>{comment.replies.length}</Caption1> : null}
+        </div>
+        {replyTargetId === comment.id ? renderCommentComposer(comment.id) : null}
+        {hasReplies && repliesExpanded ? (
+          <div className="commentReplies">
+            {comment.replies.map((reply) => renderCommentNode(reply, depth + 1))}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modalWindow previewModal" onClick={(event) => event.stopPropagation()}>
+    <div className="overlay previewOverlay">
+      <div ref={previewModalRef} className={`modalWindow previewModal${pageFillActive ? " pageFillActive" : ""}`} onClick={(event) => event.stopPropagation()} tabIndex={-1}>
         <div className="previewTopBar">
           <div>
             <Subtitle1>{previewName || "文件"}</Subtitle1>
             <Caption1>{previewMime || "未知类型"}</Caption1>
           </div>
-          <div className="row">
-            <Button size="small" onClick={onDownload}>下载</Button>
-            <Button size="small" onClick={onClose}>关闭</Button>
+          <div className="previewToolbar">
+            {onFavorite ? (
+              <button
+                type="button"
+                className={`iconActionButton previewToolbarButton${favorite ? " active" : ""}`}
+                title={favorite ? "取消收藏" : "收藏"}
+                aria-label={favorite ? "取消收藏" : "收藏"}
+                onClick={onFavorite}
+              >
+                {favorite ? <StarFilled /> : <StarRegular />}
+              </button>
+            ) : null}
+            {onEdit ? (
+              <button type="button" className="iconActionButton previewToolbarButton" title="编辑" aria-label="编辑" onClick={onEdit}>
+                <EditRegular />
+              </button>
+            ) : null}
+            {onShare ? (
+              <button type="button" className="iconActionButton previewToolbarButton" title="分享" aria-label="分享" onClick={onShare}>
+                <ShareRegular />
+              </button>
+            ) : null}
+            <button type="button" className="iconActionButton previewToolbarButton" title="下载" aria-label="下载" onClick={onDownload}>
+              <ArrowDownloadRegular />
+            </button>
+            <div className="previewToolbarPopupWrap">
+              <button
+                type="button"
+                className={`iconActionButton previewToolbarButton${diagnosticsPopupOpen ? " active" : ""}`}
+                title="诊断信息"
+                aria-label="诊断信息"
+                onClick={() => setDiagnosticsPopupOpen((prev) => !prev)}
+              >
+                <BugRegular />
+              </button>
+              {diagnosticsPopupOpen ? (
+                <div className="previewDiagnosticsPopup" role="dialog" aria-label="诊断信息弹层">
+                  <div className="previewDebugPanel compact stacked">
+                    <div className="debugHighlightGrid compactGrid">
+                      <div className="debugHighlightCard iconStatCard">
+                        <span className="previewPanelToggleIcon" aria-hidden="true"><BugRegular /></span>
+                        <div>
+                          <Caption1>状态</Caption1>
+                          <Text>{previewDebug.hlsState || previewStatusText || previewStage || "-"}</Text>
+                        </div>
+                      </div>
+                      <div className="debugHighlightCard iconStatCard">
+                        <span className="previewPanelToggleIcon" aria-hidden="true"><ArrowDownloadRegular /></span>
+                        <div>
+                          <Caption1>分片/流量</Caption1>
+                          <Text>{previewDebug.segmentCompleted}/{Math.max(previewDebug.manifestSegments, previewDebug.segmentRequests)} · {formatBytes(previewDebug.segmentBytes || 0)}</Text>
+                        </div>
+                      </div>
+                      <div className="debugHighlightCard iconStatCard">
+                        <span className="previewPanelToggleIcon" aria-hidden="true"><EyeRegular /></span>
+                        <div>
+                          <Caption1>预览终端</Caption1>
+                          <Text>{getClientDisplayName(previewClientId || "") || "-"}</Text>
+                        </div>
+                      </div>
+                      <div className="debugHighlightCard iconStatCard wide">
+                        <span className="previewPanelToggleIcon" aria-hidden="true"><SettingsRegular /></span>
+                        <div>
+                          <Caption1>文件路径</Caption1>
+                          <Text>{previewPath || "-"}</Text>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="previewDebugRow emphasis compactRow">
+                      <Caption1>模式 {previewDebug.mode || "-"}</Caption1>
+                      <Caption1>缓冲 {previewMime.startsWith("video/") ? `${previewDebug.bufferedAhead.toFixed(1)}s` : "-"}</Caption1>
+                    </div>
+                    <div className="previewDebugRow emphasis compactRow">
+                      <Caption1>首帧 {previewDebug.firstFrameAt || "-"}</Caption1>
+                      <Caption1>错误 {previewDebug.segmentErrors || 0}</Caption1>
+                    </div>
+                    <div className="previewDebugRow emphasis compactRow">
+                      <Caption1>当前位置 {formatDanmakuClock(videoCurrentTime || 0)}</Caption1>
+                      <Caption1>总时长 {formatDanmakuClock(videoDuration || 0)}</Caption1>
+                    </div>
+                    {previewDebug.lastError ? (
+                      <div className="debugNotice danger compactNotice">
+                        <Caption1>最近错误</Caption1>
+                        <Text>{previewDebug.lastError}</Text>
+                      </div>
+                    ) : null}
+                    <div className="debugNotice compactNotice">
+                      <Caption1>最近事件</Caption1>
+                      <Text>{previewDebug.lastHlsEvent || previewDebug.lastSegment || previewStage || "-"}</Text>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            <button type="button" className="iconActionButton previewToolbarButton danger" title="关闭" aria-label="关闭" onClick={onClose}>
+              <DismissRegular />
+            </button>
           </div>
         </div>
         <div className="previewBody">
-          <div className="playerSurface">
+          <div className={`playerSurface${pageFillActive ? " pageFillActive" : ""}`}>
             {previewing && <Spinner label={previewStatusText || "正在加载预览..."} />}
             {previewing && previewStatusText ? (
               <Caption1>
@@ -414,70 +1588,100 @@ export default function PreviewModal({
             ) : null}
             {previewing && previewStage ? <Caption1 className="previewStage">阶段：{previewStage}</Caption1> : null}
             {!previewing && previewMime.startsWith("video/") && (
-              <video
-                ref={previewVideoRef}
-                src={previewHlsSource ? undefined : previewUrl}
-                controls
-                className="preview"
-                onLoadedData={onFirstFrame}
-                onPlaying={onFirstFrame}
-              />
+              <VideoViewportSurface
+                surfaceRef={previewViewportRef}
+                className={`previewViewport mediaViewport previewVideoViewport${pageFillActive ? " pageFillActive" : ""}`}
+                overlay={renderDanmakuLayer()}
+                controls={!previewing ? renderDanmakuControls() : null}
+                playing={videoPlaying}
+                forceControlsVisible={pageFillActive}
+              >
+                <div className="previewVideoViewportFrame">
+                  <video
+                    ref={previewVideoRef}
+                    src={previewHlsSource ? undefined : previewUrl}
+                    className="preview"
+                    onLoadedData={onFirstFrame}
+                    onPlaying={onFirstFrame}
+                    playsInline
+                  />
+                </div>
+              </VideoViewportSurface>
             )}
             {!previewing && previewMime.startsWith("audio/") && <audio src={previewUrl} controls className="previewAudio" />}
-            {!previewing && previewMime.startsWith("image/") && <img src={previewUrl} className="preview" />}
-            {!previewing && previewMime === "application/pdf" && <iframe src={previewUrl} className="previewFrame" title="preview-frame" />}
+            {!previewing && previewMime.startsWith("image/") && (
+              <div className="previewViewport mediaViewport">
+                <img src={previewUrl} className="preview" />
+              </div>
+            )}
+            {!previewing && previewMime === "application/pdf" && (
+              <div className="previewViewport frameViewport">
+                <iframe src={previewUrl} className="previewFrame" title="preview-frame" />
+              </div>
+            )}
+            {!previewing && isTextPreviewMime(previewMime) && !textPreviewError && (
+              markdownPreview ? (
+                <div className="previewText previewMarkdown">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      a: ({ node, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" />
+                    }}
+                  >
+                    {textPreviewContent}
+                  </ReactMarkdown>
+                </div>
+              ) : (
+                <pre className="previewText">{textPreviewContent}</pre>
+              )
+            )}
+            {!previewing && isTextPreviewMime(previewMime) && textPreviewError && (
+              <div className="unsupportedPreview">
+                <Text>{textPreviewError}</Text>
+              </div>
+            )}
           </div>
-          {!previewing && previewMime.startsWith("video/") && (
-            <aside className="previewSidePanel">
-              <div className="previewDebugPanel compact">
-                <div className="debugHighlightGrid">
-                  <div className="debugHighlightCard">
-                    <Caption1>播放模式</Caption1>
-                    <Text>{previewDebug.mode || "-"}</Text>
-                  </div>
-                  <div className="debugHighlightCard">
-                    <Caption1>连接状态</Caption1>
-                    <Text>{previewDebug.hlsState || "-"}</Text>
-                  </div>
-                  <div className="debugHighlightCard">
-                    <Caption1>缓冲前瞻</Caption1>
-                    <Text>{previewDebug.bufferedAhead.toFixed(1)}s</Text>
-                  </div>
-                  <div className="debugHighlightCard">
-                    <Caption1>错误次数</Caption1>
-                    <Text>{previewDebug.segmentErrors}</Text>
-                  </div>
+
+          <aside className="previewSidePanel">
+            <div className="previewPanelSection commentsPanel">
+              <div className="commentsHeader" title={canUseComments ? "已登录，可评论、回复、点赞和发送弹幕" : authToken ? "当前文件暂不可评论" : "登录后可评论、回复和发送弹幕"}>
+                <Subtitle1>文件评论</Subtitle1>
+                <Badge appearance="outline" color="informative">{comments.length}</Badge>
+              </div>
+
+              {commentError ? (
+                <div className="debugNotice danger compactNotice">
+                  <Caption1>评论错误</Caption1>
+                  <Text>{commentError}</Text>
                 </div>
-                <div className="previewDebugRow emphasis">
-                  <Caption1>分片 {previewDebug.segmentCompleted}/{Math.max(previewDebug.manifestSegments, previewDebug.segmentRequests)}</Caption1>
-                  <Caption1>流量 {formatBytes(previewDebug.segmentBytes || 0)}</Caption1>
-                </div>
-                <div className="previewDebugRow emphasis">
-                  <Caption1>首帧 {previewDebug.firstFrameAt || "-"}</Caption1>
-                  <Caption1>播放 {previewDebug.currentTime.toFixed(1)}s / {previewDebug.duration > 0 ? previewDebug.duration.toFixed(1) : "-"}s</Caption1>
-                </div>
-                {previewDebug.lastError ? (
-                  <div className="debugNotice danger">
-                    <Caption1>最近错误</Caption1>
-                    <Text>{previewDebug.lastError}</Text>
+              ) : null}
+
+              <div className="commentsList">
+                {commentsLoading ? <Spinner label="正在加载评论..." /> : null}
+                {!commentsLoading && canUseComments && !comments.length ? (
+                  <div className="commentEmptyCard">
+                    <span className="commentEmptyIcon" aria-hidden="true">
+                      <ArrowReplyRegular />
+                    </span>
                   </div>
                 ) : null}
-                <div className="debugNotice">
-                  <Caption1>最近事件</Caption1>
-                  <Text>{previewDebug.lastHlsEvent || previewDebug.lastSegment || "-"}</Text>
-                </div>
+                {!commentsLoading ? comments.map((comment) => renderCommentNode(comment)) : null}
               </div>
-            </aside>
-          )}
-        </div>
-        <div className="previewMetaBar">
-          <Caption1>终端：{getClientDisplayName(previewClientId || "") || "-"}</Caption1>
-          <Caption1 title={previewPath}>{previewPath || "-"}</Caption1>
+
+              {canUseComments ? renderCommentComposer() : (
+                <div className="commentLockedCard">
+                  <Text>{authToken ? "当前文件暂不可评论，请稍后重试。" : "检测到登录后，这里会直接切换为可评论和可发送弹幕的预览模式。"}</Text>
+                </div>
+              )}
+            </div>
+          </aside>
         </div>
         {!previewing && previewName && !isInlinePreviewMime(previewMime) && (
           <div className="unsupportedPreview">
             <Text>当前文件类型不支持在线预览，请直接下载。</Text>
-            <Button appearance="primary" size="small" onClick={onDownload}>下载</Button>
+            <button type="button" className="iconActionButton previewToolbarButton" title="下载" aria-label="下载" onClick={onDownload}>
+              <ArrowDownloadRegular />
+            </button>
           </div>
         )}
       </div>

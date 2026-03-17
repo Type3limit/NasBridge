@@ -39,10 +39,13 @@ export async function apiRequest(path, { method = "GET", token, body } = {}) {
   return response.json();
 }
 
-export function toWsUrl(token) {
+export function toWsUrl(token, options = {}) {
   const serverBase = baseUrl || window.location.origin;
   const wsBase = serverBase.replace(/^http/, "ws");
   const url = new URL("/ws", wsBase);
   url.searchParams.set("token", token);
+  if (options.bridgeRole) {
+    url.searchParams.set("bridgeRole", options.bridgeRole);
+  }
   return url.toString();
 }

@@ -49,6 +49,25 @@ ensure_file_from_example() {
   fi
 }
 
+get_env_value() {
+  local file="$1"
+  local key="$2"
+  [[ -f "$file" ]] || return 0
+  grep -E "^${key}=" "$file" | head -1 | sed -E "s/^${key}=//"
+}
+
+set_env_value() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  [[ -f "$file" ]] || return 0
+  if grep -q -E "^${key}=" "$file"; then
+    sed -i "s#^${key}=.*#${key}=${value}#" "$file"
+  else
+    printf '\n%s=%s\n' "$key" "$value" >> "$file"
+  fi
+}
+
 echo "[1/6] Checking prerequisites..."
 ensure_command node
 ensure_command npm
@@ -61,6 +80,13 @@ echo "[2/6] Preparing env files..."
 ensure_file_from_example "$SERVER_ENV_PATH" "server/.env.example"
 ensure_file_from_example "$CLIENT_ENV_PATH" "storage-client/.env.example"
 ensure_file_from_example "$WEB_ENV_PATH" "web/.env.example"
+
+SERVER_JWT="$(get_env_value "$SERVER_ENV_PATH" "JWT_SECRET")"
+CLIENT_JWT="$(get_env_value "$CLIENT_ENV_PATH" "JWT_SECRET")"
+if [[ -n "$SERVER_JWT" && ( -z "$CLIENT_JWT" || "$CLIENT_JWT" == "replace-this-with-the-same-secret-as-server" ) ]]; then
+  set_env_value "$CLIENT_ENV_PATH" "JWT_SECRET" "$SERVER_JWT"
+  echo "Synced JWT_SECRET from $SERVER_ENV_PATH to $CLIENT_ENV_PATH for share-token validation."
+fi
 
 if [[ "$ENABLE_TURN" == "true" ]]; then
   echo "[3/6] Starting TURN (coturn) with Docker..."
