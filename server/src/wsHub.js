@@ -1,175 +1,17 @@
 import { WebSocketServer } from "ws";
 import { verifyToken } from "./auth.js";
-import { touchClient, clearClientFiles, getUserById } from "./db.js";
+import { touchClient, clearClientFiles } from "./db.js";
+import { persistChatMessage } from "./chatDb.js";
+import { sanitizeUserChatPayload, sanitizeBotChatPayload } from "./chatMessages.js";
 
 const CHAT_REALTIME_LIMIT_BYTES = 100 * 1024;
-
-function sanitizeMessageCard(rawCard) {
-  const card = rawCard && typeof rawCard === "object" ? rawCard : null;
-  if (!card) {
-    return null;
-  }
-  const progress = Number.isFinite(card.progress) ? Math.max(0, Math.min(100, Number(card.progress))) : null;
-  const actions = Array.isArray(card.actions)
-    ? card.actions.slice(0, 4).map((action) => ({
-        type: String(action?.type || "").slice(0, 32),
-        label: String(action?.label || "").slice(0, 80),
-        url: String(action?.url || "").slice(0, 500),
-        attachmentId: String(action?.attachmentId || "").slice(0, 160)
-      })).filter((action) => action.type && action.label)
-    : [];
-  const next = {
-    type: String(card.type || "bot-status").slice(0, 32),
-    status: String(card.status || "info").slice(0, 24),
-    title: String(card.title || "").slice(0, 160),
-    subtitle: String(card.subtitle || "").slice(0, 240),
-    body: String(card.body || "").slice(0, 2000),
-    progress,
-    imageUrl: String(card.imageUrl || "").slice(0, 500),
-    imageAlt: String(card.imageAlt || "").slice(0, 160),
-    mediaAttachmentId: String(card.mediaAttachmentId || "").slice(0, 160),
-    sourceLabel: String(card.sourceLabel || "").slice(0, 300),
-    sourceUrl: String(card.sourceUrl || "").slice(0, 500),
-    actions
-  };
-  if (!next.title && !next.body && !next.mediaAttachmentId && !next.imageUrl) {
-    return null;
-  }
-  return next;
-}
-
-function sanitizeBotMetadata(rawBot) {
-  const bot = rawBot && typeof rawBot === "object" ? rawBot : null;
-  if (!bot) {
-    return null;
-  }
-  return {
-    botId: String(bot.botId || "").slice(0, 120),
-    jobId: String(bot.jobId || "").slice(0, 120)
-  };
-}
-
-function sanitizeAvatarResponse(user) {
-  const rawAvatarUrl = String(user?.avatarUrl || "");
-  const isInlineAvatar = /^data:/i.test(rawAvatarUrl);
-  return {
-    avatarUrl: isInlineAvatar ? "" : rawAvatarUrl,
-    avatarClientId: user?.avatarClientId || "",
-    avatarPath: user?.avatarPath || "",
-    avatarFileId: user?.avatarFileId || ""
-  };
-}
-
-function buildChatAuthor(user) {
-  const avatar = sanitizeAvatarResponse(user);
-  return {
-    id: user?.id || "",
-    displayName: user?.displayName || "匿名用户",
-    avatarUrl: avatar.avatarUrl,
-    avatarClientId: avatar.avatarClientId,
-    avatarPath: avatar.avatarPath,
-    avatarFileId: avatar.avatarFileId
-  };
-}
-
-function sanitizeSuppliedBotAuthor(author) {
-  const payload = author && typeof author === "object" ? author : {};
-  const id = String(payload.id || "").slice(0, 120);
-  if (!id.startsWith("bot:")) {
-    return null;
-  }
-  return {
-    id,
-    displayName: String(payload.displayName || "Bot").slice(0, 80),
-    avatarUrl: "",
-    avatarClientId: "",
-    avatarPath: "",
-    avatarFileId: ""
-  };
-}
-
-function sanitizeChatPayload(rawPayload, principalId) {
-  const user = getUserById(principalId);
-  if (!user) {
-    return null;
-  }
-  const payload = rawPayload && typeof rawPayload === "object" ? rawPayload : {};
-  const attachments = Array.isArray(payload.attachments)
-    ? payload.attachments.slice(0, 6).map((item) => ({
-        id: String(item?.id || "").slice(0, 160),
-        name: String(item?.name || "附件").slice(0, 200),
-        mimeType: String(item?.mimeType || "application/octet-stream").slice(0, 120),
-        size: Math.max(0, Number(item?.size || 0)),
-        path: String(item?.path || "").slice(0, 500),
-        clientId: String(item?.clientId || payload.hostClientId || "").slice(0, 120),
-        kind: String(item?.kind || "file").slice(0, 24)
-      })).filter((item) => item.path && item.clientId)
-    : [];
-  const message = {
-    id: String(payload.id || "").slice(0, 120),
-    text: String(payload.text || "").slice(0, 4000),
-    createdAt: String(payload.createdAt || new Date().toISOString()).slice(0, 64),
-    dayKey: String(payload.dayKey || "").slice(0, 32),
-    historyPath: String(payload.historyPath || "").slice(0, 500),
-    hostClientId: String(payload.hostClientId || "").slice(0, 120),
-    attachments,
-    author: buildChatAuthor(user)
-  };
-  if (!message.id || !message.createdAt || !message.hostClientId || !message.historyPath) {
-    return null;
-  }
-  if (!message.text && !message.attachments.length) {
-    return null;
-  }
-  return message;
-}
-
-function sanitizeBotChatPayload(rawPayload, principalId) {
-  const payload = rawPayload && typeof rawPayload === "object" ? rawPayload : {};
-  const author = sanitizeSuppliedBotAuthor(payload.author);
-  if (!author) {
-    return null;
-  }
-  const attachments = Array.isArray(payload.attachments)
-    ? payload.attachments.slice(0, 6).map((item) => ({
-        id: String(item?.id || "").slice(0, 160),
-        name: String(item?.name || "附件").slice(0, 200),
-        mimeType: String(item?.mimeType || "application/octet-stream").slice(0, 120),
-        size: Math.max(0, Number(item?.size || 0)),
-        path: String(item?.path || "").slice(0, 500),
-        clientId: String(item?.clientId || payload.hostClientId || "").slice(0, 120),
-        kind: String(item?.kind || "file").slice(0, 24)
-      })).filter((item) => item.path && item.clientId)
-    : [];
-  const message = {
-    id: String(payload.id || "").slice(0, 120),
-    text: String(payload.text || "").slice(0, 4000),
-    createdAt: String(payload.createdAt || new Date().toISOString()).slice(0, 64),
-    dayKey: String(payload.dayKey || "").slice(0, 32),
-    historyPath: String(payload.historyPath || "").slice(0, 500),
-    hostClientId: String(payload.hostClientId || "").slice(0, 120),
-    attachments,
-    author,
-    card: sanitizeMessageCard(payload.card),
-    bot: sanitizeBotMetadata(payload.bot)
-  };
-  if (!message.id || !message.createdAt || !message.hostClientId || !message.historyPath) {
-    return null;
-  }
-  if (message.hostClientId !== principalId) {
-    return null;
-  }
-  if (!message.text && !message.attachments.length && !message.card) {
-    return null;
-  }
-  return message;
-}
 
 export function initWsHub(server) {
   const wss = new WebSocketServer({ noServer: true });
   const routes = new Map();
   const adminSockets = new Set();
   const clientSockets = new Map();
+  const chatSockets = new Set();
   const debug = process.env.P2P_DEBUG === "1";
 
   function log(...args) {
@@ -181,7 +23,7 @@ export function initWsHub(server) {
   server.on("upgrade", (req, socket, head) => {
     try {
       const url = new URL(req.url, `http://${req.headers.host}`);
-      if (url.pathname !== "/ws") {
+      if (url.pathname !== "/ws" && url.pathname !== "/ws/chat") {
         log("upgrade-reject", "invalid-path", url.pathname);
         return socket.destroy();
       }
@@ -193,6 +35,7 @@ export function initWsHub(server) {
       const payload = verifyToken(token);
       wss.handleUpgrade(req, socket, head, (ws) => {
         ws.identity = payload;
+        ws.channel = url.pathname === "/ws/chat" ? "chat" : "control";
         ws.bridgeRole = url.searchParams.get("bridgeRole") || "";
         wss.emit("connection", ws);
       });
@@ -230,6 +73,16 @@ export function initWsHub(server) {
     }
   }
 
+  function broadcastToChatUsers(payload) {
+    const serialized = JSON.stringify(payload);
+    for (const ws of chatSockets) {
+      if (ws.readyState !== ws.OPEN) {
+        continue;
+      }
+      ws.send(serialized);
+    }
+  }
+
   function sendToSocket(ws, payload) {
     if (ws && ws.readyState === ws.OPEN) {
       ws.send(JSON.stringify(payload));
@@ -245,7 +98,9 @@ export function initWsHub(server) {
         : `${principalId}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
     ws.routeId = routeId;
     routes.set(routeId, ws);
-    if (ws.identity.role === "admin") {
+    if (ws.channel === "chat") {
+      chatSockets.add(ws);
+    } else if (ws.identity.role === "admin") {
       adminSockets.add(ws);
     } else if (ws.identity.role === "client") {
       clientSockets.set(principalId, ws);
@@ -259,6 +114,10 @@ export function initWsHub(server) {
 
     ws.on("message", (raw) => {
       try {
+        if (ws.channel === "chat") {
+          sendToSocket(ws, { type: "chat-room-error", message: "聊天室实时通道只接收服务器广播" });
+          return;
+        }
         const message = JSON.parse(raw.toString());
         if (message.type === "signal" && message.targetId) {
           log("signal", { from: routeId, principalId, to: message.targetId, kind: message.payload?.kind });
@@ -289,12 +148,13 @@ export function initWsHub(server) {
           }
           const sanitized = ws.identity?.role === "client"
             ? sanitizeBotChatPayload(message.payload, principalId)
-            : sanitizeChatPayload(message.payload, principalId);
+            : sanitizeUserChatPayload(message.payload, principalId);
           if (!sanitized) {
             sendToSocket(ws, { type: "chat-room-error", message: "聊天室消息格式无效" });
             return;
           }
-          broadcastToAppUsers({ type: "chat-room-message", payload: sanitized });
+          const stored = persistChatMessage(sanitized);
+          broadcastToChatUsers({ type: "chat-room-message", payload: stored });
           return;
         }
 
@@ -305,6 +165,7 @@ export function initWsHub(server) {
 
     ws.on("close", () => {
       routes.delete(routeId);
+      chatSockets.delete(ws);
       adminSockets.delete(ws);
       if (ws.identity.role === "client" && clientSockets.get(principalId) === ws) {
         clientSockets.delete(principalId);
@@ -321,6 +182,7 @@ export function initWsHub(server) {
 
   return {
     broadcastAdminClientStatus: broadcastToAdmins,
-    broadcastToAppUsers
+    broadcastToAppUsers,
+    broadcastToChatUsers
   };
 }

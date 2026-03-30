@@ -9,6 +9,7 @@ import jwt from "jsonwebtoken";
 import WebSocket from "ws";
 import wrtcPkg from "@roamhq/wrtc";
 import { createBotRuntime } from "./bot/index.js";
+import { createGlobalMusicPlayer } from "./musicPlayer.js";
 import { createBotJobMessageId } from "./bot/context.js";
 import { scanFiles, safeJoin } from "./fsIndex.js";
 
@@ -40,6 +41,8 @@ const videoCoverCacheDirName = process.env.VIDEO_COVER_CACHE_DIR_NAME || "video-
 const hlsCacheDirName = process.env.HLS_CACHE_DIR_NAME || ".nas-hls-cache";
 const hlsCacheIndexFileName = process.env.HLS_CACHE_INDEX_FILE_NAME || "index.json";
 const chatRoomDirName = process.env.CHAT_ROOM_DIR_NAME || ".nas-chat-room";
+const botAppDataDirName = process.env.BOT_APP_DATA_DIR_NAME || ".nas-bot";
+const botAppDataRoot = path.resolve(path.join(storageRoot, botAppDataDirName));
 const transcodeVideoCodec = process.env.TRANSCODE_VIDEO_CODEC || "auto";
 const hlsVideoCodec = process.env.HLS_VIDEO_CODEC || "auto";
 const transcodePreferGpu = process.env.TRANSCODE_PREFER_GPU !== "0";
@@ -65,6 +68,7 @@ const peerCleanupDelayMs = Number(process.env.PEER_CLEANUP_DELAY_MS || 30_000);
 const previewCacheMaxAgeMs = Number(process.env.PREVIEW_CACHE_MAX_AGE_MS || 86_400_000);
 const hlsCacheMaxAgeMs = Number(process.env.HLS_CACHE_MAX_AGE_MS || 604_800_000);
 const cacheCleanupIntervalMs = Number(process.env.CACHE_CLEANUP_INTERVAL_MS || 3_600_000);
+const audioStreamCacheDirName = process.env.AUDIO_STREAM_CACHE_DIR_NAME || ".nas-audio-stream-cache";
 const chatMediaWarmupThresholdBytes = Number(process.env.CHAT_MEDIA_WARMUP_THRESHOLD_BYTES || 10 * 1024 * 1024);
 const previewObservabilityEnabled = process.env.PREVIEW_OBSERVABILITY === "1";
 const previewObservabilityIntervalMs = Number(process.env.PREVIEW_OBSERVABILITY_INTERVAL_MS || 15_000);
@@ -79,6 +83,14 @@ const disabledEncoderCooldownMs = Number(process.env.DISABLED_ENCODER_COOLDOWN_M
 const hlsIndexMaxEntries = Number(process.env.HLS_INDEX_MAX_ENTRIES || 512);
 const thumbnailMinimumBytes = Number(process.env.THUMBNAIL_MINIMUM_BYTES || 512);
 const shareJwtSecret = process.env.JWT_SECRET || "";
+const defaultHlsProfileId = "720p";
+const HLS_PROFILE_PRESETS = [
+  { id: "480p", label: "480p", height: 480, videoBitrate: "1200k", maxrate: "1800k", bufsize: "3600k", audioBitrate: "96k" },
+  { id: "720p", label: "720p", height: 720, videoBitrate: "2200k", maxrate: "3000k", bufsize: "6000k", audioBitrate: "128k" },
+  { id: "1080p", label: "1080p", height: 1080, videoBitrate: "4500k", maxrate: "6000k", bufsize: "12000k", audioBitrate: "160k" },
+  { id: "1440p", label: "1440p", height: 1440, videoBitrate: "9000k", maxrate: "12000k", bufsize: "24000k", audioBitrate: "192k" },
+  { id: "2160p", label: "4K", height: 2160, videoBitrate: "16000k", maxrate: "22000k", bufsize: "44000k", audioBitrate: "192k" }
+];
 
 if (!shareJwtSecret) {
   console.warn("[share] JWT_SECRET is missing in storage-client env; public share preview/download will fail until it matches server JWT_SECRET");
@@ -202,6 +214,7 @@ const state = {
 };
 
 let botRuntime = null;
+let globalMusicPlayer = null;
 const botJobStatusCache = new Map();
 
 function getPrunableLimit(value, fallback) {
@@ -233,7 +246,6 @@ function pruneBotJobStatusCache(now = Date.now()) {
 }
 
 async function pruneTransientHlsIndex(now = Date.now()) {
-  const maxAgeMs = getPrunableLimit(hlsCacheMaxAgeMs, 604_800_000);
   for (const [hlsId, entry] of state.hlsIndex.entries()) {
     const dirPath = String(entry?.dir || "");
     if (!dirPath) {
@@ -241,11 +253,7 @@ async function pruneTransientHlsIndex(now = Date.now()) {
       continue;
     }
     try {
-      const stat = await fs.promises.stat(dirPath);
-      const lastTouchedAt = Math.max(stat.mtimeMs || 0, stat.atimeMs || 0, stat.ctimeMs || 0, Number(entry?.updatedAt || 0));
-      if (maxAgeMs > 0 && now - lastTouchedAt > maxAgeMs) {
-        state.hlsIndex.delete(hlsId);
-      }
+      await fs.promises.stat(dirPath);
     } catch {
       state.hlsIndex.delete(hlsId);
     }
@@ -262,12 +270,9 @@ async function pruneTransientHlsIndex(now = Date.now()) {
 }
 
 async function prunePersistentHlsIndex(now = Date.now()) {
-  const maxAgeMs = getPrunableLimit(hlsCacheMaxAgeMs, 604_800_000);
-  const maxEntries = getPrunableLimit(hlsIndexMaxEntries, 512);
   await updateHlsPersistentIndex(async (index) => {
     const entries = Object.entries(index.entries || {});
     let changed = false;
-    const metadata = [];
 
     for (const [key, entry] of entries) {
       const hlsId = String(entry?.hlsId || "").trim();
@@ -278,28 +283,9 @@ async function prunePersistentHlsIndex(now = Date.now()) {
       }
 
       const dirPath = getHlsCacheDirPath(hlsId);
-      let lastTouchedAt = Number(new Date(entry?.updatedAt || 0).getTime() || 0);
       try {
-        const stat = await fs.promises.stat(dirPath);
-        lastTouchedAt = Math.max(lastTouchedAt, stat.mtimeMs || 0, stat.atimeMs || 0, stat.ctimeMs || 0);
+        await fs.promises.stat(dirPath);
       } catch {
-        delete index.entries[key];
-        changed = true;
-        continue;
-      }
-
-      if (maxAgeMs > 0 && now - lastTouchedAt > maxAgeMs) {
-        delete index.entries[key];
-        changed = true;
-        continue;
-      }
-
-      metadata.push({ key, lastTouchedAt });
-    }
-
-    if (maxEntries > 0 && metadata.length > maxEntries) {
-      metadata.sort((left, right) => left.lastTouchedAt - right.lastTouchedAt);
-      for (const { key } of metadata.slice(0, metadata.length - maxEntries)) {
         delete index.entries[key];
         changed = true;
       }
@@ -376,6 +362,7 @@ async function publishRealtimeChatMessage(entry) {
 function buildBotJobStatusText(job, botDisplayName) {
   const phaseText = String(job?.progress?.label || job?.phase || "处理中").trim();
   const percent = Number.isFinite(job?.progress?.percent) ? Math.max(0, Math.min(100, Number(job.progress.percent))) : null;
+  const verification = parseVerificationRequiredError(job?.error?.message || "");
   if (job?.status === "queued") {
     return `${botDisplayName}：排队中`;
   }
@@ -388,7 +375,7 @@ function buildBotJobStatusText(job, botDisplayName) {
     return `${botDisplayName}：已完成`;
   }
   if (job?.status === "failed") {
-    const errorText = String(job?.error?.message || "任务失败").trim();
+    const errorText = verification?.message || String(job?.error?.message || "任务失败").trim();
     return `${botDisplayName}：失败${errorText ? `，${errorText}` : ""}`;
   }
   if (job?.status === "cancelled") {
@@ -397,9 +384,108 @@ function buildBotJobStatusText(job, botDisplayName) {
   return `${botDisplayName}：${phaseText || job?.status || "处理中"}`;
 }
 
+function parseVerificationRequiredError(errorMessage = "") {
+  const prefix = "BOT_VERIFICATION_REQUIRED::";
+  const text = String(errorMessage || "").trim();
+  if (!text.startsWith(prefix)) {
+    return null;
+  }
+  try {
+    const payload = JSON.parse(text.slice(prefix.length));
+    return {
+      provider: String(payload?.provider || "").trim(),
+      url: String(payload?.url || "").trim(),
+      message: String(payload?.message || "需要先完成网页验证，然后再重试。").trim()
+    };
+  } catch {
+    return {
+      provider: "",
+      url: "",
+      message: "需要先完成网页验证，然后再重试。"
+    };
+  }
+}
+
+function formatBotProgressDetails(job) {
+  const details = job?.progress?.details;
+  if (!details || typeof details !== "object" || details.type !== "web-search") {
+    return String(job?.progress?.label || job?.phase || "处理中").trim();
+  }
+
+  const lines = [];
+  const stage = String(job?.progress?.label || "").trim();
+  const query = String(details.query || "").trim();
+  const directUrls = Array.isArray(details.directUrls) ? details.directUrls.filter(Boolean) : [];
+  const plan = details.plan && typeof details.plan === "object" ? details.plan : null;
+  const executedQueries = Array.isArray(details.executedQueries) ? details.executedQueries.filter(Boolean) : [];
+  const results = Array.isArray(details.results) ? details.results : [];
+  const followUpDecision = details.followUpDecision && typeof details.followUpDecision === "object" ? details.followUpDecision : null;
+  const fetchedPages = Array.isArray(details.fetchedPages) ? details.fetchedPages : [];
+
+  if (stage) {
+    lines.push(`当前阶段：${stage}`);
+  }
+  if (query) {
+    lines.push(`检索问题：${query}`);
+  }
+  if (directUrls.length) {
+    lines.push("用户提供直链：");
+    lines.push(...directUrls.map((item) => `- ${item}`));
+  }
+  if (plan?.intent) {
+    lines.push("", `Intent：${plan.intent}`);
+  }
+  if (plan?.rationale) {
+    lines.push(`Rationale：${plan.rationale}`);
+  }
+  if (Array.isArray(plan?.strategy) && plan.strategy.length) {
+    lines.push("Strategy：");
+    lines.push(...plan.strategy.map((item, index) => `${index + 1}. ${item}`));
+  }
+  if (Array.isArray(plan?.searchTerms) && plan.searchTerms.length) {
+    lines.push("Search Terms：");
+    lines.push(...plan.searchTerms.map((item) => `- ${item}`));
+  }
+  if (executedQueries.length) {
+    lines.push("已执行检索：");
+    lines.push(...executedQueries.map((item) => `- ${item}`));
+  }
+  if (results.length) {
+    lines.push("当前候选结果：");
+    lines.push(...results.map((item) => `- ${String(item.title || item.url || "结果").trim()}${item.url ? `\n  ${item.url}` : ""}`));
+  }
+  if (followUpDecision?.reason) {
+    lines.push("进页决策：");
+    lines.push(`- ${String(followUpDecision.reason || "").trim()}`);
+    if (Array.isArray(followUpDecision.selectedIndexes) && followUpDecision.selectedIndexes.length) {
+      lines.push(`- 目标序号：${followUpDecision.selectedIndexes.join(", ")}`);
+    }
+  }
+  if (fetchedPages.length) {
+    lines.push("已抓取页面摘要：");
+    lines.push(...fetchedPages.map((item) => `- ${String(item.title || item.url || "页面").trim()}${item.excerpt ? `\n  ${String(item.excerpt || "").trim()}` : ""}`));
+  }
+
+  return lines.filter(Boolean).join("\n");
+}
+
 function buildBotJobCard(job, botDisplayName) {
   const percent = Number.isFinite(job?.progress?.percent) ? Math.max(0, Math.min(100, Number(job.progress.percent))) : null;
   if (job?.status === "failed") {
+    const verification = parseVerificationRequiredError(job?.error?.message || "");
+    if (verification) {
+      return {
+        type: "bot-status",
+        status: "failed",
+        title: botDisplayName,
+        body: verification.message,
+        progress: null,
+        actions: [
+          ...(verification.url ? [{ type: "open-url", label: "打开验证页", url: verification.url }] : []),
+          { type: "retry-bot-job", label: "完成后重试" }
+        ]
+      };
+    }
     return {
       type: "bot-status",
       status: "failed",
@@ -432,7 +518,8 @@ function buildBotJobCard(job, botDisplayName) {
     type: "bot-status",
     status: String(job?.status || "running"),
     title: botDisplayName,
-    body: String(job?.progress?.label || job?.phase || "处理中").trim(),
+    subtitle: String(job?.progress?.label || job?.phase || "处理中").trim(),
+    body: formatBotProgressDetails(job),
     progress: percent,
     actions: ["queued", "running"].includes(String(job?.status || ""))
       ? [{ type: "cancel-bot-job", label: "停止生成" }]
@@ -447,9 +534,26 @@ function getBotJobStatusSignature(job) {
   return [
     String(job?.status || "queued"),
     String(job?.phase || "parse-input"),
+    String(job?.progress?.label || ""),
     String(percentBucket),
+    (() => {
+      try {
+        return JSON.stringify(job?.progress?.details || null).slice(0, 2000);
+      } catch {
+        return "";
+      }
+    })(),
     String(job?.error?.message || "")
   ].join("|");
+}
+
+function getBotJobStatusMessageId(job) {
+  const replyMode = String(job?.chat?.replyMode || "").trim();
+  const messageId = String(job?.chat?.messageId || "").trim();
+  if (replyMode === "replace-chat-message" && messageId) {
+    return messageId;
+  }
+  return createBotJobMessageId(job?.jobId);
 }
 
 async function publishBotJobStatusMessage(job) {
@@ -467,8 +571,9 @@ async function publishBotJobStatusMessage(job) {
   const createdAt = cached?.createdAt || String(job.startedAt || job.createdAt || new Date().toISOString());
   const dayKey = String(job.chat?.dayKey || createdAt.slice(0, 10));
   botJobStatusCache.set(job.jobId, { signature, createdAt, updatedAt: Date.now() });
+  const messageId = getBotJobStatusMessageId(job);
   const message = {
-    id: createBotJobMessageId(job.jobId),
+    id: messageId,
     text: "",
     createdAt,
     dayKey,
@@ -492,11 +597,15 @@ async function publishBotJobStatusMessage(job) {
   if (job?.status === "succeeded" && String(job?.result?.replyMessageId || "") === message.id) {
     return;
   }
-  if (message.historyPath) {
-    await appendChatHistoryEntry(message.historyPath, message);
-  }
+  // Publish realtime WS first so the browser sees the status card immediately,
+  // then write the JSONL file in the background (fire-and-forget to avoid blocking the WS path).
   if (state.ws && state.ws.readyState === WebSocket.OPEN && message.hostClientId) {
     await publishRealtimeChatMessage(message);
+  }
+  if (message.historyPath) {
+    appendChatHistoryEntry(message.historyPath, message).catch((error) => {
+      logWarn("bot-job-status-history-write-failed", error?.message || error);
+    });
   }
 }
 
@@ -508,9 +617,11 @@ async function ensureBotRuntime() {
   botRuntime = createBotRuntime({
     clientId: state.clientId,
     storageRoot,
+    appDataRoot: botAppDataRoot,
     dependencies: {
       syncFiles,
       ffmpegPath,
+      getMusicPlayer: ensureGlobalMusicPlayer,
       appendChatMessage: appendChatHistoryEntry,
       publishChatMessage: publishRealtimeChatMessage
     }
@@ -520,6 +631,23 @@ async function ensureBotRuntime() {
     publishBotJobStatusMessage(job).catch((error) => logWarn("bot-job-status-publish-failed", error?.message || error));
   });
   return botRuntime;
+}
+
+async function ensureGlobalMusicPlayer() {
+  if (globalMusicPlayer) {
+    return globalMusicPlayer;
+  }
+  globalMusicPlayer = createGlobalMusicPlayer({
+    storageRoot,
+    appDataRoot: botAppDataRoot,
+    spawnProcess: spawnObservedProcess,
+    logger: (...args) => logInfo("[music-player]", ...args),
+    onTrackReady: (absolutePath) => {
+      scheduleAudioStreamWarmup(absolutePath);
+    }
+  });
+  await globalMusicPlayer.init();
+  return globalMusicPlayer;
 }
 
 async function getAvailableFfmpegEncoders() {
@@ -996,16 +1124,16 @@ async function cleanupExpiredCacheEntries() {
   }
 
   await removeExpiredChildren(path.join(storageRoot, previewCacheDirName), previewCacheMaxAgeMs, false);
-  await removeExpiredChildren(path.join(storageRoot, hlsCacheDirName), hlsCacheMaxAgeMs, false);
   pruneBotJobStatusCache(now);
   await pruneTransientHlsIndex(now);
   await prunePersistentHlsIndex(now);
 }
 
 async function getCodecCandidates(context = "") {
-  const preferred = String((context === "hls-720p" ? hlsVideoCodec : transcodeVideoCodec) || "auto").trim().toLowerCase();
+  const isHlsContext = String(context || "").startsWith("hls:");
+  const preferred = String((isHlsContext ? hlsVideoCodec : transcodeVideoCodec) || "auto").trim().toLowerCase();
   const availableEncoders = await getAvailableFfmpegEncoders();
-  const preferredGpuAllowed = context === "hls-720p" ? allowGpuHlsEncoding : transcodePreferGpu;
+  const preferredGpuAllowed = isHlsContext ? allowGpuHlsEncoding : transcodePreferGpu;
   const isCodecUsable = (codec) => availableEncoders.has(codec) && !getCodecDisableRecord(codec, context);
 
   if (preferred && preferred !== "auto") {
@@ -1020,13 +1148,118 @@ async function getCodecCandidates(context = "") {
   return ["h264_nvenc", "h264_qsv", "h264_amf", "libx264"].filter((codec) => isCodecUsable(codec));
 }
 
-function buildCodecArgs(codec, quality = "preview") {
+function normalizeHlsProfileId(profile = defaultHlsProfileId) {
+  const raw = String(profile || defaultHlsProfileId).trim().toLowerCase();
+  if (!raw) {
+    return "720p";
+  }
+  if (raw === "4k") {
+    return "2160p";
+  }
+  if (/^\d+$/.test(raw)) {
+    return `${raw}p`;
+  }
+  return raw;
+}
+
+function createDynamicHlsProfile(height) {
+  const numericHeight = Math.max(1, Math.round(Number(height || 0)));
+  const template = HLS_PROFILE_PRESETS.find((preset) => numericHeight <= preset.height) || HLS_PROFILE_PRESETS[HLS_PROFILE_PRESETS.length - 1];
+  return {
+    ...template,
+    id: `${numericHeight}p`,
+    label: numericHeight >= 2160 ? "原始 4K" : `原始 ${numericHeight}p`,
+    height: numericHeight,
+    isNative: true
+  };
+}
+
+function buildAvailableHlsProfiles(videoInfo) {
+  const sourceHeight = Math.max(0, Number(videoInfo?.height || 0));
+  if (!(sourceHeight > 0)) {
+    return HLS_PROFILE_PRESETS.filter((preset) => preset.id === defaultHlsProfileId).map((preset) => ({ ...preset }));
+  }
+  const presets = HLS_PROFILE_PRESETS
+    .filter((preset) => preset.height <= sourceHeight)
+    .map((preset) => ({ ...preset }));
+  if (!presets.length) {
+    return [createDynamicHlsProfile(sourceHeight)];
+  }
+  const highestPreset = presets[presets.length - 1];
+  if (sourceHeight > highestPreset.height) {
+    presets.push(createDynamicHlsProfile(sourceHeight));
+  }
+  return presets;
+}
+
+function isPresetHlsProfileId(profileId) {
+  return HLS_PROFILE_PRESETS.some((preset) => preset.id === profileId);
+}
+
+function getPreferredHlsProfileId(videoInfo, requestedProfile = defaultHlsProfileId) {
+  const availableProfiles = buildAvailableHlsProfiles(videoInfo);
+  const normalizedRequested = normalizeHlsProfileId(requestedProfile);
+  const matched = availableProfiles.find((profile) => profile.id === normalizedRequested);
+  if (matched) {
+    return matched.id;
+  }
+
+  const preferredDefault = availableProfiles.find((profile) => profile.id === defaultHlsProfileId);
+  if (preferredDefault) {
+    return preferredDefault.id;
+  }
+
+  const requestedPreset = HLS_PROFILE_PRESETS.find((preset) => preset.id === normalizedRequested)
+    || HLS_PROFILE_PRESETS.find((preset) => preset.id === defaultHlsProfileId)
+    || null;
+  const preferredHeight = Number(requestedPreset?.height || 0);
+
+  if (preferredHeight > 0) {
+    const lowerPreset = availableProfiles
+      .filter((profile) => isPresetHlsProfileId(profile.id) && Number(profile.height || 0) <= preferredHeight)
+      .sort((left, right) => Number(left.height || 0) - Number(right.height || 0))
+      .pop();
+    if (lowerPreset) {
+      return lowerPreset.id;
+    }
+
+    const higherPreset = availableProfiles.find((profile) => isPresetHlsProfileId(profile.id) && Number(profile.height || 0) >= preferredHeight);
+    if (higherPreset) {
+      return higherPreset.id;
+    }
+  }
+
+  return availableProfiles[availableProfiles.length - 1]?.id || defaultHlsProfileId;
+}
+
+function getHlsProfileSpec(profile, videoInfo) {
+  const normalizedProfile = normalizeHlsProfileId(profile);
+  return buildAvailableHlsProfiles(videoInfo).find((item) => item.id === normalizedProfile)
+    || HLS_PROFILE_PRESETS.find((item) => item.id === normalizedProfile)
+    || createDynamicHlsProfile(Number(videoInfo?.height || 720));
+}
+
+function serializeHlsProfiles(profiles = []) {
+  return (Array.isArray(profiles) ? profiles : []).map((profile) => ({
+    id: String(profile.id || ""),
+    label: String(profile.label || profile.id || ""),
+    height: Number(profile.height || 0),
+    isNative: Boolean(profile.isNative)
+  }));
+}
+
+function buildHlsCodecContext(profileId = "720p") {
+  return `hls:${normalizeHlsProfileId(profileId)}`;
+}
+
+function buildCodecArgs(codec, quality = "preview", options = {}) {
   const isFull = quality === "full";
   const isHls = quality === "hls";
+  const hlsProfile = isHls ? getHlsProfileSpec(options.profile || "720p", { height: Number(options.targetHeight || 720) }) : null;
+  const hlsTargetBitrate = hlsProfile?.videoBitrate || "2200k";
+  const hlsMaxrate = hlsProfile?.maxrate || "3000k";
+  const hlsBufsize = hlsProfile?.bufsize || "6000k";
   if (codec === "h264_nvenc") {
-    const targetBitrate = isHls ? "2200k" : "1800k";
-    const maxrate = isHls ? "3000k" : "2200k";
-    const bufsize = isHls ? "6000k" : "4400k";
     return [
       "-c:v",
       "h264_nvenc",
@@ -1035,11 +1268,11 @@ function buildCodecArgs(codec, quality = "preview") {
       "-rc",
       "vbr",
       "-b:v",
-      targetBitrate,
+      isHls ? hlsTargetBitrate : "1800k",
       "-maxrate",
-      maxrate,
+      isHls ? hlsMaxrate : "2200k",
       "-bufsize",
-      bufsize
+      isHls ? hlsBufsize : "4400k"
     ];
   }
   if (codec === "h264_qsv") {
@@ -1051,7 +1284,7 @@ function buildCodecArgs(codec, quality = "preview") {
       "-look_ahead",
       "0",
       "-b:v",
-      isHls ? "2200k" : "1800k"
+      isHls ? hlsTargetBitrate : "1800k"
     ];
   }
   if (codec === "h264_amf") {
@@ -1193,6 +1426,69 @@ function extractProgressFromFfmpegLog(text, durationSeconds) {
     return null;
   }
   return Math.max(1, Math.min(99, Math.round((currentSeconds / durationSeconds) * 100)));
+}
+
+function normalizeOutgoingMimeType(mimeType = "") {
+  const value = String(mimeType || "").trim().toLowerCase();
+  if (value === "audio/x-flac") {
+    return "audio/flac";
+  }
+  return value || "application/octet-stream";
+}
+
+async function transcodeAudioToMp3(inputFile, onProgress) {
+  const durationSeconds = await getMediaDurationSeconds(inputFile, "audio-preview-duration");
+  onProgress?.({ stage: "preparing", progress: 0, message: "正在准备音频兼容流" });
+
+  const tempDir = path.join(os.tmpdir(), "nas-bridge-transcode");
+  await fs.promises.mkdir(tempDir, { recursive: true });
+  const outputFile = path.join(tempDir, `${Date.now()}-${Math.random().toString(16).slice(2, 8)}.mp3`);
+
+  await new Promise((resolve, reject) => {
+    const args = [
+      "-y",
+      "-i",
+      inputFile,
+      "-vn",
+      "-c:a",
+      "libmp3lame",
+      "-b:a",
+      "192k",
+      outputFile
+    ];
+    const proc = spawnObservedProcess(ffmpegPath, args, { stdio: ["ignore", "ignore", "pipe"] }, { kind: "ffmpeg", context: "audio-transcode-mp3", path: inputFile });
+    let stderr = "";
+    proc.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+      const progress = extractProgressFromFfmpegLog(text, durationSeconds);
+      if (progress !== null) {
+        onProgress?.({ stage: "transcoding", progress, message: `正在转换音频 ${progress}%` });
+      } else {
+        onProgress?.({ stage: "transcoding", progress: durationSeconds > 0 ? 5 : null, message: "正在转换音频" });
+      }
+    });
+    proc.on("error", (error) => reject(new Error(`ffmpeg launch failed: ${error.message}`)));
+    proc.on("close", async (code) => {
+      if (code !== 0) {
+        reject(new Error(`ffmpeg audio transcode failed with code ${code}: ${stderr.slice(-400)}`));
+        return;
+      }
+      try {
+        const stat = await fs.promises.stat(outputFile);
+        if (!stat.isFile() || Number(stat.size || 0) <= 0) {
+          reject(new Error("ffmpeg audio transcode produced empty output"));
+          return;
+        }
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+
+  onProgress?.({ stage: "done", progress: 100, message: "音频兼容流已就绪" });
+  return outputFile;
 }
 
 async function transcodeToMp4(inputFile, onProgress) {
@@ -1459,7 +1755,7 @@ function schedulePreviewWarmup(absolutePath) {
     .catch((error) => logWarn("preview-warmup-failed", error.message || error));
 }
 
-async function generateSingleBitrateHls(inputFile, outputDir, onProgress) {
+async function generateSingleBitrateHls(inputFile, outputDir, profile = "720p", onProgress) {
   await fs.promises.mkdir(outputDir, { recursive: true });
   const playlistPath = path.join(outputDir, "index.m3u8");
   const segmentPattern = path.join(outputDir, "seg-%05d.ts");
@@ -1467,18 +1763,23 @@ async function generateSingleBitrateHls(inputFile, outputDir, onProgress) {
   const durationSeconds = await getMediaDurationSeconds(inputFile, "hls-duration");
   onProgress?.({ stage: "preparing", progress: 0, message: "正在生成 HLS 预览" });
 
-  // Optimisation: if the source is already H.264 at ≤ 720p we can mux directly
-  // into HLS segments without re-encoding.  GPU/CPU usage drops to near zero.
   const videoInfo = await probeVideoStream(inputFile);
+  const availableProfiles = buildAvailableHlsProfiles(videoInfo);
+  const resolvedProfileId = getPreferredHlsProfileId(videoInfo, profile);
+  const profileSpec = getHlsProfileSpec(resolvedProfileId, videoInfo);
+  const hlsContext = buildHlsCodecContext(profileSpec.id);
   const canCopy =
     videoInfo?.codec === "h264" &&
     videoInfo.height > 0 &&
-    videoInfo.height <= 720;
+    videoInfo.height <= profileSpec.height;
 
-  const initialGpuCooldownHits = getCodecCooldownSnapshot("hls-720p");
-  const initialCandidates = canCopy ? ["copy"] : await getCodecCandidates("hls-720p");
+  const initialGpuCooldownHits = getCodecCooldownSnapshot(hlsContext);
+  const initialCandidates = canCopy ? ["copy"] : await getCodecCandidates(hlsContext);
   logInfo("[hls-plan]", JSON.stringify({
     path: summarizePathForLog(inputFile),
+    profile: profileSpec.id,
+    profileLabel: profileSpec.label,
+    availableProfiles: serializeHlsProfiles(availableProfiles),
     durationSeconds: durationSeconds || 0,
     inputVideo: videoInfo || null,
     canCopy,
@@ -1521,6 +1822,7 @@ async function generateSingleBitrateHls(inputFile, outputDir, onProgress) {
       const elapsedMs = Date.now() - startedAt;
       logInfo("[hls-result]", JSON.stringify({
         path: summarizePathForLog(inputFile),
+        profile: profileSpec.id,
         codec: "copy",
         mode: "copy",
         gpuCooldownHit: initialGpuCooldownHits.length > 0,
@@ -1528,10 +1830,9 @@ async function generateSingleBitrateHls(inputFile, outputDir, onProgress) {
         elapsedMs,
         elapsedSec: Number((elapsedMs / 1000).toFixed(1))
       }));
-      return { playlistPath, codec: "copy", mode: "copy", elapsedMs, gpuCooldown: initialGpuCooldownHits };
+      return { playlistPath, codec: "copy", mode: "copy", elapsedMs, gpuCooldown: initialGpuCooldownHits, profile: profileSpec.id, availableProfiles, sourceVideo: videoInfo || null };
     } catch (err) {
       logWarn("hls-copy-fallback", err.message || err);
-      // Clean up partial output before falling through to re-encode path
       await fs.promises.rm(outputDir, { recursive: true, force: true });
       await fs.promises.mkdir(outputDir, { recursive: true });
     }
@@ -1540,14 +1841,17 @@ async function generateSingleBitrateHls(inputFile, outputDir, onProgress) {
   let selectedCodec = "";
   await runFfmpegWithCodecFallback(
     (codec) => {
-      const codecArgs = buildCodecArgs(codec, "hls");
+      const codecArgs = buildCodecArgs(codec, "hls", {
+        profile: profileSpec.id,
+        targetHeight: profileSpec.height
+      });
       const hwaccelArgs =
         codec === "h264_nvenc" && hlsNvencUseCudaPipeline
           ? ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
           : [];
       const videoFilter = codec === "h264_nvenc"
-        ? (hlsNvencUseCudaPipeline ? "scale_cuda=-2:720" : "scale=-2:720,format=nv12")
-        : "scale=-2:720";
+        ? (hlsNvencUseCudaPipeline ? `scale_cuda=-2:${profileSpec.height}` : `scale=-2:${profileSpec.height},format=nv12`)
+        : `scale=-2:${profileSpec.height}`;
       const pixelFormatArgs = codec === "h264_nvenc"
         ? []
         : ["-pix_fmt", "yuv420p"];
@@ -1573,7 +1877,7 @@ async function generateSingleBitrateHls(inputFile, outputDir, onProgress) {
         "-c:a",
         "aac",
         "-b:a",
-        "128k",
+        profileSpec.audioBitrate || "128k",
         "-f",
         "hls",
         "-hls_time",
@@ -1588,7 +1892,7 @@ async function generateSingleBitrateHls(inputFile, outputDir, onProgress) {
       ];
     },
     {
-      context: "hls-720p",
+      context: hlsContext,
       sourcePath: inputFile,
       onCodecSelected: (codec) => {
         selectedCodec = codec;
@@ -1608,9 +1912,10 @@ async function generateSingleBitrateHls(inputFile, outputDir, onProgress) {
 
   onProgress?.({ stage: "done", progress: 100, message: "HLS 预览已就绪", codec: selectedCodec || "libx264" });
   const elapsedMs = Date.now() - startedAt;
-  const finalGpuCooldownHits = getCodecCooldownSnapshot("hls-720p");
+  const finalGpuCooldownHits = getCodecCooldownSnapshot(hlsContext);
   logInfo("[hls-result]", JSON.stringify({
     path: summarizePathForLog(inputFile),
+    profile: profileSpec.id,
     codec: selectedCodec || "libx264",
     mode: "transcode",
     gpuCooldownHit: initialGpuCooldownHits.length > 0,
@@ -1625,15 +1930,46 @@ async function generateSingleBitrateHls(inputFile, outputDir, onProgress) {
     mode: "transcode",
     elapsedMs,
     gpuCooldown: initialGpuCooldownHits,
-    gpuCooldownAfterRun: finalGpuCooldownHits
+    gpuCooldownAfterRun: finalGpuCooldownHits,
+    profile: profileSpec.id,
+    availableProfiles,
+    sourceVideo: videoInfo || null
   };
 }
 
 function parseManifestSegments(manifestText) {
-  return manifestText
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith("#"));
+  const segments = [];
+  for (const rawLine of String(manifestText || "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+    if (line.startsWith("#EXT-X-MAP:")) {
+      const match = /URI="([^"]+)"/.exec(line);
+      if (match?.[1]) {
+        segments.push(match[1]);
+      }
+      continue;
+    }
+    if (!line.startsWith("#")) {
+      segments.push(line);
+    }
+  }
+  return segments;
+}
+
+async function assertManifestArtifactsReadable(outputDir, manifestText) {
+  const entries = parseManifestSegments(manifestText);
+  for (const name of entries) {
+    const normalizedName = String(name || "").trim();
+    if (!normalizedName) {
+      continue;
+    }
+    if (normalizedName.includes("/") || normalizedName.includes("\\") || normalizedName.includes("..")) {
+      throw new Error(`invalid manifest artifact: ${normalizedName}`);
+    }
+    await fs.promises.access(path.join(outputDir, normalizedName), fs.constants.R_OK);
+  }
 }
 
 async function readHlsMeta(metaPath) {
@@ -1672,8 +2008,16 @@ function getHlsCacheRoot() {
   return path.join(storageRoot, hlsCacheDirName);
 }
 
+function getAudioStreamCacheRoot() {
+  return path.join(storageRoot, audioStreamCacheDirName);
+}
+
 function getHlsCacheDirPath(hlsId) {
   return path.join(getHlsCacheRoot(), String(hlsId || "").trim());
+}
+
+function getAudioStreamCacheDirPath(hlsId) {
+  return path.join(getAudioStreamCacheRoot(), String(hlsId || "").trim());
 }
 
 function getHlsCacheIndexPath() {
@@ -1758,25 +2102,64 @@ async function getHlsPersistentIndexEntry(sourceRelativePath, profile) {
   return index.entries[getHlsPersistentIndexKey(sourceRelativePath, profile)] || null;
 }
 
+async function ensureHlsIndexEntryById(hlsId) {
+  const normalizedId = String(hlsId || "").trim();
+  if (!normalizedId) {
+    return null;
+  }
+  const existing = state.hlsIndex.get(normalizedId);
+  if (existing) {
+    return existing;
+  }
+  const candidateDirs = [getHlsCacheDirPath(normalizedId), getAudioStreamCacheDirPath(normalizedId)];
+  for (const outputDir of candidateDirs) {
+    const playlistPath = path.join(outputDir, "index.m3u8");
+    try {
+      const manifest = await fs.promises.readFile(playlistPath, "utf8");
+      await assertManifestArtifactsReadable(outputDir, manifest);
+      const meta = await readHlsMeta(path.join(outputDir, "meta.json"));
+      const entry = {
+        dir: outputDir,
+        segments: new Set(parseManifestSegments(manifest)),
+        codec: String(meta?.codec || ""),
+        updatedAt: Date.now(),
+        sourceRelativePath: String(meta?.sourceRelativePath || ""),
+        profile: String(meta?.profile || "720p"),
+        availableProfiles: Array.isArray(meta?.availableProfiles) ? meta.availableProfiles : [],
+        sourceWidth: Number(meta?.sourceWidth || 0),
+        sourceHeight: Number(meta?.sourceHeight || 0),
+        kind: String(meta?.kind || "video")
+      };
+      state.hlsIndex.set(normalizedId, entry);
+      return entry;
+    } catch {
+    }
+  }
+  return null;
+}
+
 async function ensureHlsVariant(inputFile, profile = "720p", onProgress) {
   const stat = await fs.promises.stat(inputFile);
   const cacheRoot = getHlsCacheRoot();
   await fs.promises.mkdir(cacheRoot, { recursive: true });
   const sourceRelativePath = normalizeRelativePath(path.relative(storageRoot, inputFile));
+  const videoInfo = await probeVideoStream(inputFile);
+  const availableProfiles = buildAvailableHlsProfiles(videoInfo);
+  const resolvedProfile = getPreferredHlsProfileId(videoInfo, profile);
 
-  const indexedEntry = await getHlsPersistentIndexEntry(sourceRelativePath, profile);
+  const indexedEntry = await getHlsPersistentIndexEntry(sourceRelativePath, resolvedProfile);
   let hlsId = String(indexedEntry?.hlsId || "").trim();
   if (indexedEntry && (
     indexedEntry.sourceRelativePath !== sourceRelativePath
     || Number(indexedEntry.fileSize || -1) !== Number(stat.size || 0)
     || Number(indexedEntry.fileMtimeMs || -1) !== Number(stat.mtimeMs || 0)
   )) {
-    await deleteHlsPersistentIndexEntry(sourceRelativePath, profile);
+    await deleteHlsPersistentIndexEntry(sourceRelativePath, resolvedProfile);
     hlsId = "";
   }
 
   if (!hlsId) {
-    hlsId = await buildStableAssetCacheKey(inputFile, stat, `hls:${profile}`);
+    hlsId = await buildStableAssetCacheKey(inputFile, stat, `hls:${resolvedProfile}`);
   }
   const outputDir = path.join(cacheRoot, hlsId);
   const playlistPath = path.join(outputDir, "index.m3u8");
@@ -1792,25 +2175,37 @@ async function ensureHlsVariant(inputFile, profile = "720p", onProgress) {
       segments: new Set(segments),
       codec,
       updatedAt: Date.now(),
-      sourceRelativePath: String(meta?.sourceRelativePath || sourceRelativePath || "")
+      sourceRelativePath: String(meta?.sourceRelativePath || sourceRelativePath || ""),
+      profile: String(meta?.profile || resolvedProfile),
+      availableProfiles: Array.isArray(meta?.availableProfiles) ? meta.availableProfiles : serializeHlsProfiles(availableProfiles),
+      sourceWidth: Number(meta?.sourceWidth || videoInfo?.width || 0),
+      sourceHeight: Number(meta?.sourceHeight || videoInfo?.height || 0)
     });
-    await setHlsPersistentIndexEntry(sourceRelativePath, profile, {
+    await setHlsPersistentIndexEntry(sourceRelativePath, resolvedProfile, {
       hlsId,
-      profile,
+      profile: resolvedProfile,
       sourceRelativePath,
       fileSize: Number(stat.size || 0),
       fileMtimeMs: Number(stat.mtimeMs || 0),
       codec,
       updatedAt: new Date().toISOString()
     });
-    return { hlsId, manifest, codec };
+    return {
+      hlsId,
+      manifest,
+      codec,
+      profile: String(meta?.profile || resolvedProfile),
+      availableProfiles: Array.isArray(meta?.availableProfiles) ? meta.availableProfiles : serializeHlsProfiles(availableProfiles),
+      sourceWidth: Number(meta?.sourceWidth || videoInfo?.width || 0),
+      sourceHeight: Number(meta?.sourceHeight || videoInfo?.height || 0)
+    };
   };
 
   try {
     await fs.promises.access(playlistPath, fs.constants.R_OK);
     logInfo("[hls-cache] hit", JSON.stringify({
       path: summarizePathForLog(inputFile),
-      profile,
+      profile: resolvedProfile,
       hlsId,
       size: stat.size,
       mtimeMs: stat.mtimeMs,
@@ -1821,6 +2216,7 @@ async function ensureHlsVariant(inputFile, profile = "720p", onProgress) {
       const cachedMeta = JSON.parse(cachedMetaRaw);
       logInfo("[hls-result]", JSON.stringify({
         path: summarizePathForLog(inputFile),
+        profile: String(cachedMeta?.profile || resolvedProfile),
         codec: String(cachedMeta?.codec || ""),
         mode: "cache-hit",
         gpuCooldownHit: false,
@@ -1832,16 +2228,16 @@ async function ensureHlsVariant(inputFile, profile = "720p", onProgress) {
     await emitObservabilitySnapshot("hls-cache-hit", {
       path: summarizePathForLog(inputFile),
       hlsId,
-      profile
+      profile: resolvedProfile
     });
     return await ensureAndReadManifest();
   } catch (error) {
     if (indexedEntry) {
-      await deleteHlsPersistentIndexEntry(sourceRelativePath, profile);
+      await deleteHlsPersistentIndexEntry(sourceRelativePath, resolvedProfile);
     }
     logInfo("[hls-cache] miss", JSON.stringify({
       path: summarizePathForLog(inputFile),
-      profile,
+      profile: resolvedProfile,
       hlsId,
       size: stat.size,
       mtimeMs: stat.mtimeMs,
@@ -1854,7 +2250,7 @@ async function ensureHlsVariant(inputFile, profile = "720p", onProgress) {
   if (runningJob) {
     logInfo("[hls-cache] join-running-job", JSON.stringify({
       path: summarizePathForLog(inputFile),
-      profile,
+      profile: resolvedProfile,
       hlsId
     }));
     // Join the already-running job. Register our progress callback so warmup-started
@@ -1884,23 +2280,31 @@ async function ensureHlsVariant(inputFile, profile = "720p", onProgress) {
     await emitObservabilitySnapshot("hls-build-start", {
       path: summarizePathForLog(inputFile),
       hlsId,
-      profile
+      profile: resolvedProfile
     });
     await fs.promises.rm(tempDir, { recursive: true, force: true });
-    const hlsResult = await generateSingleBitrateHls(inputFile, tempDir, broadcastProgress);
+    const hlsResult = await generateSingleBitrateHls(inputFile, tempDir, resolvedProfile, broadcastProgress);
     await writeHlsMeta(path.join(tempDir, "meta.json"), {
       codec: hlsResult.codec || "",
-      sourceRelativePath
+      sourceRelativePath,
+      profile: hlsResult.profile || resolvedProfile,
+      availableProfiles: serializeHlsProfiles(hlsResult.availableProfiles || availableProfiles),
+      sourceWidth: Number(hlsResult.sourceVideo?.width || videoInfo?.width || 0),
+      sourceHeight: Number(hlsResult.sourceVideo?.height || videoInfo?.height || 0)
     });
     await fs.promises.rm(outputDir, { recursive: true, force: true });
     await fs.promises.rename(tempDir, outputDir);
     await touchHlsCacheEntry(outputDir, {
       codec: hlsResult.codec || "",
-      sourceRelativePath
+      sourceRelativePath,
+      profile: hlsResult.profile || resolvedProfile,
+      availableProfiles: serializeHlsProfiles(hlsResult.availableProfiles || availableProfiles),
+      sourceWidth: Number(hlsResult.sourceVideo?.width || videoInfo?.width || 0),
+      sourceHeight: Number(hlsResult.sourceVideo?.height || videoInfo?.height || 0)
     });
-    await setHlsPersistentIndexEntry(sourceRelativePath, profile, {
+    await setHlsPersistentIndexEntry(sourceRelativePath, hlsResult.profile || resolvedProfile, {
       hlsId,
-      profile,
+      profile: hlsResult.profile || resolvedProfile,
       sourceRelativePath,
       fileSize: Number(stat.size || 0),
       fileMtimeMs: Number(stat.mtimeMs || 0),
@@ -1910,7 +2314,7 @@ async function ensureHlsVariant(inputFile, profile = "720p", onProgress) {
     logInfo("[hls-build-summary]", JSON.stringify({
       path: summarizePathForLog(inputFile),
       hlsId,
-      profile,
+      profile: hlsResult.profile || resolvedProfile,
       codec: hlsResult.codec || "",
       mode: hlsResult.mode || "transcode",
       gpuCooldownHit: Array.isArray(hlsResult.gpuCooldown) && hlsResult.gpuCooldown.length > 0,
@@ -1922,7 +2326,7 @@ async function ensureHlsVariant(inputFile, profile = "720p", onProgress) {
     await emitObservabilitySnapshot("hls-build-done", {
       path: summarizePathForLog(inputFile),
       hlsId,
-      profile,
+      profile: hlsResult.profile || resolvedProfile,
       codec: hlsResult.codec || ""
     });
   })();
@@ -1947,6 +2351,214 @@ function scheduleHlsWarmup(absolutePath) {
   ensureHlsVariant(absolutePath, "720p")
     .then(({ hlsId }) => log("hls-warmup-done", hlsId))
     .catch((error) => logWarn("hls-warmup-failed", error.message || error));
+}
+
+async function generateAudioSegmentedHls(inputFile, outputDir, onProgress) {
+  await fs.promises.mkdir(outputDir, { recursive: true });
+  const playlistPath = path.join(outputDir, "index.m3u8");
+  const segmentPattern = path.join(outputDir, "seg-%05d.ts");
+  const durationSeconds = await getMediaDurationSeconds(inputFile, "audio-hls-duration");
+  const startedAt = Date.now();
+
+  onProgress?.({ stage: "preparing", progress: 0, message: "正在生成音频流缓存" });
+
+  await new Promise((resolve, reject) => {
+    const args = [
+      "-y",
+      "-i",
+      inputFile,
+      "-vn",
+      "-ac",
+      "2",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "160k",
+      "-f",
+      "hls",
+      "-hls_time",
+      "2",
+      "-hls_playlist_type",
+      "vod",
+      "-hls_flags",
+      "independent_segments",
+      "-hls_segment_filename",
+      segmentPattern,
+      playlistPath
+    ];
+    const proc = spawnObservedProcess(ffmpegPath, args, { stdio: ["ignore", "ignore", "pipe"] }, { kind: "ffmpeg", context: "audio-hls", path: inputFile });
+    let stderr = "";
+    proc.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+      const progress = extractProgressFromFfmpegLog(text, durationSeconds);
+      onProgress?.({
+        stage: "transcoding",
+        progress,
+        message: progress != null ? `正在切分音频片段 ${progress}%` : "正在切分音频片段"
+      });
+    });
+    proc.on("error", (error) => reject(new Error(`ffmpeg launch failed: ${error.message}`)));
+    proc.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`ffmpeg audio-hls failed with code ${code}: ${stderr.slice(-400)}`));
+      }
+    });
+  });
+
+  onProgress?.({ stage: "done", progress: 100, message: "音频流缓存已就绪", codec: "aac" });
+  return {
+    playlistPath,
+    codec: "aac",
+    mode: "transcode",
+    elapsedMs: Date.now() - startedAt,
+    profile: "audio",
+    availableProfiles: [],
+    sourceVideo: null
+  };
+}
+
+async function ensureAudioHlsVariant(inputFile, onProgress) {
+  const stat = await fs.promises.stat(inputFile);
+  const cacheRoot = getAudioStreamCacheRoot();
+  await fs.promises.mkdir(cacheRoot, { recursive: true });
+  const sourceRelativePath = normalizeRelativePath(path.relative(storageRoot, inputFile));
+  const hlsId = await buildStableAssetCacheKey(inputFile, stat, "audio-hls-v4-ts");
+  const outputDir = getAudioStreamCacheDirPath(hlsId);
+  const playlistPath = path.join(outputDir, "index.m3u8");
+
+  const ensureAndReadManifest = async () => {
+    const manifest = await fs.promises.readFile(playlistPath, "utf8");
+    await assertManifestArtifactsReadable(outputDir, manifest);
+    const segments = parseManifestSegments(manifest);
+    const meta = await touchHlsCacheEntry(outputDir, {
+      kind: "audio",
+      sourceRelativePath,
+      profile: "audio",
+      availableProfiles: [],
+      sourceWidth: 0,
+      sourceHeight: 0
+    });
+    const codec = String(meta?.codec || "aac");
+    state.hlsIndex.set(hlsId, {
+      dir: outputDir,
+      segments: new Set(segments),
+      codec,
+      updatedAt: Date.now(),
+      sourceRelativePath,
+      profile: "audio",
+      availableProfiles: [],
+      sourceWidth: 0,
+      sourceHeight: 0,
+      kind: "audio"
+    });
+    return {
+      hlsId,
+      manifest,
+      codec,
+      profile: "audio",
+      availableProfiles: [],
+      sourceWidth: 0,
+      sourceHeight: 0,
+      kind: "audio"
+    };
+  };
+
+  try {
+    await fs.promises.access(playlistPath, fs.constants.R_OK);
+    logInfo("[audio-hls-cache] hit", JSON.stringify({
+      path: summarizePathForLog(inputFile),
+      hlsId,
+      playlist: path.relative(storageRoot, playlistPath).replace(/\\/g, "/")
+    }));
+    return await ensureAndReadManifest();
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      logWarn("audio-hls-cache-missing-artifact", JSON.stringify({
+        path: summarizePathForLog(inputFile),
+        hlsId,
+        playlist: path.relative(storageRoot, playlistPath).replace(/\\/g, "/"),
+        error: error.message || error
+      }));
+    }
+    await fs.promises.rm(outputDir, { recursive: true, force: true }).catch(() => {});
+  }
+
+  const runningJob = state.hlsJobs.get(hlsId);
+  if (runningJob) {
+    if (onProgress) runningJob.listeners.add(onProgress);
+    try {
+      await runningJob.promise;
+    } finally {
+      if (onProgress) runningJob.listeners.delete(onProgress);
+    }
+    return ensureAndReadManifest();
+  }
+
+  const listeners = new Set();
+  if (onProgress) listeners.add(onProgress);
+  const broadcastProgress = (status) => {
+    for (const cb of listeners) cb(status);
+  };
+
+  const jobEntry = { listeners, promise: null };
+  state.hlsJobs.set(hlsId, jobEntry);
+
+  jobEntry.promise = (async () => {
+    const tempDir = `${outputDir}.tmp-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+    await fs.promises.rm(tempDir, { recursive: true, force: true });
+    const hlsResult = await generateAudioSegmentedHls(inputFile, tempDir, broadcastProgress);
+    await writeHlsMeta(path.join(tempDir, "meta.json"), {
+      kind: "audio",
+      codec: hlsResult.codec || "aac",
+      sourceRelativePath,
+      profile: "audio",
+      availableProfiles: [],
+      sourceWidth: 0,
+      sourceHeight: 0
+    });
+    await fs.promises.rm(outputDir, { recursive: true, force: true });
+    await fs.promises.rename(tempDir, outputDir);
+    await touchHlsCacheEntry(outputDir, {
+      kind: "audio",
+      codec: hlsResult.codec || "aac",
+      sourceRelativePath,
+      profile: "audio",
+      availableProfiles: [],
+      sourceWidth: 0,
+      sourceHeight: 0
+    });
+    logInfo("[audio-hls-build-summary]", JSON.stringify({
+      path: summarizePathForLog(inputFile),
+      hlsId,
+      codec: hlsResult.codec || "aac",
+      elapsedMs: Number(hlsResult.elapsedMs || 0),
+      elapsedSec: Number((Number(hlsResult.elapsedMs || 0) / 1000).toFixed(1))
+    }));
+  })();
+
+  try {
+    await jobEntry.promise;
+  } finally {
+    state.hlsJobs.delete(hlsId);
+  }
+
+  return ensureAndReadManifest();
+}
+
+function scheduleAudioStreamWarmup(absolutePath) {
+  if (!enableTranscode) {
+    return;
+  }
+  const sourceMime = mime.lookup(absolutePath) || "application/octet-stream";
+  if (!String(sourceMime).startsWith("audio/")) {
+    return;
+  }
+  ensureAudioHlsVariant(absolutePath)
+    .then(({ hlsId }) => log("audio-hls-warmup-done", hlsId))
+    .catch((error) => logWarn("audio-hls-warmup-failed", error.message || error));
 }
 
 async function ensureThumbnailVariant(inputFile) {
@@ -2680,15 +3292,28 @@ function wireDataChannel(channel, remotePeerId = "unknown-peer") {
 
     const message = JSON.parse(event.data);
 
-    if (isSharePeer(remotePeerId) && ["put-file-cancel", "put-file-start", "put-file-end", "delete-file", "rename-file", "delete-folder", "rename-folder", "create-folder", "append-chat-message", "get-bot-catalog", "invoke-bot", "get-bot-job", "cancel-bot-job"].includes(message.type)) {
+    if (isSharePeer(remotePeerId) && ["put-file-cancel", "put-file-start", "put-file-end", "delete-file", "rename-file", "delete-folder", "rename-folder", "create-folder", "append-chat-message", "get-bot-catalog", "invoke-bot", "get-bot-job", "get-bot-job-log", "cancel-bot-job", "get-music-player-state", "search-music-candidates", "enqueue-music-track", "enqueue-music-selection", "control-music-player"].includes(message.type)) {
       safeSend(JSON.stringify({ type: "error", requestId: message.requestId, message: "share link is read-only" }), "share-read-only");
       return;
     }
 
-    if (["get-bot-catalog", "invoke-bot", "get-bot-job", "cancel-bot-job"].includes(message.type)) {
+    if (["get-bot-catalog", "invoke-bot", "get-bot-job", "get-bot-job-log", "cancel-bot-job"].includes(message.type)) {
       try {
         const runtime = await ensureBotRuntime();
         const response = await runtime.handleControlMessage(message);
+        if (response) {
+          safeSend(JSON.stringify(response), message.type);
+        }
+      } catch (error) {
+        safeSend(JSON.stringify({ type: "error", requestId: message.requestId, message: error.message }), `${message.type}-error`);
+      }
+      return;
+    }
+
+    if (["get-music-player-state", "search-music-candidates", "enqueue-music-track", "enqueue-music-selection", "control-music-player"].includes(message.type)) {
+      try {
+        const player = await ensureGlobalMusicPlayer();
+        const response = await player.handleControlMessage(message);
         if (response) {
           safeSend(JSON.stringify(response), message.type);
         }
@@ -2731,26 +3356,42 @@ function wireDataChannel(channel, remotePeerId = "unknown-peer") {
         ensureReadPermission(remotePeerId, message, "preview", message.path);
         const absolute = safeJoin(storageRoot, message.path);
         const sourceMime = mime.lookup(absolute) || "application/octet-stream";
-        if (!String(sourceMime).startsWith("video/")) {
-          throw new Error("HLS preview only supports video files");
+        const normalizedSourceMime = String(sourceMime || "");
+        if (!normalizedSourceMime.startsWith("video/") && !normalizedSourceMime.startsWith("audio/")) {
+          throw new Error("HLS preview only supports audio/video files");
         }
         if (!enableTranscode) {
           throw new Error("HLS preview requires ENABLE_TRANSCODE");
         }
 
-        const { hlsId, manifest } = await ensureHlsVariant(absolute, message.profile || "720p", (status) => {
-          safeSend(
-            JSON.stringify({
-              type: "transcode-status",
-              requestId: message.requestId,
-              stage: status.stage,
-              progress: status.progress ?? null,
-              message: status.message || "",
-              codec: status.codec || ""
-            }),
-            "hls-manifest-status"
-          );
-        });
+        const hlsResult = await (normalizedSourceMime.startsWith("audio/")
+          ? ensureAudioHlsVariant(absolute, (status) => {
+              safeSend(
+                JSON.stringify({
+                  type: "transcode-status",
+                  requestId: message.requestId,
+                  stage: status.stage,
+                  progress: status.progress ?? null,
+                  message: status.message || "",
+                  codec: status.codec || ""
+                }),
+                "hls-manifest-status"
+              );
+            })
+          : ensureHlsVariant(absolute, message.profile || "720p", (status) => {
+              safeSend(
+                JSON.stringify({
+                  type: "transcode-status",
+                  requestId: message.requestId,
+                  stage: status.stage,
+                  progress: status.progress ?? null,
+                  message: status.message || "",
+                  codec: status.codec || ""
+                }),
+                "hls-manifest-status"
+              );
+            }));
+        const { hlsId, manifest } = hlsResult;
         const hlsEntry = state.hlsIndex.get(hlsId);
         if (hlsEntry) {
           state.hlsIndex.set(hlsId, {
@@ -2769,10 +3410,13 @@ function wireDataChannel(channel, remotePeerId = "unknown-peer") {
             type: "hls-manifest",
             requestId: message.requestId,
             hlsId,
-            profile: message.profile || "720p",
+            profile: hlsResult.profile || message.profile || "720p",
             mimeType: "application/vnd.apple.mpegurl",
             manifest,
-            codec: state.hlsIndex.get(hlsId)?.codec || ""
+            codec: state.hlsIndex.get(hlsId)?.codec || "",
+            availableProfiles: hlsResult.availableProfiles || [],
+            sourceWidth: Number(hlsResult.sourceWidth || 0),
+            sourceHeight: Number(hlsResult.sourceHeight || 0)
           }),
           "hls-manifest"
         );
@@ -2814,7 +3458,7 @@ function wireDataChannel(channel, remotePeerId = "unknown-peer") {
         if (!message.hlsId || !message.segment) {
           throw new Error("hlsId and segment are required");
         }
-        const hlsEntry = state.hlsIndex.get(message.hlsId);
+        const hlsEntry = await ensureHlsIndexEntryById(message.hlsId);
         if (!hlsEntry) {
           throw new Error("hls preview cache miss");
         }
@@ -2835,13 +3479,20 @@ function wireDataChannel(channel, remotePeerId = "unknown-peer") {
 
         const segmentPath = path.join(hlsEntry.dir, segmentName);
         const stat = await fs.promises.stat(segmentPath);
+        const segmentExt = path.extname(segmentName).toLowerCase();
+        const segmentMimeType = segmentExt === ".ts"
+          ? "video/mp2t"
+          : (segmentExt === ".m4s" || segmentExt === ".mp4"
+            ? "audio/mp4"
+            : normalizeOutgoingMimeType(mime.lookup(segmentName) || "application/octet-stream"));
+
         if (!safeSend(
           JSON.stringify({
             type: "file-meta",
             requestId: message.requestId,
             name: segmentName,
             size: stat.size,
-            mimeType: "video/mp2t"
+            mimeType: segmentMimeType
           }),
           "hls-segment-meta"
         )) {
@@ -2901,13 +3552,48 @@ function wireDataChannel(channel, remotePeerId = "unknown-peer") {
         ensureReadPermission(remotePeerId, message, requiredPermission, message.path);
         const absolute = safeJoin(storageRoot, message.path);
         let streamPath = absolute;
-        let streamMime = mime.lookup(absolute) || "application/octet-stream";
+        let streamMime = normalizeOutgoingMimeType(mime.lookup(absolute) || "application/octet-stream");
         let cleanupPath = null;
         let cleanupIsTemporary = false;
+        const sourceMime = normalizeOutgoingMimeType(mime.lookup(absolute) || "application/octet-stream");
+
+        if (message.transcode === "mp3") {
+          if (!enableTranscode) {
+            throw new Error("audio transcode disabled by ENABLE_TRANSCODE=0");
+          }
+          if (!String(sourceMime).startsWith("audio/")) {
+            throw new Error("mp3 transcode only supports audio files");
+          }
+          observeVariant = "transcode-mp3";
+          safeSend(
+            JSON.stringify({
+              type: "transcode-status",
+              requestId: message.requestId,
+              stage: "preparing",
+              progress: 0,
+              message: "开始转换音频兼容流"
+            }),
+            "audio-transcode-status-start"
+          );
+          cleanupPath = await transcodeAudioToMp3(absolute, (status) => {
+            safeSend(
+              JSON.stringify({
+                type: "transcode-status",
+                requestId: message.requestId,
+                stage: status.stage,
+                progress: status.progress ?? null,
+                message: status.message || ""
+              }),
+              "audio-transcode-status-progress"
+            );
+          });
+          cleanupIsTemporary = true;
+          streamPath = cleanupPath;
+          streamMime = "audio/mpeg";
+        }
 
         if (message.type === "get-thumbnail") {
           observeVariant = "thumbnail";
-          const sourceMime = mime.lookup(absolute) || "application/octet-stream";
           if (String(sourceMime).startsWith("video/")) {
             if (!enableTranscode) {
               throw new Error("thumbnail for video requires ffmpeg (ENABLE_TRANSCODE!=0)");
@@ -2931,7 +3617,6 @@ function wireDataChannel(channel, remotePeerId = "unknown-peer") {
 
         if (message.type === "get-image-preview") {
           observeVariant = "image-preview";
-          const sourceMime = mime.lookup(absolute) || "application/octet-stream";
           if (!String(sourceMime).startsWith("image/")) {
             throw new Error("image preview only supports image files");
           }
@@ -2945,7 +3630,6 @@ function wireDataChannel(channel, remotePeerId = "unknown-peer") {
         }
 
         if (message.type === "get-file-stream" && message.previewProfile === "fast") {
-          const sourceMime = mime.lookup(absolute) || "application/octet-stream";
           if (enableTranscode && String(sourceMime).startsWith("video/")) {
             log("preview-profile-fast", message.requestId, message.path);
             observeVariant = "preview-fast";
@@ -3129,6 +3813,7 @@ function wireDataChannel(channel, remotePeerId = "unknown-peer") {
         await syncFiles();
         schedulePreviewWarmup(uploadCtx.path);
         scheduleHlsWarmup(uploadCtx.path);
+        scheduleAudioStreamWarmup(uploadCtx.path);
         const sourceMime = mime.lookup(uploadCtx.path) || "application/octet-stream";
         const relativeUploadPath = normalizeRelativePath(path.relative(storageRoot, uploadCtx.path));
         if (/^video\//i.test(String(sourceMime)) || /^image\//i.test(String(sourceMime)) || shouldWarmChatMedia(relativeUploadPath, uploadCtx.received, sourceMime)) {
@@ -3502,6 +4187,7 @@ async function main() {
   await runWithStartupRetry(() => ensureRegistered(), "register");
   await runWithStartupRetry(() => heartbeat(), "heartbeat-init");
   await runWithStartupRetry(() => ensureBotRuntime(), "bot-runtime-init");
+  await runWithStartupRetry(() => ensureGlobalMusicPlayer(), "music-player-init");
   await runWithStartupRetry(() => syncFiles(), "filesync-init");
   await runWithStartupRetry(() => connectWs(), "ws-connect");
   await cleanupExpiredCacheEntries();

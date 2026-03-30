@@ -1,5 +1,6 @@
 import { createAiChatPlugin } from "./plugins/ai-chat.js";
 import { createBilibiliDownloaderPlugin } from "./plugins/bilibili.js";
+import { createMusicControlPlugin } from "./plugins/music.js";
 import { createMultimodalImagePlugin } from "./plugins/multimodal-image.js";
 
 export class BotRegistry {
@@ -31,6 +32,7 @@ export class BotRegistry {
 
   registerDefaults() {
     this.register(createBilibiliDownloaderPlugin());
+    this.register(createMusicControlPlugin());
     this.register(createAiChatPlugin());
     this.register(createMultimodalImagePlugin());
     return this;

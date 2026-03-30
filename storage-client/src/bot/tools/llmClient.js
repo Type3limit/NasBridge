@@ -218,6 +218,29 @@ function extractDeltaText(content) {
   return "";
 }
 
+function describeTransportError(prefix, error) {
+  const name = String(error?.name || "Error").trim();
+  const message = String(error?.message || error || "unknown error").trim();
+  const code = String(error?.code || "").trim();
+  const cause = String(error?.cause?.message || error?.cause || "").trim();
+  const detail = [
+    `${name}: ${message}`.trim(),
+    code ? `code=${code}` : "",
+    cause ? `cause=${cause}` : ""
+  ].filter(Boolean).join("; ");
+  const wrapped = new Error(`${prefix}: ${detail || "unknown error"}`);
+  if (error?.stack) {
+    wrapped.stack = `${wrapped.name}: ${wrapped.message}\nCaused by:\n${String(error.stack).trim()}`;
+  }
+  if (error?.cause) {
+    wrapped.cause = error.cause;
+  }
+  if (error?.code) {
+    wrapped.code = error.code;
+  }
+  return wrapped;
+}
+
 function normalizeToolDefinitions(tools = []) {
   return tools
     .map((tool) => {
@@ -260,13 +283,23 @@ function extractToolCalls(message = {}) {
 }
 
 async function invokeChatCompletion(body = {}) {
-  const response = await fetch(getEndpointUrl(), {
-    method: "POST",
-    headers: getAuthHeaders(),
-    signal: body.signal,
-    body: JSON.stringify(body)
-  });
-  const rawText = await response.text();
+  let response = null;
+  try {
+    response = await fetch(getEndpointUrl(), {
+      method: "POST",
+      headers: getAuthHeaders(),
+      signal: body.signal,
+      body: JSON.stringify(body)
+    });
+  } catch (error) {
+    throw describeTransportError("AI model request transport failed", error);
+  }
+  let rawText = "";
+  try {
+    rawText = await response.text();
+  } catch (error) {
+    throw describeTransportError("AI model response read failed", error);
+  }
   let payload = null;
   try {
     payload = rawText ? JSON.parse(rawText) : null;
@@ -289,16 +322,21 @@ async function invokeChatCompletion(body = {}) {
 }
 
 async function invokeChatCompletionStream(body = {}, handlers = {}) {
-  const response = await fetch(getEndpointUrl(), {
-    method: "POST",
-    headers: getAuthHeaders(),
-    signal: body.signal,
-    body: JSON.stringify({
-      ...body,
-      stream: true,
-      stream_options: { include_usage: true }
-    })
-  });
+  let response = null;
+  try {
+    response = await fetch(getEndpointUrl(), {
+      method: "POST",
+      headers: getAuthHeaders(),
+      signal: body.signal,
+      body: JSON.stringify({
+        ...body,
+        stream: true,
+        stream_options: { include_usage: true }
+      })
+    });
+  } catch (error) {
+    throw describeTransportError("AI model stream transport failed", error);
+  }
   if (!response.ok || !response.body) {
     const rawText = await response.text().catch(() => "");
     throw new Error(`AI model stream failed: ${rawText || `${response.status} ${response.statusText}`}`.trim());
@@ -312,51 +350,55 @@ async function invokeChatCompletionStream(body = {}, handlers = {}) {
   let usage = null;
   let finishReason = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-    const events = buffer.split(/\r?\n\r?\n/);
-    buffer = events.pop() || "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const events = buffer.split(/\r?\n\r?\n/);
+      buffer = events.pop() || "";
 
-    for (const eventText of events) {
-      const dataLines = eventText
-        .split(/\r?\n/)
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trimStart());
-      if (!dataLines.length) {
-        continue;
+      for (const eventText of events) {
+        const dataLines = eventText
+          .split(/\r?\n/)
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart());
+        if (!dataLines.length) {
+          continue;
+        }
+        const data = dataLines.join("\n");
+        if (data === "[DONE]") {
+          handlers.onDone?.({ text, model, usage, finishReason });
+          return { text, model, usage, finishReason };
+        }
+        let payload = null;
+        try {
+          payload = JSON.parse(data);
+        } catch {
+          continue;
+        }
+        model = String(payload?.model || model || "");
+        usage = payload?.usage || usage;
+        const choice = payload?.choices?.[0];
+        if (!choice) {
+          continue;
+        }
+        if (choice.finish_reason) {
+          finishReason = String(choice.finish_reason || "");
+        }
+        const deltaText = extractDeltaText(choice?.delta?.content);
+        if (deltaText) {
+          text += deltaText;
+          handlers.onText?.({ text, delta: deltaText, model, usage, finishReason, raw: payload });
+        }
       }
-      const data = dataLines.join("\n");
-      if (data === "[DONE]") {
+
+      if (done) {
         handlers.onDone?.({ text, model, usage, finishReason });
         return { text, model, usage, finishReason };
       }
-      let payload = null;
-      try {
-        payload = JSON.parse(data);
-      } catch {
-        continue;
-      }
-      model = String(payload?.model || model || "");
-      usage = payload?.usage || usage;
-      const choice = payload?.choices?.[0];
-      if (!choice) {
-        continue;
-      }
-      if (choice.finish_reason) {
-        finishReason = String(choice.finish_reason || "");
-      }
-      const deltaText = extractDeltaText(choice?.delta?.content);
-      if (deltaText) {
-        text += deltaText;
-        handlers.onText?.({ text, delta: deltaText, model, usage, finishReason, raw: payload });
-      }
     }
-
-    if (done) {
-      handlers.onDone?.({ text, model, usage, finishReason });
-      return { text, model, usage, finishReason };
-    }
+  } catch (error) {
+    throw describeTransportError("AI model stream read failed", error);
   }
 }
 

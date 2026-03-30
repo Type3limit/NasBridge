@@ -1,11 +1,24 @@
 import fs from "node:fs";
+import { searchBilibiliVideoCandidates } from "./bilibiliApi.js";
 import { readRecentChatHistory } from "./chatHistory.js";
 import { listReferencedChatAttachments } from "./chatAssets.js";
-import { invokeMultimodalModel } from "./llmClient.js";
+import { invokeMultimodalModel, invokeTextModel } from "./llmClient.js";
+import { fetchWebPageSummary, getSourcePreferenceLabel, normalizeSourcePreference, searchWeb } from "./httpFetch.js";
+import { buildRealtimeContextText } from "./realtimeContext.js";
 
 const MAX_HISTORY_LIMIT = 60;
 const MAX_IMAGE_TOOL_LIMIT = 3;
 const MAX_INLINE_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_WEB_SEARCH_RESULTS = 6;
+const MAX_WEB_SEARCH_QUERIES = 3;
+const MAX_WEB_PAGE_SUMMARIES = 3;
+const MAX_BILIBILI_SEARCH_RESULTS = 5;
+
+function formatStepLabel(prefix = "", current = 1, total = 1, suffix = "") {
+  const safeCurrent = Math.max(1, Number(current) || 1);
+  const safeTotal = Math.max(1, Number(total) || 1);
+  return `${String(prefix || "处理中").trim()}第 ${safeCurrent}/${safeTotal} 个${String(suffix || "步骤").trim()}`;
+}
 
 function clamp(value, min, max) {
   const numeric = Number(value);
@@ -39,6 +52,291 @@ function safeJson(value) {
   return JSON.stringify(value, null, 2);
 }
 
+function extractDirectWebUrls(text = "") {
+  const matches = String(text || "").match(/https?:\/\/[^\s<>"]+/gi) || [];
+  const normalized = matches
+    .map((item) => String(item || "").trim().replace(/[),.;!?]+$/g, ""))
+    .filter(Boolean);
+  return [...new Set(normalized)].slice(0, MAX_WEB_PAGE_SUMMARIES);
+}
+
+function parseJsonBlock(text = "") {
+  const source = String(text || "").trim();
+  if (!source) {
+    return null;
+  }
+  const fenced = source.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced?.[1] || source;
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    const objectMatch = candidate.match(/\{[\s\S]*\}/);
+    if (!objectMatch) {
+      return null;
+    }
+    try {
+      return JSON.parse(objectMatch[0]);
+    } catch {
+      return null;
+    }
+  }
+}
+
+function normalizeSearchTermList(value, fallback = "") {
+  const terms = Array.isArray(value) ? value : [];
+  const normalized = terms
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .slice(0, MAX_WEB_SEARCH_QUERIES);
+  if (normalized.length) {
+    return normalized;
+  }
+  return fallback ? [String(fallback || "").trim()].filter(Boolean) : [];
+}
+
+function buildSearchResultDigest(results = []) {
+  return (Array.isArray(results) ? results : []).map((item, index) => ({
+    index: index + 1,
+    title: String(item?.title || "").trim(),
+    url: String(item?.url || "").trim(),
+    snippet: String(item?.snippet || "").trim(),
+    matchedSource: String(item?.matchedSource || "generic").trim(),
+    matchedQuery: String(item?.matchedQuery || item?.query || "").trim()
+  }));
+}
+
+function createWebSearchProgressDetails({
+  stage = "search",
+  query = "",
+  directUrls = [],
+  preferredSource = "",
+  plan = null,
+  executedQueries = [],
+  results = [],
+  followUpDecision = null,
+  fetchedPages = []
+} = {}) {
+  return {
+    type: "web-search",
+    stage: String(stage || "search").trim() || "search",
+    query: String(query || "").trim(),
+    preferredSource: String(preferredSource || "").trim(),
+    preferredSourceLabel: getSourcePreferenceLabel(preferredSource),
+    directUrls: (Array.isArray(directUrls) ? directUrls : []).map((item) => String(item || "").trim()).filter(Boolean).slice(0, MAX_WEB_PAGE_SUMMARIES),
+    plan: plan && typeof plan === "object"
+      ? {
+          intent: String(plan.intent || "").trim(),
+          rationale: String(plan.rationale || "").trim(),
+          strategy: Array.isArray(plan.strategy) ? plan.strategy.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 5) : [],
+          searchTerms: Array.isArray(plan.searchTerms) ? plan.searchTerms.map((item) => String(item || "").trim()).filter(Boolean).slice(0, MAX_WEB_SEARCH_QUERIES) : []
+        }
+      : null,
+    executedQueries: (Array.isArray(executedQueries) ? executedQueries : []).map((item) => String(item || "").trim()).filter(Boolean).slice(0, MAX_WEB_SEARCH_QUERIES),
+    results: buildSearchResultDigest(results).slice(0, 3),
+    followUpDecision: followUpDecision && typeof followUpDecision === "object"
+      ? {
+          needsPageFetch: followUpDecision.needsPageFetch === true,
+          answerableFromResults: followUpDecision.answerableFromResults === true,
+          reason: String(followUpDecision.reason || "").trim(),
+          selectedIndexes: Array.isArray(followUpDecision.selectedIndexes)
+            ? followUpDecision.selectedIndexes.map((item) => Number(item)).filter((item) => Number.isInteger(item) && item > 0).slice(0, MAX_WEB_PAGE_SUMMARIES)
+            : []
+        }
+      : null,
+    fetchedPages: (Array.isArray(fetchedPages) ? fetchedPages : []).map((item) => ({
+      title: String(item?.title || item?.url || "").trim(),
+      url: String(item?.url || "").trim(),
+      excerpt: String(item?.excerpt || item?.description || "").trim().slice(0, 220)
+    })).filter((item) => item.title || item.url).slice(0, MAX_WEB_PAGE_SUMMARIES)
+  };
+}
+
+function isBilibiliVideoUrl(rawUrl = "") {
+  try {
+    const parsed = new URL(String(rawUrl || "").trim());
+    const hostname = String(parsed.hostname || "").toLowerCase();
+    if (!(hostname === "www.bilibili.com" || hostname === "bilibili.com" || hostname.endsWith(".bilibili.com") || hostname === "b23.tv")) {
+      return false;
+    }
+    if (hostname === "b23.tv") {
+      return true;
+    }
+    const fullPath = `${parsed.pathname || ""}${parsed.search || ""}${parsed.hash || ""}`;
+    return /\/video\//i.test(fullPath) || /BV[0-9A-Za-z]+/i.test(fullPath);
+  } catch {
+    return false;
+  }
+}
+
+async function searchBilibiliVideos(query = "", signal, maxResults = MAX_BILIBILI_SEARCH_RESULTS) {
+  const normalizedQuery = String(query || "").trim();
+  if (!normalizedQuery) {
+    throw new Error("query is required");
+  }
+
+  const limit = clamp(maxResults, 1, MAX_BILIBILI_SEARCH_RESULTS);
+  try {
+    const apiResult = await searchBilibiliVideoCandidates(normalizedQuery, {
+      signal,
+      maxResults: limit
+    });
+    if (Array.isArray(apiResult?.results) && apiResult.results.length) {
+      return {
+        ...apiResult,
+        backend: "bilibili-api"
+      };
+    }
+  } catch {
+  }
+
+  const searchTerms = [
+    `site:bilibili.com/video ${normalizedQuery}`,
+    `${normalizedQuery} site:bilibili.com/video 教程`,
+    `${normalizedQuery} 哔哩哔哩 教程`
+  ];
+  const mergedResults = [];
+  const seenUrls = new Set();
+
+  for (const term of searchTerms) {
+    const batch = await searchWeb(term, {
+      signal,
+      limit: Math.max(limit * 2, 6),
+      preferredSource: ""
+    });
+    for (const result of batch.results || []) {
+      const normalizedUrl = String(result?.url || "").trim();
+      if (!normalizedUrl || seenUrls.has(normalizedUrl) || !isBilibiliVideoUrl(normalizedUrl)) {
+        continue;
+      }
+      seenUrls.add(normalizedUrl);
+      mergedResults.push({
+        title: String(result?.title || "").trim(),
+        url: normalizedUrl,
+        snippet: String(result?.snippet || "").trim(),
+        matchedQuery: String(result?.matchedQuery || batch.query || term).trim()
+      });
+      if (mergedResults.length >= limit) {
+        break;
+      }
+    }
+    if (mergedResults.length >= limit) {
+      break;
+    }
+  }
+
+  return {
+    query: normalizedQuery,
+    searchedAt: new Date().toISOString(),
+    resultCount: mergedResults.length,
+    results: mergedResults,
+    recommendedSource: mergedResults[0]?.url || "",
+    backend: "web-search-fallback"
+  };
+}
+
+async function decideWebSearchFollowUp({ query = "", preferredSource = "", plan = {}, results = [], signal, fetchPages = 0 }) {
+  const cappedFetchPages = clamp(fetchPages, 0, MAX_WEB_PAGE_SUMMARIES);
+  const digest = buildSearchResultDigest(results);
+  if (!cappedFetchPages || !digest.length) {
+    return {
+      needsPageFetch: false,
+      answerableFromResults: digest.length > 0,
+      reason: digest.length ? "当前未要求继续抓取页面。" : "当前没有可用搜索结果。",
+      selectedIndexes: []
+    };
+  }
+
+  const fallbackIndexes = digest.slice(0, cappedFetchPages).map((item) => item.index);
+  const fallback = {
+    needsPageFetch: true,
+    answerableFromResults: false,
+    reason: "默认抓取前几条结果页面，补足搜索摘要里缺失的细节。",
+    selectedIndexes: fallbackIndexes
+  };
+
+  try {
+    const result = await invokeTextModel({
+      systemPrompt: [
+        "你是网页检索二次决策器。",
+        buildRealtimeContextText(),
+        "你会看到用户问题、初步搜索计划，以及搜索结果列表。",
+        "你的任务是判断：仅靠搜索结果摘要是否已经足够回答；如果不够，是否需要继续进入具体网页。",
+        "优先选择最可能包含一手信息、正文详情、今日榜单或完整说明的页面。",
+        "如果用户问的是今天、今日、最新、热榜、榜单、公告、价格、更新日志等，且搜索摘要本身不包含完整答案，通常应该继续进页。",
+        `最多只能选择 ${cappedFetchPages} 个结果进入页面。`,
+        "请严格输出 JSON，不要输出 Markdown。",
+        "JSON 结构必须是 {\"needsPageFetch\":boolean,\"answerableFromResults\":boolean,\"reason\":string,\"selectedIndexes\":number[]}。",
+        "selectedIndexes 使用 1-based 序号，只能从给定结果列表中选择。"
+      ].join("\n"),
+      userPrompt: [
+        `用户问题：${String(query || "").trim()}`,
+        `站点偏好：${getSourcePreferenceLabel(preferredSource)}`,
+        "检索计划：",
+        safeJson(plan || {}),
+        "搜索结果：",
+        safeJson(digest)
+      ].join("\n\n"),
+      signal,
+      temperature: 0.1,
+      maxTokens: 420
+    });
+    const parsed = parseJsonBlock(result.text || "") || {};
+    const selectedIndexes = Array.isArray(parsed.selectedIndexes)
+      ? [...new Set(parsed.selectedIndexes.map((item) => Number(item)).filter((item) => Number.isInteger(item) && item >= 1 && item <= digest.length))].slice(0, cappedFetchPages)
+      : [];
+    const needsPageFetch = parsed.needsPageFetch === true && selectedIndexes.length > 0;
+    return {
+      needsPageFetch,
+      answerableFromResults: parsed.answerableFromResults === true,
+      reason: String(parsed.reason || (needsPageFetch ? fallback.reason : "搜索结果摘要已足够回答。")).trim(),
+      selectedIndexes: needsPageFetch ? selectedIndexes : []
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+async function buildWebSearchPlan(userQuery = "", signal, preferredSource = "") {
+  const normalizedPreference = normalizeSourcePreference(preferredSource);
+  const fallback = {
+    intent: String(userQuery || "").trim(),
+    rationale: normalizedPreference ? `默认直接用用户问题作为检索词，并优先查看${getSourcePreferenceLabel(normalizedPreference)}。` : "默认直接用用户问题作为检索词，并优先查看权威站点。",
+    strategy: ["先检索原始问题", normalizedPreference ? `优先保留${getSourcePreferenceLabel(normalizedPreference)}的结果` : "优先保留权威来源和直达信息", "抓取前几条结果的页面摘要供回答使用"],
+    searchTerms: normalizeSearchTermList([userQuery], userQuery),
+    preferredSource: normalizedPreference
+  };
+  try {
+    const result = await invokeTextModel({
+      systemPrompt: [
+        "你是网页检索规划器。",
+        buildRealtimeContextText(),
+        "用户会给出一个想联网搜索的问题。",
+        "请产出严格 JSON，不要输出 Markdown。",
+        "JSON 结构必须是 {\"intent\":string,\"rationale\":string,\"strategy\":string[],\"searchTerms\":string[],\"preferredSource\":string}。",
+        `searchTerms 最多 ${MAX_WEB_SEARCH_QUERIES} 条，必须是适合中文网页搜索引擎的具体检索词。`,
+        "preferredSource 只能是 official、github、docs、news 或空字符串。",
+        "strategy 需要简洁说明检索顺序和筛选标准。"
+      ].join("\n"),
+      userPrompt: `用户问题：${String(userQuery || "").trim()}\n站点偏好：${normalizedPreference || "无"}`,
+      signal,
+      temperature: 0.1,
+      maxTokens: 320
+    });
+    const parsed = parseJsonBlock(result.text || "") || {};
+    return {
+      intent: String(parsed.intent || fallback.intent).trim(),
+      rationale: String(parsed.rationale || fallback.rationale).trim(),
+      strategy: Array.isArray(parsed.strategy)
+        ? parsed.strategy.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 5)
+        : fallback.strategy,
+      searchTerms: normalizeSearchTermList(parsed.searchTerms, userQuery),
+      preferredSource: normalizeSourcePreference(parsed.preferredSource || normalizedPreference)
+    };
+  } catch {
+    return fallback;
+  }
+}
+
 export function getAiToolDefinitions() {
   return [
     {
@@ -66,13 +364,41 @@ export function getAiToolDefinitions() {
     },
     {
       name: "import_bilibili_video",
-      description: "把 bilibili 链接或 BV 号交给 bilibili.downloader 处理并入库。",
+      description: "把 bilibili 链接或 BV 号交给 bilibili.downloader 处理并入库；支持可选分P与清晰度参数。通常应先用 search_bilibili_video 找到具体视频链接，再调用这个工具。",
       inputSchema: {
         type: "object",
         required: ["source"],
         properties: {
           source: { type: "string" },
-          targetFolder: { type: "string" }
+          targetFolder: { type: "string" },
+          page: { type: "integer", minimum: 1 },
+          quality: { type: "string" }
+        }
+      }
+    },
+    {
+      name: "search_bilibili_video",
+      description: "在 B 站公开视频结果里搜索候选视频，返回可直接交给 import_bilibili_video 的视频链接。当用户要求去 B 站找教程、视频并下载入库时，优先先调用这个工具。",
+      inputSchema: {
+        type: "object",
+        required: ["query"],
+        properties: {
+          query: { type: "string" },
+          maxResults: { type: "integer", minimum: 1, maximum: MAX_BILIBILI_SEARCH_RESULTS }
+        }
+      }
+    },
+    {
+      name: "search_web",
+      description: "当用户明确要求联网搜索、查询最新信息、或问题需要外部网页信息时，先生成检索词和检索方案，再执行网页搜索并返回结果摘要。",
+      inputSchema: {
+        type: "object",
+        required: ["query"],
+        properties: {
+          query: { type: "string" },
+          preferredSource: { type: "string", enum: ["", "official", "github", "docs", "news"] },
+          maxResults: { type: "integer", minimum: 1, maximum: MAX_WEB_SEARCH_RESULTS },
+          fetchPages: { type: "integer", minimum: 0, maximum: MAX_WEB_PAGE_SUMMARIES }
         }
       }
     }
@@ -85,6 +411,7 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
   const recentMessages = Array.isArray(helpers.recentMessages) ? helpers.recentMessages : [];
 
   if (name === "read_chat_history") {
+    await api.emitProgress({ phase: "tool-read-chat-history", label: "读取更多聊天记录", percent: 40 });
     const messages = await readRecentChatHistory({
       storageRoot: api.storageRoot,
       historyPath: context.chat.historyPath,
@@ -104,6 +431,7 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
   }
 
   if (name === "describe_image") {
+    await api.emitProgress({ phase: "tool-describe-image", label: "准备图片分析输入", percent: 44 });
     const attachments = await listReferencedChatAttachments({
       storageRoot: api.storageRoot,
       hostClientId: context.chat.hostClientId,
@@ -123,9 +451,11 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
         dataUrl: await toDataUrl(attachment)
       });
     }
+    await api.emitProgress({ phase: "tool-describe-image", label: "调用多模态模型分析图片", percent: 52 });
     const result = await invokeMultimodalModel({
       systemPrompt: [
         "你在执行 describe_image 工具。",
+        buildRealtimeContextText(),
         "请输出精炼、结构化的中文图片分析结果。",
         "需要覆盖主体、场景、可见文字、潜在风险和不确定性。"
       ].join("\n"),
@@ -142,6 +472,7 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
   }
 
   if (name === "import_bilibili_video") {
+    await api.emitProgress({ phase: "tool-import-bilibili-video", label: "创建 B 站下载任务", percent: 46 });
     const source = String(input.source || "").trim();
     if (!source) {
       throw new Error("source is required");
@@ -153,7 +484,9 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
         rawText: source,
         parsedArgs: {
           source,
-          targetFolder: String(input.targetFolder || "").trim()
+          targetFolder: String(input.targetFolder || "").trim(),
+          page: Number.isInteger(input.page) ? input.page : undefined,
+          quality: String(input.quality || "").trim()
         }
       },
       options: {
@@ -168,6 +501,319 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
       jobId: delegatedJob.jobId || "",
       status: delegatedJob.status || "queued",
       source
+    });
+  }
+
+  if (name === "search_bilibili_video") {
+    const query = String(input.query || input.prompt || "").trim();
+    if (!query) {
+      throw new Error("query is required");
+    }
+    const result = await searchBilibiliVideos(query, api.signal, input.maxResults || 4);
+    return safeJson(result);
+  }
+
+  if (name === "search_web") {
+    const query = String(input.query || input.prompt || "").trim();
+    if (!query) {
+      throw new Error("query is required");
+    }
+    const preferredSource = normalizeSourcePreference(input.preferredSource || "");
+    const maxResults = clamp(input.maxResults || 5, 1, MAX_WEB_SEARCH_RESULTS);
+    const fetchPages = clamp(input.fetchPages ?? 3, 0, MAX_WEB_PAGE_SUMMARIES);
+    const directUrls = extractDirectWebUrls(query);
+    await api.emitProgress({
+      phase: "search-plan",
+      label: "生成检索方案",
+      percent: 42,
+      details: createWebSearchProgressDetails({ stage: "plan", query, directUrls, preferredSource })
+    });
+    const plan = await buildWebSearchPlan(query, api.signal, preferredSource);
+    await api.appendLog(`web search plan: ${safeJson(plan)}`);
+
+    if (directUrls.length) {
+      const fetchedDirectPages = [];
+      await api.emitProgress({
+        phase: "fetch-web-pages",
+        label: `优先打开用户给出的网页（${directUrls.length} 个）`,
+        percent: 46,
+        details: createWebSearchProgressDetails({ stage: "direct-fetch", query, directUrls, preferredSource: plan.preferredSource || preferredSource, plan })
+      });
+      for (const [urlIndex, directUrl] of directUrls.entries()) {
+        const fetchPercent = 46 + Math.round(((urlIndex + 1) / directUrls.length) * 12);
+        await api.emitProgress({
+          phase: "fetch-web-pages",
+          label: formatStepLabel("正在打开用户网页，", urlIndex + 1, directUrls.length, "网页"),
+          percent: Math.max(47, Math.min(58, fetchPercent)),
+          details: createWebSearchProgressDetails({
+            stage: "direct-fetch",
+            query,
+            directUrls,
+            preferredSource: plan.preferredSource || preferredSource,
+            plan,
+            fetchedPages: fetchedDirectPages
+          })
+        });
+        try {
+          const page = await fetchWebPageSummary(directUrl, {
+            signal: api.signal,
+            backend: "playwright"
+          });
+          fetchedDirectPages.push(page);
+        } catch (error) {
+          try {
+            const page = await fetchWebPageSummary(directUrl, {
+              signal: api.signal,
+              backend: "fetch"
+            });
+            fetchedDirectPages.push(page);
+          } catch (fallbackError) {
+            fetchedDirectPages.push({
+              url: directUrl,
+              title: "",
+              description: "",
+              excerpt: `页面抓取失败：${String(fallbackError?.message || fallbackError || error || "未知错误").trim()}`,
+              backend: "playwright"
+            });
+          }
+        }
+      }
+      await api.appendLog(`web direct fetch: ${safeJson(fetchedDirectPages)}`);
+      const directResults = fetchedDirectPages.map((page) => ({
+        query,
+        matchedQuery: String(page?.url || query).trim(),
+        title: String(page?.title || page?.url || "").trim(),
+        url: String(page?.url || "").trim(),
+        snippet: String(page?.description || page?.excerpt || "").trim().slice(0, 280),
+        matchedSource: "direct-url",
+        page
+      }));
+      const hasUsefulDirectPage = directResults.some((item) => {
+        const excerpt = String(item?.page?.excerpt || item?.page?.description || item?.title || "").trim();
+        return excerpt && !excerpt.startsWith("页面抓取失败：");
+      });
+      if (hasUsefulDirectPage) {
+        const followUpDecision = {
+          needsPageFetch: false,
+          answerableFromResults: true,
+          reason: "检测到用户直接给出了网页链接，已优先抓取页面内容并交给模型综合判断。",
+          selectedIndexes: []
+        };
+        await api.emitProgress({
+          phase: "search-follow-up",
+          label: "已获取用户网页内容，等待模型综合判断",
+          percent: 62,
+          details: createWebSearchProgressDetails({
+            stage: "direct-fetch-complete",
+            query,
+            directUrls,
+            preferredSource: plan.preferredSource || preferredSource,
+            plan,
+            followUpDecision,
+            fetchedPages: fetchedDirectPages
+          })
+        });
+        return safeJson({
+          query,
+          searchedAt: new Date().toISOString(),
+          directFetchUsed: true,
+          directUrls,
+          plan,
+          followUpDecision,
+          preferredSource: plan.preferredSource || preferredSource,
+          preferredSourceLabel: getSourcePreferenceLabel(plan.preferredSource || preferredSource),
+          resultCount: directResults.length,
+          results: directResults
+        });
+      }
+      await api.emitProgress({
+        phase: "web-search",
+        label: "直链抓取不足，继续联网补充搜索",
+        percent: 48,
+        details: createWebSearchProgressDetails({
+          stage: "direct-fetch-fallback",
+          query,
+          directUrls,
+          preferredSource: plan.preferredSource || preferredSource,
+          plan,
+          fetchedPages: fetchedDirectPages
+        })
+      });
+    }
+
+    const mergedResults = [];
+    const seenUrls = new Set();
+    const searchTerms = normalizeSearchTermList(plan.searchTerms, query);
+    const executedQueries = [];
+    const totalSearchTerms = searchTerms.length || 1;
+    for (const [termIndex, term] of searchTerms.entries()) {
+      const searchPercent = 48 + Math.round(((termIndex + 1) / totalSearchTerms) * 6);
+      executedQueries.push(term);
+      await api.emitProgress({
+        phase: "web-search",
+        label: formatStepLabel("执行联网搜索，", termIndex + 1, totalSearchTerms, "检索词"),
+        percent: Math.max(48, Math.min(54, searchPercent)),
+        details: createWebSearchProgressDetails({
+          stage: "search",
+          query,
+          directUrls,
+          preferredSource: plan.preferredSource || preferredSource,
+          plan,
+          executedQueries,
+          results: mergedResults
+        })
+      });
+      const batch = await searchWeb(term, {
+        signal: api.signal,
+        limit: maxResults,
+        preferredSource: plan.preferredSource || preferredSource
+      });
+      for (const result of batch.results) {
+        const normalizedUrl = String(result.url || "").trim();
+        if (!normalizedUrl || seenUrls.has(normalizedUrl)) {
+          continue;
+        }
+        seenUrls.add(normalizedUrl);
+        mergedResults.push({
+          query: batch.query,
+          matchedQuery: String(result.matchedQuery || batch.query || "").trim(),
+          title: String(result.title || "").trim(),
+          url: normalizedUrl,
+          snippet: String(result.snippet || "").trim(),
+          matchedSource: String(result.matchedSource || "generic").trim()
+        });
+        if (mergedResults.length >= maxResults) {
+          break;
+        }
+      }
+      if (mergedResults.length >= maxResults) {
+        break;
+      }
+    }
+
+    await api.emitProgress({
+      phase: "search-follow-up",
+      label: "分析搜索摘要并决定是否进页",
+      percent: 58,
+      details: createWebSearchProgressDetails({
+        stage: "follow-up",
+        query,
+        directUrls,
+        preferredSource: plan.preferredSource || preferredSource,
+        plan,
+        executedQueries,
+        results: mergedResults
+      })
+    });
+    const followUpDecision = await decideWebSearchFollowUp({
+      query,
+      preferredSource: plan.preferredSource || preferredSource,
+      plan,
+      results: mergedResults,
+      signal: api.signal,
+      fetchPages
+    });
+    await api.appendLog(`web search follow-up: ${safeJson(followUpDecision)}`);
+
+    const selectedResultIndexes = new Set(
+      (Array.isArray(followUpDecision.selectedIndexes) ? followUpDecision.selectedIndexes : [])
+        .map((item) => Number(item) - 1)
+        .filter((item) => Number.isInteger(item) && item >= 0 && item < mergedResults.length)
+    );
+
+    const enrichedResults = [];
+    const fetchedPages = [];
+    if (selectedResultIndexes.size) {
+      await api.emitProgress({
+        phase: "fetch-web-pages",
+        label: `准备抓取 ${selectedResultIndexes.size} 个网页详情`,
+        percent: 64,
+        details: createWebSearchProgressDetails({
+          stage: "fetch-pages",
+          query,
+          directUrls,
+          preferredSource: plan.preferredSource || preferredSource,
+          plan,
+          executedQueries,
+          results: mergedResults,
+          followUpDecision
+        })
+      });
+    } else {
+      await api.emitProgress({
+        phase: "search-follow-up",
+        label: "搜索摘要已足够回答",
+        percent: 64,
+        details: createWebSearchProgressDetails({
+          stage: "follow-up-complete",
+          query,
+          directUrls,
+          preferredSource: plan.preferredSource || preferredSource,
+          plan,
+          executedQueries,
+          results: mergedResults,
+          followUpDecision
+        })
+      });
+    }
+    const selectedIndexesOrdered = [...selectedResultIndexes].sort((left, right) => left - right);
+    const selectedIndexOrderMap = new Map(selectedIndexesOrdered.map((item, idx) => [item, idx]));
+    for (let index = 0; index < mergedResults.length; index += 1) {
+      const result = mergedResults[index];
+      let page = null;
+      if (selectedResultIndexes.has(index)) {
+        const fetchStep = (selectedIndexOrderMap.get(index) || 0) + 1;
+        const fetchTotal = selectedIndexesOrdered.length || 1;
+        const fetchPercent = 64 + Math.round((fetchStep / fetchTotal) * 8);
+        await api.emitProgress({
+          phase: "fetch-web-pages",
+          label: formatStepLabel("正在抓取，", fetchStep, fetchTotal, "网页"),
+          percent: Math.max(65, Math.min(72, fetchPercent)),
+          details: createWebSearchProgressDetails({
+            stage: "fetch-pages",
+            query,
+            directUrls,
+            preferredSource: plan.preferredSource || preferredSource,
+            plan,
+            executedQueries,
+            results: mergedResults,
+            followUpDecision,
+            fetchedPages
+          })
+        });
+        try {
+          page = await fetchWebPageSummary(result.url, { signal: api.signal });
+        } catch (error) {
+          page = {
+            url: result.url,
+            title: "",
+            description: "",
+            excerpt: `页面抓取失败：${String(error?.message || error || "未知错误").trim()}`
+          };
+        }
+        fetchedPages.push(page);
+      }
+      enrichedResults.push({
+        query: result.query,
+        matchedQuery: result.matchedQuery,
+        title: result.title,
+        url: result.url,
+        snippet: result.snippet,
+        matchedSource: result.matchedSource,
+        page
+      });
+    }
+
+    return safeJson({
+      query,
+      searchedAt: new Date().toISOString(),
+      plan,
+      followUpDecision,
+      executedQueries,
+      preferredSource: plan.preferredSource || preferredSource,
+      preferredSourceLabel: getSourcePreferenceLabel(plan.preferredSource || preferredSource),
+      resultCount: enrichedResults.length,
+      results: enrichedResults
     });
   }
 

@@ -86,7 +86,10 @@ function emptyPreviewDebug() {
   return {
     mode: "",
     hlsId: "",
+    hlsProfile: "",
     codec: "",
+    sourceWidth: 0,
+    sourceHeight: 0,
     manifestSegments: 0,
     segmentRequests: 0,
     segmentCompleted: 0,
@@ -331,6 +334,7 @@ export default function SharePage() {
       const hlsCapability = isVideoMime(target.mimeType) && !options.forceTranscode && !options.skipHls
         ? await getHlsPlaybackSupport()
         : { supported: false, reason: "当前预览流程未启用 HLS" };
+      const requestedHlsProfile = String(options.hlsProfile || "720p");
 
       if ((isVideoMime(target.mimeType) || isAudioMime(target.mimeType)) && hlsCapability.supported) {
         try {
@@ -338,7 +342,7 @@ export default function SharePage() {
           setPreviewStatusText("正在准备 HLS 预览...");
           const hlsResult = await withTimeout(
             p2p.getHlsManifest(target.clientId, target.path, {
-              profile: "720p",
+              profile: requestedHlsProfile,
               accessToken: shareToken,
               onProgress: (status) => {
                 if (!status) return;
@@ -360,12 +364,25 @@ export default function SharePage() {
             hlsId: hlsResult.hlsId,
             manifest: hlsResult.manifest,
             codec: hlsResult.codec || "",
+            profile: hlsResult.profile || requestedHlsProfile,
+            availableProfiles: Array.isArray(hlsResult.availableProfiles) ? hlsResult.availableProfiles : [],
+            sourceWidth: Number(hlsResult.sourceWidth || 0),
+            sourceHeight: Number(hlsResult.sourceHeight || 0),
             accessToken: shareToken
           });
           setPreviewing(false);
           previewModeRef.current = "hls-stream";
-          setPreviewStage("HLS 就绪");
-          setMessage("分享预览已就绪");
+          setPreviewDebug((prev) => ({
+            ...prev,
+            mode: "hls-stream",
+            hlsId: hlsResult.hlsId || "",
+            hlsProfile: hlsResult.profile || requestedHlsProfile,
+            codec: hlsResult.codec || prev.codec || "",
+            sourceWidth: Number(hlsResult.sourceWidth || 0),
+            sourceHeight: Number(hlsResult.sourceHeight || 0)
+          }));
+          setPreviewStage(`${hlsResult.profile || requestedHlsProfile} HLS 就绪`);
+          setMessage(`分享预览已就绪${hlsResult.profile ? ` (${hlsResult.profile})` : ""}`);
           return;
         } catch {
         }
@@ -417,6 +434,16 @@ export default function SharePage() {
       setMessage(`预览失败: ${error.message}`);
       setErrorText(error.message || "预览失败");
     }
+  }
+
+  async function switchPreviewHlsProfile(profileId) {
+    if (!file || !isVideoMime(file.mimeType) || !profileId) {
+      return;
+    }
+    if (previewHlsSource?.profile === profileId) {
+      return;
+    }
+    await previewShared(file, { hlsProfile: profileId });
   }
 
   async function downloadShared(target) {
@@ -730,6 +757,7 @@ export default function SharePage() {
             previewDebug={previewDebug}
             previewHlsSource={previewHlsSource}
             p2p={p2p}
+            onSelectHlsProfile={switchPreviewHlsProfile}
             setPreviewHlsSource={setPreviewHlsSource}
             setPreviewDebug={setPreviewDebug}
             setMessage={setMessage}

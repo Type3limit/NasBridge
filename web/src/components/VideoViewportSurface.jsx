@@ -52,6 +52,7 @@ export default function VideoViewportSurface({
 }) {
   const rootRef = useRef(null);
   const [controlsVisible, setControlsVisible] = useState(Boolean(forceControlsVisible || controlsInitiallyVisible));
+  const [focusWithin, setFocusWithin] = useState(false);
   const hideControlsTimerRef = useRef(null);
 
   useEffect(() => {
@@ -85,6 +86,10 @@ export default function VideoViewportSurface({
   }
 
   function scheduleHide() {
+    if (focusWithin) {
+      setControlsVisible(true);
+      return;
+    }
     cancelHideTimer();
     hideControlsTimerRef.current = window.setTimeout(() => {
       setControlsVisible(false);
@@ -106,7 +111,7 @@ export default function VideoViewportSurface({
   }
 
   function hideControlsImmediately() {
-    if (forceControlsVisible || !playing) {
+    if (forceControlsVisible || !playing || focusWithin) {
       return;
     }
     cancelHideTimer();
@@ -114,7 +119,7 @@ export default function VideoViewportSurface({
   }
 
   useEffect(() => {
-    if (forceControlsVisible || !playing) {
+    if (forceControlsVisible || !playing || focusWithin) {
       cancelHideTimer();
       setControlsVisible(true);
       return;
@@ -122,7 +127,7 @@ export default function VideoViewportSurface({
     if (controlsVisible && autoHideControls) {
       scheduleHide();
     }
-  }, [autoHideControls, controlsVisible, forceControlsVisible, playing]);
+  }, [autoHideControls, controlsVisible, focusWithin, forceControlsVisible, playing]);
 
   return (
     <div
@@ -132,8 +137,18 @@ export default function VideoViewportSurface({
       onMouseEnter={revealControls}
       onMouseMove={revealControls}
       onMouseLeave={hideControlsImmediately}
-      onFocusCapture={revealControls}
-      onBlurCapture={() => {
+      onFocusCapture={() => {
+        setFocusWithin(true);
+        revealControls();
+      }}
+      onBlurCapture={(event) => {
+        const nextFocused = event.relatedTarget;
+        if (rootRef.current?.contains(nextFocused)) {
+          setFocusWithin(true);
+          revealControls();
+          return;
+        }
+        setFocusWithin(false);
         if (autoHideControls && !forceControlsVisible && playing) {
           scheduleHide();
         }

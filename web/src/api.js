@@ -34,7 +34,13 @@ export async function apiRequest(path, { method = "GET", token, body } = {}) {
     body: body ? JSON.stringify(body) : undefined
   });
   if (!response.ok) {
-    throw new Error(await response.text());
+    const errorText = await response.text();
+    try {
+      const parsed = JSON.parse(errorText);
+      throw new Error(parsed?.message || errorText || "request failed");
+    } catch {
+      throw new Error(errorText || "request failed");
+    }
   }
   return response.json();
 }
@@ -42,7 +48,8 @@ export async function apiRequest(path, { method = "GET", token, body } = {}) {
 export function toWsUrl(token, options = {}) {
   const serverBase = baseUrl || window.location.origin;
   const wsBase = serverBase.replace(/^http/, "ws");
-  const url = new URL("/ws", wsBase);
+  const wsPath = options.channel === "chat" ? "/ws/chat" : "/ws";
+  const url = new URL(wsPath, wsBase);
   url.searchParams.set("token", token);
   if (options.bridgeRole) {
     url.searchParams.set("bridgeRole", options.bridgeRole);

@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Badge,
   Button,
@@ -31,15 +31,23 @@ import {
   FolderOpenRegular,
   ShareRegular,
   StarFilled,
-  StarRegular
+  StarRegular,
+  StreamRegular
 } from "@fluentui/react-icons";
 import { apiRequest } from "./api";
 import { P2PBridgePool } from "./webrtc";
 import AvatarFace from "./components/AvatarFace";
 import ChatRoom from "./components/ChatRoom";
+import GlobalMusicPlayer from "./components/GlobalMusicPlayer";
 import ProfileDialog from "./components/ProfileDialog";
+import { useIsMobile } from "./hooks/useIsMobile";
+import MobileBottomTabBar from "./components/mobile/MobileBottomTabBar";
+import MobileMoreSheet from "./components/mobile/MobileMoreSheet";
+import MobileFilterSheet from "./components/mobile/MobileFilterSheet";
+import MiniMusicBar from "./components/mobile/MiniMusicBar";
 
 const PreviewModal = lazy(() => import("./components/PreviewModal"));
+const TVStream = lazy(() => import("./components/TVStream"));
 
 const THUMB_CACHE_STORAGE_KEY = "nas_thumb_cache_v1";
 const THUMB_CACHE_MAX_ITEMS = 120;
@@ -492,7 +500,10 @@ function emptyPreviewDebug() {
   return {
     mode: "",
     hlsId: "",
+    hlsProfile: "",
     codec: "",
+    sourceWidth: 0,
+    sourceHeight: 0,
     manifestSegments: 0,
     segmentRequests: 0,
     segmentCompleted: 0,
@@ -596,6 +607,12 @@ export default function App() {
     return window.innerWidth <= 760;
   });
 
+  // 移动端布局状态
+  const isMobile = useIsMobile();
+  const [moreSheetOpen, setMoreSheetOpen] = useState(false);
+  const [moreNavigatedTab, setMoreNavigatedTab] = useState(null);
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
+
   const [previewing, setPreviewing] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
@@ -662,8 +679,10 @@ export default function App() {
   const previewSessionIdRef = useRef(0);
   const fileInputRef = useRef(null);
   const uploadProgressReportAt = useRef({});
+  const activeLocalUploadJobIds = useRef(new Set());
   const fileListRef = useRef(null);
   const toastTimersRef = useRef(new Map());
+  const mobilePageContentRef = useRef(null);
   const [listHeight, setListHeight] = useState(520);
   const [listScrollTop, setListScrollTop] = useState(0);
 
@@ -786,14 +805,8 @@ export default function App() {
   }, []);
 
   const visibleUploadJobs = useMemo(() => {
-    return uploadJobs.filter((job) => {
-      if (job.status !== "uploading") {
-        return false;
-      }
-      const alreadyPresent = files.some((file) => file.clientId === job.clientId && file.path === job.relativePath);
-      return !alreadyPresent;
-    });
-  }, [uploadJobs, files]);
+    return uploadJobs.filter((job) => job.status === "uploading");
+  }, [uploadJobs]);
 
   const uploadingFileKeys = useMemo(() => {
     const set = new Set();
@@ -1061,7 +1074,7 @@ export default function App() {
   );
 
   useEffect(() => {
-    const allowedTabs = new Set(["explorer", "chat", "overview", "terminals", "transfers", "shares"]);
+    const allowedTabs = new Set(["explorer", "chat", "overview", "terminals", "transfers", "shares", "tv"]);
     if (user?.role === "admin") {
       allowedTabs.add("admin-users");
       allowedTabs.add("admin-clients");
@@ -1155,7 +1168,46 @@ export default function App() {
     if (!jobId) {
       return;
     }
+    activeLocalUploadJobIds.current.delete(jobId);
     setUploadJobs((prev) => prev.filter((item) => item.id !== jobId));
+  }
+
+  function mergePolledUploadJobs(previousJobs, incomingJobs) {
+    const prevList = Array.isArray(previousJobs) ? previousJobs : [];
+    const nextList = Array.isArray(incomingJobs) ? incomingJobs : [];
+    const prevById = new Map(prevList.filter((job) => job?.id).map((job) => [job.id, job]));
+    const incomingIds = new Set();
+    const merged = nextList.map((job) => {
+      if (!job?.id) {
+        return job;
+      }
+      incomingIds.add(job.id);
+      const previous = prevById.get(job.id);
+      if (!previous) {
+        return job;
+      }
+      const combined = { ...previous, ...job };
+      if (combined.status === "uploading") {
+        combined.progress = Math.max(previous.progress || 0, combined.progress || 0);
+        combined.transferredBytes = Math.max(previous.transferredBytes || 0, combined.transferredBytes || 0);
+        combined.speedBytesPerSec = combined.speedBytesPerSec || previous.speedBytesPerSec || 0;
+        combined.lastProgressAt = combined.lastProgressAt || previous.lastProgressAt || 0;
+      }
+      return combined;
+    });
+
+    const preservedActive = prevList.filter((job) => (
+      job?.id
+      && job.status === "uploading"
+      && activeLocalUploadJobIds.current.has(job.id)
+      && !incomingIds.has(job.id)
+    ));
+
+    return [...preservedActive, ...merged].slice(0, 120);
+  }
+
+  function replaceUploadJobs(incomingJobs) {
+    setUploadJobs((prev) => mergePolledUploadJobs(prev, incomingJobs));
   }
 
   function getColumnDisplayValue(columnId) {
@@ -1498,7 +1550,10 @@ export default function App() {
                     className={`iconActionButton filterToggleButton${filtersExpanded ? " active" : ""}`}
                     title={filtersExpanded ? "收起筛选与排序" : "展开筛选与排序"}
                     aria-label={filtersExpanded ? "收起筛选与排序" : "展开筛选与排序"}
-                    onClick={() => setFiltersExpanded((prev) => !prev)}
+                    onClick={() => {
+                      if (isMobile) { setFilterSheetOpen(true); return; }
+                      setFiltersExpanded((prev) => !prev);
+                    }}
                   >
                     <FilterRegular />
                   </button>
@@ -1517,18 +1572,32 @@ export default function App() {
               >
                 根目录
               </button>
-              {explorerBreadcrumbs.map((crumb) => (
-                <div key={crumb.path} className="explorerCrumbItem">
-                  <ChevronRightRegular className="explorerCrumbIcon" />
-                  <button
-                    type="button"
-                    className={`explorerCrumbButton${crumb.path === currentExplorerPath ? " current" : ""}`}
-                    onClick={() => openExplorerFolder(crumb.path)}
-                  >
-                    {crumb.label}
-                  </button>
-                </div>
-              ))}
+              {(() => {
+                const truncated = isMobile && explorerBreadcrumbs.length > 2;
+                const visible = truncated ? explorerBreadcrumbs.slice(-2) : explorerBreadcrumbs;
+                return (
+                  <>
+                    {truncated && (
+                      <div className="explorerCrumbItem">
+                        <ChevronRightRegular className="explorerCrumbIcon" />
+                        <span className="explorerCrumbEllipsis">…</span>
+                      </div>
+                    )}
+                    {visible.map((crumb) => (
+                      <div key={crumb.path} className="explorerCrumbItem">
+                        <ChevronRightRegular className="explorerCrumbIcon" />
+                        <button
+                          type="button"
+                          className={`explorerCrumbButton${crumb.path === currentExplorerPath ? " current" : ""}`}
+                          onClick={() => openExplorerFolder(crumb.path)}
+                        >
+                          {crumb.label}
+                        </button>
+                      </div>
+                    ))}
+                  </>
+                );
+              })()}
             </div>
             <div className="explorerPathActions">
               <Caption1>{currentExplorerPath || "当前位于根目录"}</Caption1>
@@ -1773,6 +1842,7 @@ export default function App() {
     { id: "terminals", label: "终端状态", icon: <DesktopRegular />, meta: `${onlineCount}` },
     { id: "transfers", label: "传输队列", icon: <ArrowSwapRegular />, meta: `${visibleUploadJobs.length + downloadingCount}` },
     { id: "shares", label: "分享管理", icon: <ShareRegular />, meta: `${shares.length}` },
+    { id: "tv", label: "TV直播", icon: <StreamRegular />, meta: "live" },
     ...(user?.role === "admin"
       ? [
           { id: "admin-users", label: "用户管理", icon: <EditRegular />, meta: `${users.length}` },
@@ -1794,6 +1864,7 @@ export default function App() {
     if (activeWorkspaceTab === "chat") {
       return (
         <ChatRoom
+          authToken={token}
           currentUser={user}
           clients={clients}
           p2p={p2p}
@@ -1821,6 +1892,13 @@ export default function App() {
     }
     if (activeWorkspaceTab === "admin-clients") {
       return renderAdminClientsPage();
+    }
+    if (activeWorkspaceTab === "tv") {
+      return (
+        <Suspense fallback={<Spinner size="large" />}>
+          <TVStream authToken={token} setMessage={setMessage} />
+        </Suspense>
+      );
     }
     return renderExplorerPage();
   }
@@ -2033,7 +2111,8 @@ export default function App() {
     return "info";
   }
 
-  function setMessage(text, intent = "info") {
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const setMessage = useCallback((text, intent = "info") => {
     if (!text) {
       return;
     }
@@ -2042,7 +2121,7 @@ export default function App() {
     setToasts((prev) => [...prev.slice(-3), { id, text, intent: nextIntent }]);
     const timer = setTimeout(() => dismissToast(id), nextIntent === "error" ? 5600 : 3600);
     toastTimersRef.current.set(id, timer);
-  }
+  }, []);
 
   function ensureClientOnline(clientId) {
     const client = clients.find((item) => item.id === clientId);
@@ -2252,6 +2331,7 @@ export default function App() {
       });
       if (started?.job) {
         jobId = started.job.id;
+        activeLocalUploadJobIds.current.add(jobId);
         upsertUploadJob(started.job);
       }
       await p2p.uploadFile(targetClientId, targetPath, file, {
@@ -2303,6 +2383,10 @@ export default function App() {
         upsertUploadJob({ id: jobId, status: "failed", error: error?.message || "转存失败" });
       }
       setMessage(error?.message || "转存到资源列表失败", "error");
+    } finally {
+      if (jobId) {
+        activeLocalUploadJobIds.current.delete(jobId);
+      }
     }
   }
 
@@ -2420,7 +2504,7 @@ export default function App() {
       setFiles(sortFiles(fileData.files || [], sortBy || "createdAt"));
       setDirectories(fileData.directories || []);
       setClients(clientsData.clients);
-      setUploadJobs(uploadData.jobs || []);
+      replaceUploadJobs(uploadData.jobs || []);
       setShares(shareData.shares || []);
       setLastRefreshAt(new Date().toISOString());
 
@@ -2488,7 +2572,7 @@ export default function App() {
           apiRequest("/api/files", { token })
         ]);
         setClients(clientsData.clients);
-        setUploadJobs(uploadData.jobs || []);
+        replaceUploadJobs(uploadData.jobs || []);
         setFiles(sortFiles(fileData.files || [], sortBy || "createdAt"));
         setDirectories(fileData.directories || []);
         setLastPollAt(new Date().toISOString());
@@ -2941,6 +3025,7 @@ export default function App() {
         Math.max(90_000, Math.ceil(Number(file.size || 0) / (1024 * 1024)) * 1200)
       );
       const fallbackDownloadTimeoutMs = Math.min(12 * 60 * 1000, Math.max(120_000, sizeBasedTimeoutMs));
+      const requestedHlsProfile = String(options.hlsProfile || "720p");
       const hlsCapability = isVideoMime(file.mimeType) && !options.forceTranscode && !options.skipHls
         ? await getHlsPlaybackSupport()
         : { supported: false, reason: "当前预览流程未启用 HLS" };
@@ -2963,7 +3048,7 @@ export default function App() {
             setPreviewStatusText("正在准备 HLS 预览...");
             const hlsResult = await withTimeout(
               p2p.getHlsManifest(file.clientId, file.path, {
-                profile: "720p",
+                profile: requestedHlsProfile,
                 onProgress: (status) => {
                   if (!status) return;
                   setPreviewStatusText(status.message || "正在生成 HLS 预览...");
@@ -2986,7 +3071,11 @@ export default function App() {
               path: file.path,
               hlsId: hlsResult.hlsId,
               manifest: hlsResult.manifest,
-              codec: hlsResult.codec || ""
+              codec: hlsResult.codec || "",
+              profile: hlsResult.profile || requestedHlsProfile,
+              availableProfiles: Array.isArray(hlsResult.availableProfiles) ? hlsResult.availableProfiles : [],
+              sourceWidth: Number(hlsResult.sourceWidth || 0),
+              sourceHeight: Number(hlsResult.sourceHeight || 0)
             });
             setPreviewing(false);
             previewModeRef.current = "hls-stream";
@@ -2994,10 +3083,13 @@ export default function App() {
               ...prev,
               mode: "hls-stream",
               hlsId: hlsResult.hlsId || "",
-              codec: hlsResult.codec || prev.codec || ""
+              hlsProfile: hlsResult.profile || requestedHlsProfile,
+              codec: hlsResult.codec || prev.codec || "",
+              sourceWidth: Number(hlsResult.sourceWidth || 0),
+              sourceHeight: Number(hlsResult.sourceHeight || 0)
             }));
-            setPreviewStage("HLS 就绪");
-            setMessage("HLS 预览已就绪");
+            setPreviewStage(`${hlsResult.profile || requestedHlsProfile} HLS 就绪`);
+            setMessage(`HLS 预览已就绪${hlsResult.profile ? ` (${hlsResult.profile})` : ""}`);
             return;
           } catch (error) {
             if (previewSessionIdRef.current !== sessionId) return;
@@ -3202,6 +3294,16 @@ export default function App() {
     }
   }
 
+  async function switchPreviewHlsProfile(profileId) {
+    if (!previewTargetFile || !isVideoMime(previewTargetFile.mimeType) || !profileId) {
+      return;
+    }
+    if (previewHlsSource?.profile === profileId) {
+      return;
+    }
+    await preview(previewTargetFile, { hlsProfile: profileId });
+  }
+
   async function removeFile(file) {
     if (!p2p || !ensureClientOnline(file.clientId)) return;
     if (isUploadingFile(file)) {
@@ -3327,6 +3429,7 @@ export default function App() {
         });
         if (started?.job) {
           jobId = started.job.id;
+          activeLocalUploadJobIds.current.add(jobId);
           upsertUploadJob(started.job);
         }
 
@@ -3402,6 +3505,7 @@ export default function App() {
         }
       } finally {
         if (jobId) {
+          activeLocalUploadJobIds.current.delete(jobId);
           delete uploadProgressReportAt.current[jobId];
         }
       }
@@ -3906,6 +4010,214 @@ export default function App() {
     );
   }
 
+  // ─── 移动端辅助函数 ───────────────────────────────────────────
+
+  // Android 回退键：在 moreNavigatedTab 子页面时，物理返回键回到更多抽屉
+  useEffect(() => {
+    if (!moreNavigatedTab) return;
+    window.history.pushState({ moreNav: true }, "");
+    const onPop = () => {
+      setMoreNavigatedTab(null);
+      setMoreSheetOpen(true);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [moreNavigatedTab]);
+
+  // 移动端切换回文件页时恢复滚动位置
+  useEffect(() => {
+    if (!isMobile || activeWorkspaceTab !== "explorer") return;
+    if (mobilePageContentRef.current) {
+      mobilePageContentRef.current.scrollTop = listScrollTop;
+    }
+  }, [activeWorkspaceTab, isMobile]);
+
+  function handleMobileTabChange(id) {
+    if (id === "more") {
+      setMoreSheetOpen(true);
+      return;
+    }
+    setMoreSheetOpen(false);
+    setMoreNavigatedTab(null);
+    setActiveWorkspaceTab(id);
+  }
+
+  function handleMoreNavigate(tabId) {
+    setMoreSheetOpen(false);
+    setMoreNavigatedTab(tabId);
+    setActiveWorkspaceTab("more");
+  }
+
+  function renderMobileActivePage() {
+    if (activeWorkspaceTab === "more" && moreNavigatedTab) {
+      return renderMoreSubPage(moreNavigatedTab);
+    }
+    if (activeWorkspaceTab === "chat") {
+      return (
+        <ChatRoom
+          authToken={token}
+          currentUser={user}
+          clients={clients}
+          p2p={p2p}
+          setMessage={setMessage}
+          getClientDisplayName={getClientDisplayName}
+          openMediaPreview={preview}
+          saveChatAttachmentToLibrary={saveChatAttachmentToLibrary}
+        />
+      );
+    }
+    if (activeWorkspaceTab === "overview") return renderOverviewPage();
+    if (activeWorkspaceTab === "tv") {
+      return (
+        <Suspense fallback={<Spinner size="large" />}>
+          <TVStream authToken={token} setMessage={setMessage} />
+        </Suspense>
+      );
+    }
+    return renderExplorerPage();
+  }
+
+  function renderMoreSubPage(tabId) {
+    return (
+      <div className="mobileSubPage">
+        <div className="mobileSubPageHeader">
+          <button
+            type="button"
+            className="mobileBackButton"
+            onClick={() => {
+              setMoreNavigatedTab(null);
+              setMoreSheetOpen(true);
+            }}
+          >
+            ← 更多
+          </button>
+        </div>
+        {tabId === "transfers"     && renderTransfersPage()}
+        {tabId === "shares"        && renderSharesPage()}
+        {tabId === "terminals"     && renderTerminalsPage()}
+        {tabId === "admin-users"   && renderAdminUsersPage()}
+        {tabId === "admin-clients" && renderAdminClientsPage()}
+      </div>
+    );
+  }
+
+  function renderMobileLayout() {
+    const activeBadge = visibleUploadJobs.length + downloadingCount;
+    return (
+      <div className="page">
+        {renderToastViewport()}
+        {/* GlobalMusicPlayer 保持挂载以维持音频实例，CSS 隐藏悬浮 UI */}
+        <GlobalMusicPlayer p2p={p2p} clients={clients} user={user} onToast={setMessage} />
+        <div className="mobileApp">
+          {/* 顶栏 */}
+          <header className="mobileTopbar">
+            <div className="mobileTopbarBrand">
+              <Title3>NAS Console</Title3>
+            </div>
+            <div className="mobileTopbarActions">
+              <button
+                type="button"
+                className="iconActionButton mobileTopbarAvatarButton"
+                title="用户档案"
+                aria-label="用户档案"
+                onClick={() => setProfileOpen(true)}
+              >
+                <AvatarFace
+                  displayName={user.displayName}
+                  avatarUrl={user.avatarUrl}
+                  avatarClientId={user.avatarClientId}
+                  avatarPath={user.avatarPath}
+                  avatarFileId={user.avatarFileId}
+                  p2p={p2p}
+                  style={{ width: 30, height: 30 }}
+                />
+              </button>
+              <button
+                type="button"
+                className="iconActionButton mobileTopbarIconButton"
+                title="上传文件"
+                aria-label="上传文件"
+                onClick={() => setUploadOpen(true)}
+              >
+                <ArrowDownloadRegular />
+              </button>
+              <button
+                type="button"
+                className="iconActionButton mobileTopbarIconButton"
+                title="同步索引"
+                aria-label="同步索引"
+                onClick={() => refreshAll()}
+              >
+                {loading ? <Spinner size="tiny" /> : <ArrowSwapRegular />}
+              </button>
+            </div>
+          </header>
+
+          {/* 内容区 */}
+          <div
+            ref={mobilePageContentRef}
+            className={`mobilePageContent${activeWorkspaceTab === "chat" ? " chatMode" : ""}`}
+          >
+            {renderMobileActivePage()}
+          </div>
+
+          {/* 迷你音乐栏（有曲目时显示） */}
+          <MiniMusicBar />
+
+          {/* 底部导航栏 */}
+          <MobileBottomTabBar
+            activeTab={activeWorkspaceTab}
+            moreSheetOpen={moreSheetOpen}
+            onTabChange={handleMobileTabChange}
+            explorerBadge={filteredOnlineFiles.length > 0 ? String(filteredOnlineFiles.length) : null}
+            moreBadge={activeBadge > 0 ? String(activeBadge) : null}
+          />
+        </div>
+
+        {/* 更多抽屉（Portal 到 body） */}
+        <MobileMoreSheet
+          open={moreSheetOpen}
+          onClose={() => setMoreSheetOpen(false)}
+          onNavigate={handleMoreNavigate}
+          user={user}
+          transferCount={visibleUploadJobs.length + downloadingCount}
+          shareCount={shares.length}
+          onlineClientCount={onlineCount}
+          onLogout={logout}
+        />
+        {/* 筛选抽屉（Portal 到 body） */}
+        <MobileFilterSheet
+          open={filterSheetOpen}
+          onClose={() => setFilterSheetOpen(false)}
+          keyword={keyword}
+          columnFilter={columnFilter}
+          typeFilter={typeFilter}
+          sortBy={sortBy}
+          columns={columns}
+          onApply={({ keyword: k, columnFilter: c, typeFilter: t, sortBy: s }) => {
+            setKeyword(k);
+            setColumnFilter(c);
+            setTypeFilter(t);
+            setSortBy(s);
+            setFilterSheetOpen(false);
+          }}
+          onReset={() => {
+            setKeyword("");
+            setColumnFilter("all");
+            setTypeFilter("all");
+            setSortBy("createdAt");
+            setFilterSheetOpen(false);
+          }}
+        />
+      </div>
+    );
+  }
+
+  // 移动端早期返回（在桌面布局之前判断）
+  if (isMobile) {
+    return renderMobileLayout();
+  }
+
   return (
     <div className="page">
       {renderToastViewport()}
@@ -3924,11 +4236,7 @@ export default function App() {
             <div className="brandBlock">
               <div className="brandIdentity compact">
                 <Title3>NAS Console</Title3>
-                <div className="brandMetaRow compact">
-                  <Badge appearance="outline" color={diagnostics.wsState === "open" ? "success" : "informative"}>WS {diagnostics.wsState || "idle"}</Badge>
-                  <Badge appearance="outline" color={onlineCount ? "success" : "informative"}>在线终端 {onlineCount}</Badge>
-                  <Caption1>最近刷新 {formatRelativeTime(lastRefreshAt)}</Caption1>
-                </div>
+                <GlobalMusicPlayer p2p={p2p} clients={clients} user={user} onToast={setMessage} />
               </div>
             </div>
           </div>
@@ -4572,6 +4880,7 @@ export default function App() {
               previewDebug={previewDebug}
               previewHlsSource={previewHlsSource}
               p2p={p2p}
+              onSelectHlsProfile={switchPreviewHlsProfile}
               setPreviewHlsSource={setPreviewHlsSource}
               setPreviewDebug={setPreviewDebug}
               setMessage={setMessage}

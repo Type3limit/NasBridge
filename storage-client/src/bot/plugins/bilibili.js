@@ -1,60 +1,30 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { setMaxListeners } from "node:events";
 import { createBotJobMessageId } from "../context.js";
+import {
+  BILIBILI_USER_AGENT,
+  extractBilibiliVideoId,
+  generateBilibiliLoginQr,
+  getBilibiliLoggedInUser,
+  getBilibiliRequestHeaders,
+  getBilibiliVideoBundleFromSource,
+  normalizeBilibiliQuality,
+  pollBilibiliLoginQr
+} from "../tools/bilibiliApi.js";
+import { readChatHistoryDay } from "../tools/chatHistory.js";
 import { importFileIntoLibrary, triggerLibraryRescan } from "../tools/libraryImport.js";
+import { launchPlaywrightBrowser, loadPlaywrightChromium } from "../tools/playwright.js";
 import { createBotPlugin } from "./base.js";
 
 const ytDlpPath = process.env.YT_DLP_PATH || "yt-dlp";
 const bilibiliImportDir = process.env.BOT_BILIBILI_IMPORT_DIR || "downloads/bilibili";
-const bilibiliCookieFile = process.env.BOT_BILIBILI_COOKIE_FILE || "";
 const bilibiliDownloadBackend = String(process.env.BOT_BILIBILI_DOWNLOAD_BACKEND || "playwright").trim().toLowerCase();
-const bilibiliPlaywrightHeadless = process.env.BOT_BILIBILI_PLAYWRIGHT_HEADLESS !== "0";
-const bilibiliPlaywrightExecutablePath = String(process.env.BOT_BILIBILI_PLAYWRIGHT_EXECUTABLE_PATH || "").trim();
-const bilibiliPlaywrightProxy = String(process.env.BOT_BILIBILI_PLAYWRIGHT_PROXY || "").trim();
-const bundledBrowserMissingPattern = /Executable doesn't exist|browserType\.launch:.*executable/i;
-
-function getPlaywrightExecutableCandidates() {
-  const candidates = [];
-  if (bilibiliPlaywrightExecutablePath) {
-    candidates.push(bilibiliPlaywrightExecutablePath);
-  }
-  if (process.platform === "win32") {
-    const localAppData = String(process.env.LOCALAPPDATA || "").trim();
-    candidates.push(
-      "C:/Program Files/Google/Chrome/Application/chrome.exe",
-      "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
-      "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
-      "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
-    );
-    if (localAppData) {
-      candidates.push(
-        `${localAppData}/Google/Chrome/Application/chrome.exe`,
-        `${localAppData}/Microsoft/Edge/Application/msedge.exe`
-      );
-    }
-  }
-  return [...new Set(candidates.map((item) => String(item || "").trim()).filter(Boolean))];
-}
-
-function resolveExistingPlaywrightExecutable() {
-  for (const candidate of getPlaywrightExecutableCandidates()) {
-    const normalized = candidate.replace(/\//g, path.sep);
-    if (fs.existsSync(normalized)) {
-      return normalized;
-    }
-  }
-  return "";
-}
-
-function extractBilibiliVideoId(value = "") {
-  const match = String(value || "").match(/\b(BV[0-9A-Za-z]+)\b/i);
-  const raw = String(match?.[1] || "").trim();
-  if (!raw) {
-    return "";
-  }
-  return `BV${raw.slice(2)}`;
-}
+const BILIBILI_AUTH_FILE_NAME = "bilibili-auth.json";
+const BILIBILI_COOKIE_FILE_NAME = "bilibili-cookies.json";
+const BILIBILI_QR_POLL_INTERVAL_MS = 2000;
+const BILIBILI_QR_LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 
 function canonicalizeBilibiliVideoId(value = "") {
   const raw = String(value || "").trim();
@@ -77,6 +47,443 @@ function normalizeBilibiliSource(value = "") {
     return `https://www.bilibili.com/video/${videoId}`;
   }
   return raw;
+}
+
+function resolveBilibiliAction(context = {}) {
+  const parsedAction = String(context?.trigger?.parsedArgs?.action || "").trim().toLowerCase();
+  const mappedParsedAction = new Map([
+    ["login", "login"],
+    ["登录", "login"],
+    ["relogin", "relogin"],
+    ["重新登录", "relogin"],
+    ["logout", "logout"],
+    ["退出", "logout"],
+    ["status", "status"],
+    ["状态", "status"]
+  ]).get(parsedAction);
+  if (mappedParsedAction) {
+    return mappedParsedAction;
+  }
+  const rawText = String(context?.trigger?.rawText || "");
+  const match = rawText.match(/(?:^|\s)@\s*(?:bili|bilibili)\s+(login|logout|status|登录|退出|状态|relogin|重新登录)(?=\s|$)/i);
+  if (!match?.[1]) {
+    return "download";
+  }
+  return new Map([
+    ["login", "login"],
+    ["登录", "login"],
+    ["relogin", "relogin"],
+    ["重新登录", "relogin"],
+    ["logout", "logout"],
+    ["退出", "logout"],
+    ["status", "status"],
+    ["状态", "status"]
+  ]).get(String(match[1]).toLowerCase()) || "download";
+}
+
+function resolveCardActionLabel(context = {}) {
+  return String(context?.trigger?.parsedArgs?.__actionLabel || "").trim();
+}
+
+function shouldReplaceCurrentChatMessage(context = {}) {
+  return String(context?.chat?.replyMode || "").trim() === "replace-chat-message"
+    && String(context?.chat?.messageId || "").trim() !== "";
+}
+
+function getBilibiliReplyMessageId(context = {}) {
+  if (shouldReplaceCurrentChatMessage(context)) {
+    return String(context?.chat?.messageId || "").trim();
+  }
+  return createBotJobMessageId(context.jobId);
+}
+
+function hasMeaningfulTriggerPayload(context = {}) {
+  const rawText = String(context?.trigger?.rawText || "").trim();
+  if (rawText) {
+    return true;
+  }
+  const parsedArgs = context?.trigger?.parsedArgs && typeof context.trigger.parsedArgs === "object"
+    ? context.trigger.parsedArgs
+    : {};
+  return Object.keys(parsedArgs).some((key) => key !== "__actionLabel");
+}
+
+function getBilibiliCookieStorePath(appDataRoot = "") {
+  const explicit = String(process.env.BOT_BILIBILI_COOKIE_FILE || "").trim();
+  return explicit || path.join(String(appDataRoot || ""), BILIBILI_COOKIE_FILE_NAME);
+}
+
+function getBilibiliAuthStatePath(appDataRoot = "") {
+  return path.join(String(appDataRoot || ""), BILIBILI_AUTH_FILE_NAME);
+}
+
+async function readBilibiliAuthState(appDataRoot = "") {
+  try {
+    const raw = await fs.promises.readFile(getBilibiliAuthStatePath(appDataRoot), "utf8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+async function writeBilibiliAuthState(appDataRoot = "", payload = {}) {
+  await fs.promises.mkdir(String(appDataRoot || ""), { recursive: true });
+  await fs.promises.writeFile(getBilibiliAuthStatePath(appDataRoot), `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+}
+
+async function persistBilibiliAuth(api, cookies = [], user = null) {
+  const cookieFilePath = getBilibiliCookieStorePath(api.appDataRoot);
+  await fs.promises.mkdir(path.dirname(cookieFilePath), { recursive: true });
+  await fs.promises.writeFile(cookieFilePath, `${JSON.stringify(cookies, null, 2)}\n`, "utf8");
+  const cookieMap = new Map(cookies.map((item) => [String(item?.name || ""), String(item?.value || "")]));
+  process.env.BOT_BILIBILI_COOKIE_FILE = cookieFilePath;
+  process.env.BOT_BILIBILI_COOKIE_HEADER = "";
+  process.env.BOT_BILIBILI_SESSDATA = cookieMap.get("SESSDATA") || "";
+  process.env.BOT_BILIBILI_BUVID3 = cookieMap.get("buvid3") || process.env.BOT_BILIBILI_BUVID3 || "";
+  process.env.BOT_BILIBILI_DEDEUSERID = cookieMap.get("DedeUserID") || "";
+  process.env.BOT_BILIBILI_BILI_JCT = cookieMap.get("bili_jct") || "";
+  await writeBilibiliAuthState(api.appDataRoot, {
+    isLoggedIn: true,
+    updatedAt: new Date().toISOString(),
+    cookieFilePath,
+    user: user && typeof user === "object" ? user : null
+  });
+  return cookieFilePath;
+}
+
+async function clearBilibiliAuth(api) {
+  const cookieFilePath = getBilibiliCookieStorePath(api.appDataRoot);
+  await Promise.all([
+    fs.promises.rm(cookieFilePath, { force: true }).catch(() => {}),
+    fs.promises.rm(getBilibiliAuthStatePath(api.appDataRoot), { force: true }).catch(() => {})
+  ]);
+  process.env.BOT_BILIBILI_COOKIE_FILE = "";
+  process.env.BOT_BILIBILI_COOKIE_HEADER = "";
+  process.env.BOT_BILIBILI_SESSDATA = "";
+  process.env.BOT_BILIBILI_BUVID3 = "";
+  process.env.BOT_BILIBILI_DEDEUSERID = "";
+  process.env.BOT_BILIBILI_BILI_JCT = "";
+}
+
+async function resolveBilibiliUserProfile(api) {
+  const remote = await getBilibiliLoggedInUser({ signal: api.signal });
+  if (remote) {
+    await writeBilibiliAuthState(api.appDataRoot, {
+      ...(await readBilibiliAuthState(api.appDataRoot)),
+      isLoggedIn: true,
+      updatedAt: new Date().toISOString(),
+      cookieFilePath: getBilibiliCookieStorePath(api.appDataRoot),
+      user: remote
+    });
+    return remote;
+  }
+  const cached = await readBilibiliAuthState(api.appDataRoot);
+  if (cached?.isLoggedIn) {
+    // Cookie has expired: remote check returned null despite local state saying logged-in.
+    // Mark the state as logged-out so future callers don't get a stale cached identity.
+    await writeBilibiliAuthState(api.appDataRoot, {
+      ...cached,
+      isLoggedIn: false,
+      updatedAt: new Date().toISOString()
+    }).catch(() => {});
+  }
+  return null;
+}
+
+function buildBilibiliAuthAction(label = "", action = "status", extraArgs = {}) {
+  return {
+    type: "invoke-bot",
+    label: String(label || "").trim(),
+    botId: "bilibili.downloader",
+    rawText: `@bili ${action}`,
+    parsedArgs: {
+      action,
+      __chatReplyMode: "replace-chat-message",
+      ...(extraArgs && typeof extraArgs === "object" ? extraArgs : {})
+    }
+  };
+}
+
+function buildBilibiliAuthCard({ status = "info", title = "Bilibili 登录", subtitle = "", body = "", imageUrl = "", imageFit = "cover", sourceUrl = "", actions = [] } = {}) {
+  return {
+    type: "media-result",
+    status,
+    title: String(title || "Bilibili 登录").trim(),
+    subtitle: String(subtitle || "").trim(),
+    body: String(body || "").trim(),
+    progress: null,
+    imageUrl: String(imageUrl || "").trim(),
+    imageFit: String(imageFit || "cover").trim(),
+    imageAlt: String(title || "Bilibili 登录").trim(),
+    mediaAttachmentId: "",
+    sourceLabel: sourceUrl ? "打开登录链接" : "",
+    sourceUrl: String(sourceUrl || "").trim(),
+    actions: Array.isArray(actions) ? actions : []
+  };
+}
+
+function buildBilibiliUserSummary(user = null, { includeStorageHint = false } = {}) {
+  if (!user || typeof user !== "object") {
+    return includeStorageHint ? "登录后无需再手动配置 Cookie。" : "";
+  }
+  const lines = [
+    `当前账号：${String(user.uname || "未命名账号").trim() || "未命名账号"}`,
+    `账号等级：Lv.${clampPositiveInteger(user.level, 0) || 0}`
+  ];
+  if (includeStorageHint) {
+    lines.push("登录态已保存到本地，后续下载和搜索会自动复用。")
+  }
+  return lines.join("\n");
+}
+
+function buildBilibiliLoginGuideCard({ source = "", metadata = {}, targetFolder = "", downloadOptions = {}, maxAvailableQuality = null } = {}) {
+  const videoTitle = String(metadata?.videoTitle || metadata?.title || "Bilibili 下载").trim();
+  const requestedQuality = normalizeBilibiliQuality(downloadOptions?.quality || metadata?.selectedQuality?.requestedLabel || "", maxAvailableQuality?.qn || 127);
+  const fallbackQuality = maxAvailableQuality && maxAvailableQuality.qn
+    ? { qn: maxAvailableQuality.qn, label: String(maxAvailableQuality.label || `QN ${maxAvailableQuality.qn}`).trim() }
+    : null;
+  const bodyLines = [
+    `你当前请求的是 ${requestedQuality.label}，但这个清晰度通常需要先登录 Bilibili 才能获取。`
+  ];
+  if (fallbackQuality) {
+    bodyLines.push(`未登录时当前最多可直接下载：${fallbackQuality.label}`);
+  }
+  bodyLines.push("完成扫码后，重新发起当前下载即可直接复用登录态。");
+  const actions = [buildBilibiliAuthAction("扫码登录", "login", {
+    source,
+    sourceUrl: source,
+    targetFolder,
+    page: metadata?.page?.index || downloadOptions?.page || undefined,
+    quality: downloadOptions?.quality || undefined
+  })];
+  return buildBilibiliAuthCard({
+    status: "info",
+    title: "需要登录后再获取更高清晰度",
+    subtitle: [videoTitle, requestedQuality.label].filter(Boolean).join(" · "),
+    body: bodyLines.join("\n"),
+    imageUrl: String(metadata?.thumbnail || metadata?.pic || "").trim(),
+    sourceUrl: String(metadata?.webpage_url || source || "").trim(),
+    actions
+  });
+}
+
+async function waitWithSignal(ms, signal) {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return;
+  }
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener?.("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener?.("abort", onAbort);
+      reject(Object.assign(new Error("job cancelled"), { name: "AbortError" }));
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+  });
+}
+
+async function handleBilibiliStatus(context, api) {
+  const user = await resolveBilibiliUserProfile(api);
+  const card = user
+    ? buildBilibiliAuthCard({
+      status: "succeeded",
+      title: "Bilibili 已登录",
+      subtitle: [user.uname || "已登录", user.level ? `Lv.${user.level}` : ""].filter(Boolean).join(" · "),
+      body: buildBilibiliUserSummary(user, { includeStorageHint: true }),
+      imageUrl: String(user.face || "").trim(),
+      actions: [buildBilibiliAuthAction("重新登录", "relogin"), buildBilibiliAuthAction("退出登录", "logout")]
+    })
+    : buildBilibiliAuthCard({
+      status: "info",
+      title: "Bilibili 未登录",
+      body: "当前没有可用的 Bilibili 登录态。登录后无需再手动配置 Cookie。",
+      actions: [buildBilibiliAuthAction("扫码登录", "login")]
+    });
+  const chatReply = await api.publishChatReply({
+    id: getBilibiliReplyMessageId(context),
+    createdAt: context.createdAt,
+    text: "",
+    attachments: [],
+    card
+  });
+  return { chatReply, importedFiles: [], artifacts: [] };
+}
+
+async function handleBilibiliLogout(context, api) {
+  await clearBilibiliAuth(api);
+  const chatReply = await api.publishChatReply({
+    id: getBilibiliReplyMessageId(context),
+    createdAt: context.createdAt,
+    text: "",
+    attachments: [],
+    card: buildBilibiliAuthCard({
+      status: "succeeded",
+      title: "Bilibili 已退出登录",
+      body: "本地保存的登录态已经清除。",
+      actions: [buildBilibiliAuthAction("重新登录", "login")]
+    })
+  });
+  return { chatReply, importedFiles: [], artifacts: [] };
+}
+
+async function handleBilibiliLogin(context, api, { force = false } = {}) {
+  if (!force) {
+    const currentUser = await resolveBilibiliUserProfile(api);
+    if (currentUser) {
+      return handleBilibiliStatus(context, api);
+    }
+  }
+
+  if (api.signal) {
+    setMaxListeners(0, api.signal);
+  }
+  const qr = await generateBilibiliLoginQr({ signal: api.signal });
+  const qrPollCookieHeader = String(qr?.cookieHeader || "").trim();
+  const messageId = getBilibiliReplyMessageId(context);
+  const resumeSource = normalizeBilibiliSource(String(
+    context?.trigger?.parsedArgs?.source
+    || context?.trigger?.parsedArgs?.sourceUrl
+    || ""
+  ).trim());
+  const resumeTargetFolder = String(context?.trigger?.parsedArgs?.targetFolder || "").trim();
+  const resumePage = clampPositiveInteger(context?.trigger?.parsedArgs?.page || context?.trigger?.parsedArgs?.p, 0);
+  const resumeQuality = String(context?.trigger?.parsedArgs?.quality || context?.trigger?.parsedArgs?.qn || "").trim();
+  const resumeAction = resumeSource
+    ? buildBilibiliInvokeAction(
+      `继续下载 ${normalizeBilibiliQuality(resumeQuality || "64", 127).label}`,
+      {
+        source: resumeSource,
+        targetFolder: resumeTargetFolder,
+        page: resumePage,
+        quality: resumeQuality
+      }
+    )
+    : null;
+  const waitingCard = buildBilibiliAuthCard({
+    status: "info",
+    title: "Bilibili 扫码登录",
+    subtitle: "等待扫码",
+    body: "请使用哔哩哔哩 App 扫描二维码。二维码有效期约 10 分钟。",
+    imageUrl: qr.imageUrl,
+    imageFit: "contain",
+    sourceUrl: qr.loginUrl,
+    actions: [
+      { type: "open-url", label: "打开二维码链接", url: qr.loginUrl },
+      { type: "cancel-bot-job", label: "停止轮询" }
+    ]
+  });
+  await api.publishChatReply({
+    id: messageId,
+    createdAt: context.createdAt,
+    text: "",
+    attachments: [],
+    card: waitingCard
+  });
+
+  const startedAt = Date.now();
+  let hasScanned = false;
+  while (Date.now() - startedAt < BILIBILI_QR_LOGIN_TIMEOUT_MS) {
+    api.throwIfCancelled?.();
+    const result = await pollBilibiliLoginQr(qr.qrcodeKey, {
+      signal: api.signal,
+      cookieHeader: qrPollCookieHeader
+    });
+    if (result.code === 86101) {
+      await waitWithSignal(BILIBILI_QR_POLL_INTERVAL_MS, api.signal);
+      continue;
+    }
+    if (result.code === 86090) {
+      hasScanned = true;
+      await api.publishTransientChatReply({
+        id: messageId,
+        createdAt: context.createdAt,
+        text: "",
+        attachments: [],
+        card: buildBilibiliAuthCard({
+          status: "info",
+          title: "Bilibili 扫码登录",
+          subtitle: "已扫码，等待手机确认",
+          body: "二维码已被扫描，请在手机上的哔哩哔哩 App 内确认登录。",
+          imageUrl: qr.imageUrl,
+          imageFit: "contain",
+          sourceUrl: qr.loginUrl,
+          actions: [{ type: "open-url", label: "打开二维码链接", url: qr.loginUrl }]
+        })
+      });
+      await waitWithSignal(BILIBILI_QR_POLL_INTERVAL_MS, api.signal);
+      continue;
+    }
+    if (result.code === 86038) {
+      const chatReply = await api.publishChatReply({
+        id: messageId,
+        createdAt: context.createdAt,
+        text: "",
+        attachments: [],
+        card: buildBilibiliAuthCard({
+          status: "failed",
+          title: "Bilibili 登录二维码已过期",
+          body: "二维码已失效，请重新生成并扫码。",
+          actions: [buildBilibiliAuthAction("重新生成二维码", "login")]
+        })
+      });
+      return { chatReply, importedFiles: [], artifacts: [] };
+    }
+    if (result.code === 0 && Array.isArray(result.cookies) && result.cookies.length) {
+      const cookieFilePath = await persistBilibiliAuth(api, result.cookies, null);
+      await api.appendLog(`bilibili login saved: ${cookieFilePath}`);
+      const user = await resolveBilibiliUserProfile(api);
+      const chatReply = await api.publishChatReply({
+        id: messageId,
+        createdAt: context.createdAt,
+        text: "",
+        attachments: [],
+        card: buildBilibiliAuthCard({
+          status: "succeeded",
+          title: "Bilibili 登录成功",
+          subtitle: [user?.uname || "已登录", user?.level ? `Lv.${user.level}` : ""].filter(Boolean).join(" · "),
+          body: buildBilibiliUserSummary(user, { includeStorageHint: true }),
+          imageUrl: String(user?.face || "").trim(),
+          actions: [
+            ...(resumeAction ? [resumeAction] : []),
+            buildBilibiliAuthAction("一键重新登录", "relogin", resumeSource ? {
+              source: resumeSource,
+              sourceUrl: resumeSource,
+              targetFolder: resumeTargetFolder,
+              page: resumePage || undefined,
+              quality: resumeQuality || undefined
+            } : {}),
+            buildBilibiliAuthAction("查看状态", "status"),
+            buildBilibiliAuthAction("退出登录", "logout")
+          ]
+        })
+      });
+      return { chatReply, importedFiles: [], artifacts: [] };
+    }
+    await api.appendLog(`bilibili login poll code: ${result.code}; rawCode=${String(result.debug?.rawCode ?? "")}; message=${result.message || ""}; keys=${Array.isArray(result.debug?.keys) ? result.debug.keys.join(",") : ""}; hasCode=${result.debug?.hasCode === true}`);
+    await waitWithSignal(BILIBILI_QR_POLL_INTERVAL_MS, api.signal);
+  }
+
+  const chatReply = await api.publishChatReply({
+    id: messageId,
+    createdAt: context.createdAt,
+    text: "",
+    attachments: [],
+    card: buildBilibiliAuthCard({
+      status: "failed",
+      title: "Bilibili 登录超时",
+      body: "二维码等待超时，请重新生成后再试。",
+      actions: [buildBilibiliAuthAction("重新生成二维码", "login")]
+    })
+  });
+  return { chatReply, importedFiles: [], artifacts: [] };
 }
 
 function isSupportedBilibiliSource(value = "") {
@@ -109,6 +516,14 @@ function sanitizeTempName(value = "", fallback = "bilibili") {
   return cleaned || fallback;
 }
 
+function clampPositiveInteger(value, fallback = 0) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.floor(parsed);
+}
+
 function guessFileExtension(url = "", fallback = ".bin") {
   try {
     const pathname = new URL(url).pathname || "";
@@ -132,19 +547,226 @@ function formatDurationLabel(durationSeconds = 0) {
   return `${minutes}:${String(remainSeconds).padStart(2, "0")}`;
 }
 
-function buildMediaHeaders(sourceUrl, userAgent = "", cookieHeader = "") {
-  const referer = String(sourceUrl || "https://www.bilibili.com/").trim() || "https://www.bilibili.com/";
-  const headers = {
-    Referer: referer,
-    Origin: "https://www.bilibili.com",
-    Accept: "*/*"
+function normalizeQualityText(value = "") {
+  return String(value || "").trim().toLowerCase();
+}
+
+function parseInlineDownloadOptions(rawText = "") {
+  const text = String(rawText || "");
+  const pageMatch = text.match(/(?:^|\s)(?:p|page|分p)\s*[=:]?\s*(\d{1,3})(?=\s|$)/i)
+    || text.match(/(?:^|\s)P(\d{1,3})(?=\s|$)/);
+  const qualityMatch = text.match(/(?:^|\s)(?:quality|qn|清晰度)\s*[=:]?\s*([^\s]+)/i);
+  return {
+    page: clampPositiveInteger(pageMatch?.[1], 0),
+    quality: String(qualityMatch?.[1] || "").trim()
   };
-  if (userAgent) {
-    headers["User-Agent"] = userAgent;
+}
+
+function resolveDownloadOptions(context = {}) {
+  const parsedArgs = context?.trigger?.parsedArgs && typeof context.trigger.parsedArgs === "object"
+    ? context.trigger.parsedArgs
+    : {};
+  const inlineOptions = parseInlineDownloadOptions(context?.trigger?.rawText || "");
+  const page = clampPositiveInteger(parsedArgs.page || parsedArgs.p || inlineOptions.page, 0);
+  const quality = String(parsedArgs.quality || parsedArgs.qn || inlineOptions.quality || "").trim();
+  return {
+    page,
+    quality,
+    hasExplicitPage: page > 0,
+    hasExplicitQuality: Boolean(quality)
+  };
+}
+
+function resolveSelectionViewOptions(context = {}) {
+  const parsedArgs = context?.trigger?.parsedArgs && typeof context.trigger.parsedArgs === "object"
+    ? context.trigger.parsedArgs
+    : {};
+  return {
+    pageWindowStart: clampPositiveInteger(parsedArgs.pageWindowStart || parsedArgs.pageGroupStart, 1) || 1
+  };
+}
+
+function buildSelectionLabel(metadata = {}, downloadOptions = {}) {
+  const parts = [];
+  const pageIndex = Number(metadata?.page?.index || downloadOptions?.page || 0);
+  if (pageIndex > 0) {
+    parts.push(`P${pageIndex}`);
   }
-  if (cookieHeader) {
-    headers.Cookie = cookieHeader;
+  const actualQualityLabel = String(metadata?.selectedQuality?.label || "").trim();
+  const requestedQualityLabel = String(metadata?.selectedQuality?.requestedLabel || downloadOptions?.quality || "").trim();
+  const qualityLabel = actualQualityLabel || requestedQualityLabel;
+  if (qualityLabel) {
+    parts.push(metadata?.selectedQuality?.downgraded && requestedQualityLabel && requestedQualityLabel !== qualityLabel
+      ? `${qualityLabel} (请求 ${requestedQualityLabel})`
+      : qualityLabel);
   }
+  return parts.join(" · ");
+}
+
+function hasSpecificSelection(downloadOptions = {}) {
+  return downloadOptions?.hasExplicitPage === true || downloadOptions?.hasExplicitQuality === true;
+}
+
+function buildBilibiliInvokeAction(label = "", { source = "", sourceUrl = "", targetFolder = "", page = 0, quality = "", pageWindowStart = 0 } = {}) {
+  const resolvedSource = String(source || sourceUrl || "").trim();
+  const parsedArgs = {
+    __chatReplyMode: "replace-chat-message",
+    source: resolvedSource,
+    sourceUrl: resolvedSource || undefined,
+    targetFolder: String(targetFolder || "").trim(),
+    page: clampPositiveInteger(page, 0) || undefined,
+    quality: String(quality || "").trim() || undefined,
+    pageWindowStart: clampPositiveInteger(pageWindowStart, 0) || undefined
+  };
+  return {
+    type: "invoke-bot",
+    label: String(label || "").trim(),
+    botId: "bilibili.downloader",
+    rawText: resolvedSource,
+    parsedArgs
+  };
+}
+
+function listAvailableQualities(metadata = {}) {
+  const playData = metadata?.__bilibiliApi?.playData || {};
+  const qualities = Array.isArray(playData?.accept_quality) ? playData.accept_quality : [];
+  const descriptions = Array.isArray(playData?.accept_description) ? playData.accept_description : [];
+  const items = [];
+  for (let index = 0; index < qualities.length; index += 1) {
+    const qn = clampPositiveInteger(qualities[index], 0);
+    if (!qn) {
+      continue;
+    }
+    items.push({
+      qn,
+      label: String(descriptions[index] || `QN ${qn}`).trim(),
+      value: String(qn)
+    });
+  }
+  const unique = new Map();
+  for (const item of items) {
+    if (!unique.has(String(item.qn))) {
+      unique.set(String(item.qn), item);
+    }
+  }
+  return [...unique.values()];
+}
+
+function summarizePages(pages = []) {
+  const lines = [];
+  for (const page of pages) {
+    const duration = formatDurationLabel(page?.duration || 0);
+    lines.push(`${page.page}. ${String(page?.title || `P${page.page}`).trim()}${duration ? ` · ${duration}` : ""}`);
+  }
+  return lines;
+}
+
+function buildBilibiliSelectionCard({ stage = "page", source = "", metadata = {}, targetFolder = "", downloadOptions = {}, viewOptions = {} } = {}) {
+  const baseTitle = String(metadata?.videoTitle || metadata?.title || "Bilibili 下载").trim();
+  const uploader = String(metadata?.owner?.name || "").trim();
+  const durationLabel = formatDurationLabel(metadata?.duration || 0);
+  const imageUrl = String(metadata?.thumbnail || metadata?.pic || "").trim();
+  const actionSource = String(source || metadata?.webpage_url || "").trim();
+  const bodyLines = [];
+  const actions = [];
+
+  if (stage === "page") {
+    const pages = Array.isArray(metadata?.pages) ? metadata.pages : [];
+    const pageWindowSize = 8;
+    const maxStart = Math.max(1, pages.length - pageWindowSize + 1);
+    const windowStart = Math.min(Math.max(1, clampPositiveInteger(viewOptions.pageWindowStart, 1)), maxStart);
+    const windowEnd = Math.min(pages.length, windowStart + pageWindowSize - 1);
+    const visiblePages = pages.slice(windowStart - 1, windowEnd);
+    bodyLines.push(`检测到 ${pages.length} 个分P，请先选择要下载的分P。`);
+    bodyLines.push("");
+    bodyLines.push(`当前显示：第 ${windowStart}-${windowEnd} 个分P`);
+    bodyLines.push("");
+    bodyLines.push("当前页分P：");
+    bodyLines.push(...summarizePages(visiblePages));
+    for (const page of visiblePages) {
+      actions.push(buildBilibiliInvokeAction(`P${page.page}`, {
+        source: actionSource,
+        targetFolder,
+        page: page.page,
+        quality: downloadOptions.quality
+      }));
+    }
+    if (windowStart > 1) {
+      actions.push(buildBilibiliInvokeAction("上一组", {
+        source: actionSource,
+        targetFolder,
+        quality: downloadOptions.quality,
+        pageWindowStart: Math.max(1, windowStart - pageWindowSize)
+      }));
+    }
+    if (windowEnd < pages.length) {
+      actions.push(buildBilibiliInvokeAction("下一组", {
+        source: actionSource,
+        targetFolder,
+        quality: downloadOptions.quality,
+        pageWindowStart: windowStart + pageWindowSize
+      }));
+    }
+    if (pages.length > pageWindowSize) {
+      bodyLines.push("");
+      bodyLines.push(`也可以直接发送：@bili ${actionSource} p=11`);
+    }
+    return {
+      type: "media-result",
+      status: "info",
+      title: `${baseTitle}`,
+      subtitle: [uploader, durationLabel, `${pages.length} 个分P`, `${windowStart}-${windowEnd}`].filter(Boolean).join(" · "),
+      body: bodyLines.join("\n"),
+      progress: null,
+      imageUrl,
+      imageAlt: baseTitle,
+      mediaAttachmentId: "",
+      sourceLabel: String(metadata?.webpage_url || actionSource || "").trim(),
+      sourceUrl: String(metadata?.webpage_url || actionSource || "").trim(),
+      actions
+    };
+  }
+
+  const pageLabel = Number(metadata?.page?.index || 0) > 0
+    ? `P${Number(metadata.page.index)} ${String(metadata?.page?.title || "").trim()}`.trim()
+    : "";
+  const qualities = listAvailableQualities(metadata);
+  bodyLines.push("请再选择清晰度，然后开始下载。\n");
+  bodyLines.push(`当前分P：${pageLabel || "P1"}`);
+  bodyLines.push("");
+  bodyLines.push("可用清晰度：");
+  for (const item of qualities) {
+    bodyLines.push(`- ${item.label}`);
+    actions.push(buildBilibiliInvokeAction(item.label, {
+      source: actionSource,
+      targetFolder,
+      page: metadata?.page?.index,
+      quality: item.value
+    }));
+  }
+  return {
+    type: "media-result",
+    status: "info",
+    title: `${baseTitle}`,
+    subtitle: [uploader, durationLabel, pageLabel].filter(Boolean).join(" · "),
+    body: bodyLines.join("\n"),
+    progress: null,
+    imageUrl,
+    imageAlt: baseTitle,
+    mediaAttachmentId: "",
+    sourceLabel: String(metadata?.webpage_url || actionSource || "").trim(),
+    sourceUrl: String(metadata?.webpage_url || actionSource || "").trim(),
+    actions
+  };
+}
+
+async function buildMediaHeaders(sourceUrl, userAgent = "", cookieHeader = "") {
+  const headers = await getBilibiliRequestHeaders({
+    sourceUrl,
+    userAgent: userAgent || BILIBILI_USER_AGENT,
+    cookieHeader
+  });
+  headers.Accept = "*/*";
   return headers;
 }
 
@@ -152,12 +774,32 @@ function buildCookieHeader(cookies = []) {
   return cookies.filter((cookie) => cookie?.name).map((cookie) => `${cookie.name}=${cookie.value || ""}`).join("; ");
 }
 
-function buildSourceKeys(source, metadata = {}) {
+function buildSourceKeys(source, metadata = {}, downloadOptions = {}) {
   const keys = new Set();
   const sourceText = String(source || "").trim();
   const webpageUrl = String(metadata?.webpage_url || "").trim();
   const originalUrl = String(metadata?.original_url || "").trim();
   const videoId = String(metadata?.id || extractBilibiliVideoId(sourceText) || extractBilibiliVideoId(webpageUrl) || extractBilibiliVideoId(originalUrl)).trim();
+  const pageIndex = clampPositiveInteger(metadata?.page?.index || downloadOptions?.page, 0);
+  const cid = clampPositiveInteger(metadata?.cid || 0, 0);
+  const qualityKey = normalizeQualityText(metadata?.selectedQuality?.label || metadata?.selectedQuality?.qn || downloadOptions?.quality || "");
+  const selectionKeyBase = videoId || sourceText || webpageUrl || originalUrl;
+
+  if (selectionKeyBase) {
+    if (pageIndex > 0) {
+      keys.add(`variant:${selectionKeyBase}:page:${pageIndex}`);
+    }
+    if (cid > 0) {
+      keys.add(`variant:${selectionKeyBase}:cid:${cid}`);
+    }
+    if (qualityKey) {
+      keys.add(`variant:${selectionKeyBase}:quality:${qualityKey}`);
+    }
+    if ((pageIndex > 0 || cid > 0) && qualityKey) {
+      keys.add(`variant:${selectionKeyBase}:${cid || pageIndex}:${qualityKey}`);
+    }
+  }
+
   if (sourceText) {
     keys.add(`source:${sourceText}`);
   }
@@ -193,8 +835,11 @@ async function writeReuseIndex(appDataRoot, index) {
   await fs.promises.writeFile(indexPath, `${JSON.stringify(index, null, 2)}\n`, "utf-8");
 }
 
-async function findReusableImport({ appDataRoot, storageRoot, targetFolder, source, metadata }) {
-  const keys = buildSourceKeys(source, metadata);
+async function findReusableImport({ appDataRoot, storageRoot, targetFolder, source, metadata, downloadOptions }) {
+  const allKeys = buildSourceKeys(source, metadata, downloadOptions);
+  const keys = hasSpecificSelection(downloadOptions)
+    ? allKeys.filter((key) => key.startsWith("variant:"))
+    : allKeys;
   const index = await readReuseIndex(appDataRoot);
   for (const key of keys) {
     const hit = index?.[key];
@@ -217,7 +862,7 @@ async function findReusableImport({ appDataRoot, storageRoot, targetFolder, sour
   }
 
   const videoId = String(metadata?.id || "").trim() || extractBilibiliVideoId(source);
-  if (!videoId) {
+  if (!videoId || hasSpecificSelection(downloadOptions)) {
     return null;
   }
   const targetDir = path.join(storageRoot, sanitizeImportFolder(targetFolder || bilibiliImportDir));
@@ -242,8 +887,11 @@ async function findReusableImport({ appDataRoot, storageRoot, targetFolder, sour
   return null;
 }
 
-async function rememberImportedResult({ appDataRoot, source, metadata, imported }) {
-  const keys = buildSourceKeys(source, metadata);
+async function rememberImportedResult({ appDataRoot, source, metadata, imported, downloadOptions }) {
+  const allKeys = buildSourceKeys(source, metadata, downloadOptions);
+  const keys = hasSpecificSelection(downloadOptions)
+    ? allKeys.filter((key) => key.startsWith("variant:"))
+    : allKeys;
   if (!keys.length || !imported?.relativePath) {
     return;
   }
@@ -258,8 +906,146 @@ async function rememberImportedResult({ appDataRoot, source, metadata, imported 
   await writeReuseIndex(appDataRoot, index);
 }
 
-function extractSourceFromContext(context) {
-  const explicit = String(context?.trigger?.parsedArgs?.source || "").trim();
+async function resolveSourceFromChatMessage(context, api) {
+  const historyPath = String(context?.chat?.historyPath || "").trim();
+  const messageId = String(context?.chat?.messageId || "").trim();
+  const actionLabel = resolveCardActionLabel(context);
+  if (!historyPath || !messageId) {
+    return "";
+  }
+  try {
+    const history = await readChatHistoryDay({
+      storageRoot: api.storageRoot,
+      historyPath
+    });
+    const matchingMessages = Array.isArray(history?.messages)
+      ? history.messages.filter((message) => String(message?.id || "").trim() === messageId)
+      : [];
+    const targetMessage = [...matchingMessages].reverse().find((message) => {
+      const card = message?.card;
+      if (!card || typeof card !== "object") {
+        return false;
+      }
+      if (String(card?.sourceUrl || card?.sourceLabel || "").trim()) {
+        return true;
+      }
+      return Array.isArray(card?.actions) && card.actions.some((action) => String(
+        action?.rawText
+        || action?.parsedArgs?.source
+        || action?.parsedArgs?.sourceUrl
+        || ""
+      ).trim());
+    }) || matchingMessages[matchingMessages.length - 1] || null;
+    const matchedAction = actionLabel && Array.isArray(targetMessage?.card?.actions)
+      ? targetMessage.card.actions.find((action) => String(action?.label || "").trim() === actionLabel)
+      : null;
+    const matchedActionSource = String(
+      matchedAction?.rawText
+      || matchedAction?.parsedArgs?.source
+      || matchedAction?.parsedArgs?.sourceUrl
+      || ""
+    ).trim();
+    if (matchedActionSource) {
+      return normalizeBilibiliSource(matchedActionSource);
+    }
+    const cardSource = String(targetMessage?.card?.sourceUrl || targetMessage?.card?.sourceLabel || "").trim();
+    if (cardSource) {
+      return normalizeBilibiliSource(cardSource);
+    }
+    const actionSource = Array.isArray(targetMessage?.card?.actions)
+      ? targetMessage.card.actions
+        .map((action) => String(action?.rawText || action?.parsedArgs?.source || action?.parsedArgs?.sourceUrl || "").trim())
+        .find(Boolean)
+      : "";
+    return actionSource ? normalizeBilibiliSource(actionSource) : "";
+  } catch (error) {
+    await api.appendLog(`resolve source from chat message failed: ${error?.message || error}`);
+    return "";
+  }
+}
+
+async function resolveDownloadOptionsFromChatMessage(context, api) {
+  const historyPath = String(context?.chat?.historyPath || "").trim();
+  const messageId = String(context?.chat?.messageId || "").trim();
+  const actionLabel = resolveCardActionLabel(context);
+  if (!historyPath || !messageId || !actionLabel) {
+    return null;
+  }
+  try {
+    const history = await readChatHistoryDay({
+      storageRoot: api.storageRoot,
+      historyPath
+    });
+    const matchingMessages = Array.isArray(history?.messages)
+      ? history.messages.filter((message) => String(message?.id || "").trim() === messageId)
+      : [];
+    const targetMessage = [...matchingMessages].reverse().find((message) => {
+      const actions = Array.isArray(message?.card?.actions) ? message.card.actions : [];
+      return actions.some((action) => String(action?.label || "").trim() === actionLabel);
+    }) || [...matchingMessages].reverse().find((message) => Array.isArray(message?.card?.actions) && message.card.actions.length > 0) || null;
+    const matchedAction = Array.isArray(targetMessage?.card?.actions)
+      ? targetMessage.card.actions.find((action) => String(action?.label || "").trim() === actionLabel)
+      : null;
+    if (!matchedAction?.parsedArgs || typeof matchedAction.parsedArgs !== "object") {
+      return null;
+    }
+    const page = clampPositiveInteger(matchedAction.parsedArgs.page || matchedAction.parsedArgs.p, 0);
+    const quality = String(matchedAction.parsedArgs.quality || matchedAction.parsedArgs.qn || "").trim();
+    return {
+      page,
+      quality,
+      hasExplicitPage: page > 0,
+      hasExplicitQuality: Boolean(quality)
+    };
+  } catch (error) {
+    await api.appendLog(`resolve download options from chat message failed: ${error?.message || error}`);
+    return null;
+  }
+}
+
+async function resolveActionFromChatMessage(context, api) {
+  const historyPath = String(context?.chat?.historyPath || "").trim();
+  const messageId = String(context?.chat?.messageId || "").trim();
+  const actionLabel = resolveCardActionLabel(context);
+  if (!historyPath || !messageId) {
+    return "";
+  }
+  try {
+    const history = await readChatHistoryDay({
+      storageRoot: api.storageRoot,
+      historyPath
+    });
+    const matchingMessages = Array.isArray(history?.messages)
+      ? history.messages.filter((message) => String(message?.id || "").trim() === messageId)
+      : [];
+    const targetMessage = [...matchingMessages].reverse().find((message) => {
+      const actions = Array.isArray(message?.card?.actions) ? message.card.actions : [];
+      return actionLabel
+        ? actions.some((action) => String(action?.label || "").trim() === actionLabel)
+        : actions.length > 0;
+    }) || [...matchingMessages].reverse().find((message) => Array.isArray(message?.card?.actions) && message.card.actions.length > 0) || null;
+    const actions = Array.isArray(targetMessage?.card?.actions) ? targetMessage.card.actions : [];
+    if (actionLabel) {
+      const matchedAction = actions.find((action) => String(action?.label || "").trim() === actionLabel);
+      const actionName = String(matchedAction?.parsedArgs?.action || "").trim().toLowerCase();
+      if (actionName) {
+        return actionName;
+      }
+    }
+    return "";
+  } catch (error) {
+    await api.appendLog(`resolve action from chat message failed: ${error?.message || error}`);
+    return "";
+  }
+}
+
+async function extractSourceFromContext(context, api) {
+  const explicit = String(
+    context?.trigger?.parsedArgs?.source
+    || context?.trigger?.parsedArgs?.sourceUrl
+    || context?.trigger?.parsedArgs?.url
+    || ""
+  ).trim();
   if (explicit) {
     return normalizeBilibiliSource(explicit);
   }
@@ -272,16 +1058,17 @@ function extractSourceFromContext(context) {
   if (bvMatch?.[0]) {
     return normalizeBilibiliSource(bvMatch[0]);
   }
-  return "";
+  return resolveSourceFromChatMessage(context, api);
 }
 
 function buildBilibiliCard({ metadata, imported, source, attachmentId, status = "succeeded", reusable = false }) {
   const title = String(metadata?.title || imported?.fileName || "Bilibili download").trim();
   const uploader = String(metadata?.owner?.name || metadata?.uploader || metadata?.channel || "").trim();
   const durationLabel = formatDurationLabel(metadata?.duration || 0);
+  const selectionLabel = buildSelectionLabel(metadata);
   const sourceLabel = String(metadata?.webpage_url || source || "").trim();
   const imageUrl = String(metadata?.thumbnail || metadata?.pic || "").trim();
-  const subtitle = [uploader, durationLabel, imported?.relativePath || imported?.fileName || ""].filter(Boolean).join(" · ");
+  const subtitle = [uploader, durationLabel, selectionLabel, imported?.relativePath || imported?.fileName || ""].filter(Boolean).join(" · ");
   const actions = [];
   if (attachmentId && String(imported?.mimeType || "").startsWith("video/")) {
     actions.push({ type: "open-attachment", label: "打开资源", attachmentId });
@@ -364,6 +1151,7 @@ async function runYtDlp(args, { cwd, onOutput } = {}) {
 }
 
 async function loadPlaywrightCookies(targetUrl) {
+  const bilibiliCookieFile = String(process.env.BOT_BILIBILI_COOKIE_FILE || "").trim();
   if (!bilibiliCookieFile) {
     return [];
   }
@@ -412,46 +1200,12 @@ async function loadPlaywrightCookies(targetUrl) {
   return cookies;
 }
 
-async function loadPlaywrightChromium() {
-  const mod = await import("playwright");
-  return mod.chromium || mod.default?.chromium || null;
-}
-
-async function launchPlaywrightBrowser(chromium) {
-  const baseOptions = {
-    headless: bilibiliPlaywrightHeadless,
-    proxy: bilibiliPlaywrightProxy ? { server: bilibiliPlaywrightProxy } : undefined
-  };
-  const preferredExecutable = resolveExistingPlaywrightExecutable();
-  if (preferredExecutable) {
-    return chromium.launch({
-      ...baseOptions,
-      executablePath: preferredExecutable
-    });
-  }
-  try {
-    return await chromium.launch(baseOptions);
-  } catch (error) {
-    if (!bundledBrowserMissingPattern.test(String(error?.message || error || ""))) {
-      throw error;
-    }
-    const fallbackExecutable = resolveExistingPlaywrightExecutable();
-    if (!fallbackExecutable) {
-      throw error;
-    }
-    return chromium.launch({
-      ...baseOptions,
-      executablePath: fallbackExecutable
-    });
-  }
-}
-
 async function extractPlaywrightPageData(source) {
   const chromium = await loadPlaywrightChromium();
   if (!chromium) {
     throw new Error("playwright chromium is unavailable");
   }
-  const browser = await launchPlaywrightBrowser(chromium);
+  const browser = await launchPlaywrightBrowser({ chromium, scope: "BOT_BILIBILI_PLAYWRIGHT" });
   try {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const cookies = await loadPlaywrightCookies(source).catch(() => []);
@@ -630,7 +1384,23 @@ async function mergeStreamsWithFfmpeg(videoPath, audioPath, outputPath, api) {
   });
 }
 
-async function readMetadata(source, tempDir, api) {
+async function readMetadata(source, tempDir, api, downloadOptions = {}) {
+  try {
+    const bundle = await getBilibiliVideoBundleFromSource(source, {
+      signal: api?.signal,
+      page: downloadOptions.page,
+      quality: downloadOptions.quality
+    });
+    if (bundle?.metadata) {
+      return {
+        ...bundle.metadata,
+        __bilibiliApi: bundle
+      };
+    }
+  } catch (error) {
+    await api?.appendLog?.(`bilibili api metadata failed: ${error.message || error}`);
+  }
+
   if (bilibiliDownloadBackend !== "yt-dlp") {
     try {
       const extracted = await extractPlaywrightPageData(source);
@@ -643,6 +1413,7 @@ async function readMetadata(source, tempDir, api) {
     }
   }
   const args = ["--dump-single-json", "--no-warnings", "--skip-download"];
+  const bilibiliCookieFile = String(process.env.BOT_BILIBILI_COOKIE_FILE || "").trim();
   if (bilibiliCookieFile) {
     args.push("--cookies", bilibiliCookieFile);
   }
@@ -655,6 +1426,38 @@ async function readMetadata(source, tempDir, api) {
   } catch {
     return {};
   }
+}
+
+function pickDashVideoByQuality(videos = [], requestedQn = 0) {
+  const candidates = [...(videos || [])].filter((item) => item?.baseUrl || item?.base_url);
+  if (!candidates.length) {
+    return null;
+  }
+  const normalizedRequestedQn = clampPositiveInteger(requestedQn, 0);
+  const pickBest = (items) => [...items].sort((left, right) => {
+    const leftAvc = /avc|h264/i.test(String(left?.codecs || "")) ? 1 : 0;
+    const rightAvc = /avc|h264/i.test(String(right?.codecs || "")) ? 1 : 0;
+    if (leftAvc !== rightAvc) {
+      return rightAvc - leftAvc;
+    }
+    return Number(right?.bandwidth || right?.bandWidth || 0) - Number(left?.bandwidth || left?.bandWidth || 0);
+  })[0] || null;
+
+  if (!normalizedRequestedQn) {
+    return pickBest(candidates);
+  }
+
+  const exact = candidates.filter((item) => Number(item?.id || item?.video_quality || 0) === normalizedRequestedQn);
+  if (exact.length) {
+    return pickBest(exact);
+  }
+
+  const lowerOrEqual = candidates.filter((item) => Number(item?.id || item?.video_quality || 0) <= normalizedRequestedQn);
+  if (lowerOrEqual.length) {
+    return pickBest(lowerOrEqual);
+  }
+
+  return pickBest(candidates);
 }
 
 async function findNewestDownloadedFile(rootDir) {
@@ -705,13 +1508,27 @@ function detectPrintedFilePath(lines, tempDir) {
   return "";
 }
 
-async function downloadMediaWithPlaywright(source, tempDir, api, metadata = {}) {
-  const extracted = metadata?.__playwright || await extractPlaywrightPageData(source);
-  const playData = extracted?.playData || {};
-  const pageUrl = String(metadata?.webpage_url || extracted?.metadata?.webpage_url || source).trim();
-  const mediaHeaders = buildMediaHeaders(pageUrl, extracted?.userAgent || "", extracted?.cookieHeader || "");
-  const identifier = String(metadata?.id || extracted?.metadata?.id || extractBilibiliVideoId(source) || "video").trim();
-  const baseStem = sanitizeTempName(`${metadata?.title || extracted?.metadata?.title || "Bilibili"} [${identifier}]`, `Bilibili [${identifier}]`);
+async function downloadMediaWithPlaywright(source, tempDir, api, metadata = {}, downloadOptions = {}) {
+  const extracted = metadata?.__playwright || null;
+  const apiBundle = metadata?.__bilibiliApi || null;
+  const bundle = extracted
+    || apiBundle
+    || await getBilibiliVideoBundleFromSource(source, {
+      signal: api?.signal,
+      page: downloadOptions.page,
+      quality: downloadOptions.quality
+    }).catch(() => null)
+    || await extractPlaywrightPageData(source);
+  const playData = bundle?.playData || {};
+  const pageUrl = String(metadata?.webpage_url || bundle?.metadata?.webpage_url || source).trim();
+  const mediaHeaders = await buildMediaHeaders(pageUrl, bundle?.userAgent || BILIBILI_USER_AGENT, bundle?.cookieHeader || "");
+  const identifier = String(metadata?.id || bundle?.metadata?.id || extractBilibiliVideoId(source) || "video").trim();
+  const pageSuffix = Number(metadata?.page?.index || bundle?.metadata?.page?.index || 0) > 1
+    ? ` [P${Number(metadata?.page?.index || bundle?.metadata?.page?.index || 0)}]`
+    : "";
+  const qualityValue = String(metadata?.selectedQuality?.label || bundle?.metadata?.selectedQuality?.label || downloadOptions?.quality || "").trim();
+  const qualitySuffix = qualityValue ? ` [${qualityValue}]` : "";
+  const baseStem = sanitizeTempName(`${metadata?.title || bundle?.metadata?.title || "Bilibili"}${pageSuffix}${qualitySuffix} [${identifier}]`, `Bilibili [${identifier}]`);
 
   if (Array.isArray(playData?.durl) && playData.durl.length) {
     const progressiveUrl = String(playData.durl[0]?.url || "").trim();
@@ -725,7 +1542,7 @@ async function downloadMediaWithPlaywright(source, tempDir, api, metadata = {}) 
     return path.resolve(targetPath);
   }
 
-  const dashVideo = chooseBestDashVideo(playData?.dash?.video || []);
+  const dashVideo = pickDashVideoByQuality(playData?.dash?.video || [], bundle?.request?.qn || metadata?.selectedQuality?.qn || 0);
   const dashAudio = chooseBestDashAudio(playData?.dash?.audio || []);
   if (!dashVideo) {
     throw new Error("playwright could not resolve bilibili media streams");
@@ -753,16 +1570,45 @@ async function downloadMediaWithPlaywright(source, tempDir, api, metadata = {}) 
   return path.resolve(videoPath);
 }
 
-async function downloadMediaWithYtDlp(source, tempDir, api) {
+function buildYtDlpFormatSelector(quality = "") {
+  const normalized = normalizeQualityText(quality);
+  if (!normalized || ["max", "best", "最高", "默认"].includes(normalized)) {
+    return "bv*+ba/b";
+  }
+  const heightMap = new Map([
+    ["8k", 4320],
+    ["2160p", 2160],
+    ["4k", 2160],
+    ["1080p60", 1080],
+    ["1080p+", 1080],
+    ["1080p", 1080],
+    ["720p60", 720],
+    ["720p", 720],
+    ["480p", 480],
+    ["360p", 360]
+  ]);
+  const numeric = clampPositiveInteger(normalized.replace(/[^\d]/g, ""), 0);
+  const maxHeight = heightMap.get(normalized) || (numeric >= 2160 ? 2160 : numeric >= 1080 ? 1080 : numeric >= 720 ? 720 : numeric >= 480 ? 480 : numeric >= 360 ? 360 : 0);
+  if (!maxHeight) {
+    return "bv*+ba/b";
+  }
+  return `bestvideo[height<=${maxHeight}]+bestaudio/best[height<=${maxHeight}]/b`;
+}
+
+async function downloadMediaWithYtDlp(source, tempDir, api, metadata = {}, downloadOptions = {}) {
   const outputTemplate = path.join(tempDir, "%(title).120B [%(id)s].%(ext)s");
   const args = ["--newline", "--print", "after_move:filepath", "-o", outputTemplate];
+  const bilibiliCookieFile = String(process.env.BOT_BILIBILI_COOKIE_FILE || "").trim();
   if (bilibiliCookieFile) {
     args.push("--cookies", bilibiliCookieFile);
   }
   if (api.dependencies?.ffmpegPath && /[\\/]/.test(String(api.dependencies.ffmpegPath))) {
     args.push("--ffmpeg-location", path.dirname(String(api.dependencies.ffmpegPath)));
   }
-  args.push(source);
+  if (downloadOptions?.quality) {
+    args.push("-f", buildYtDlpFormatSelector(downloadOptions.quality));
+  }
+  args.push(String(metadata?.webpage_url || source).trim() || source);
   let currentPercent = 10;
   let currentPhasePercent = 10;
   const result = await runYtDlp(args, {
@@ -790,11 +1636,11 @@ async function downloadMediaWithYtDlp(source, tempDir, api) {
   return path.resolve(downloadedPath);
 }
 
-async function downloadMedia(source, tempDir, api, metadata = {}) {
+async function downloadMedia(source, tempDir, api, metadata = {}, downloadOptions = {}) {
   if (bilibiliDownloadBackend !== "yt-dlp") {
     try {
       await api.emitProgress({ phase: "download-remote", label: "解析中", percent: 10 });
-      return await downloadMediaWithPlaywright(source, tempDir, api, metadata);
+      return await downloadMediaWithPlaywright(source, tempDir, api, metadata, downloadOptions);
     } catch (error) {
       await api.appendLog(`playwright download failed: ${error.message || error}`);
       if (bilibiliDownloadBackend === "playwright-only") {
@@ -804,7 +1650,7 @@ async function downloadMedia(source, tempDir, api, metadata = {}) {
     }
   }
   await api.emitProgress({ phase: "download-remote", label: "解析中", percent: 10 });
-  return downloadMediaWithYtDlp(source, tempDir, api);
+  return downloadMediaWithYtDlp(source, tempDir, api, metadata, downloadOptions);
 }
 
 export function createBilibiliDownloaderPlugin() {
@@ -812,7 +1658,17 @@ export function createBilibiliDownloaderPlugin() {
     botId: "bilibili.downloader",
     displayName: "Bilibili Downloader",
     aliases: ["bili", "bilibili"],
-    description: "Download a Bilibili video by BV id or URL and import it into the local library.",
+    description: "Download a Bilibili video by BV id or URL, or manage Bilibili QR-code login for local downloads.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", description: "可选: login/status/logout/relogin" },
+        source: { type: "string" },
+        targetFolder: { type: "string" },
+        page: { type: "integer", minimum: 1 },
+        quality: { type: "string", description: "例如 1080p、720p、4k、80、64" }
+      }
+    },
     capabilities: ["download.remote-media", "import.library", "reply.chat"],
     permissions: {
       writeLibrary: true,
@@ -827,7 +1683,28 @@ export function createBilibiliDownloaderPlugin() {
       maxDownloadBytes: 20 * 1024 * 1024 * 1024
     },
     async execute(context, api) {
-      const source = extractSourceFromContext(context);
+      let action = resolveBilibiliAction(context);
+      const hasTriggerPayload = hasMeaningfulTriggerPayload(context);
+      if (action === "download" && !hasTriggerPayload) {
+        const inferredAction = await resolveActionFromChatMessage(context, api);
+        if (inferredAction) {
+          action = inferredAction;
+        }
+      }
+      if (action === "status") {
+        return handleBilibiliStatus(context, api);
+      }
+      if (action === "logout") {
+        return handleBilibiliLogout(context, api);
+      }
+      if (action === "login" || action === "relogin") {
+        return handleBilibiliLogin(context, api, { force: action === "relogin" });
+      }
+
+      const inferredDownloadOptions = !hasTriggerPayload
+        ? await resolveDownloadOptionsFromChatMessage(context, api)
+        : null;
+      const source = await extractSourceFromContext(context, api);
       if (!source) {
         throw new Error("bilibili source is required: provide a BV id or Bilibili URL");
       }
@@ -837,25 +1714,99 @@ export function createBilibiliDownloaderPlugin() {
 
       const tempDir = path.join(api.appDataRoot, "temp", context.jobId);
       await fs.promises.mkdir(tempDir, { recursive: true });
+      const downloadOptions = inferredDownloadOptions || resolveDownloadOptions(context);
+      const viewOptions = resolveSelectionViewOptions(context);
       await api.appendLog(`bilibili source: ${source}`);
+      if (downloadOptions.hasExplicitPage || downloadOptions.hasExplicitQuality) {
+        await api.appendLog(`download options: ${JSON.stringify({ page: downloadOptions.page || undefined, quality: downloadOptions.quality || undefined })}`);
+      }
       await api.emitProgress({ phase: "parse-input", label: "解析中", percent: 5 });
 
       let metadata = {};
       try {
-        metadata = await readMetadata(source, tempDir, api);
+        metadata = await readMetadata(source, tempDir, api, downloadOptions);
         await api.appendLog(`metadata title: ${metadata?.title || "unknown"}`);
       } catch (error) {
         await api.appendLog(`metadata probe failed: ${error.message || error}`);
       }
 
       const targetFolder = sanitizeImportFolder(context?.trigger?.parsedArgs?.targetFolder || bilibiliImportDir) || bilibiliImportDir;
-      const reusable = await findReusableImport({ appDataRoot: api.appDataRoot, storageRoot: api.storageRoot, targetFolder, source, metadata });
+      const availableQualities = listAvailableQualities(metadata);
+      const user = downloadOptions.hasExplicitQuality ? await resolveBilibiliUserProfile(api) : null;
+      const normalizedRequestedQuality = downloadOptions.hasExplicitQuality
+        ? normalizeBilibiliQuality(downloadOptions.quality, metadata?.selectedQuality?.qn || 127)
+        : null;
+      const maxAvailableQuality = availableQualities.reduce((best, item) => {
+        if (!item?.qn) {
+          return best;
+        }
+        if (!best || item.qn > best.qn) {
+          return item;
+        }
+        return best;
+      }, null);
+      const actualSelectedQuality = metadata?.selectedQuality && typeof metadata.selectedQuality === "object"
+        ? metadata.selectedQuality
+        : null;
+      // qn=64 is 720p — the typical ceiling for anonymous/expired sessions.
+      // Even if the API returns 4K in the quality list, actual streams above 720p require login.
+      const LOGIN_REQUIRED_QN_THRESHOLD = 64;
+      const shouldPromptLoginForQuality = !user
+        && downloadOptions.hasExplicitQuality
+        && normalizedRequestedQuality?.explicit === true
+        && (
+          (actualSelectedQuality?.downgraded === true
+            && Number(actualSelectedQuality?.requestedQn || 0) > Number(actualSelectedQuality?.qn || 0))
+          || (maxAvailableQuality?.qn && normalizedRequestedQuality.qn > maxAvailableQuality.qn)
+          || normalizedRequestedQuality.qn > LOGIN_REQUIRED_QN_THRESHOLD
+        );
+      const requiresPageSelection = downloadOptions.hasExplicitPage !== true && Array.isArray(metadata?.pages) && metadata.pages.length > 1;
+      const requiresQualitySelection = downloadOptions.hasExplicitQuality !== true && availableQualities.length > 1;
+
+      if (shouldPromptLoginForQuality) {
+        const card = buildBilibiliLoginGuideCard({
+          source,
+          metadata,
+          targetFolder,
+          downloadOptions,
+          maxAvailableQuality
+        });
+        const chatReply = await api.publishChatReply({
+          id: getBilibiliReplyMessageId(context),
+          createdAt: context.createdAt,
+          text: "",
+          attachments: [],
+          card
+        });
+        return { chatReply, importedFiles: [], artifacts: [] };
+      }
+
+      if (requiresPageSelection || requiresQualitySelection) {
+        const card = buildBilibiliSelectionCard({
+          stage: requiresPageSelection ? "page" : "quality",
+          source,
+          metadata,
+          targetFolder,
+          downloadOptions,
+          viewOptions
+        });
+        const chatReply = await api.publishChatReply({
+          id: getBilibiliReplyMessageId(context),
+          createdAt: context.createdAt,
+          text: "",
+          attachments: [],
+          card
+        });
+        return { chatReply, importedFiles: [], artifacts: [] };
+      }
+
+      const reusable = await findReusableImport({ appDataRoot: api.appDataRoot, storageRoot: api.storageRoot, targetFolder, source, metadata, downloadOptions });
       if (reusable) {
         await api.appendLog(`reuse imported file: ${reusable.relativePath}`);
         await api.emitProgress({ phase: "reuse-existing", label: "已复用已入库资源", percent: 100 });
         const attachmentId = `bot-asset:${context.jobId}`;
         const chatReply = await api.publishChatReply({
-          id: createBotJobMessageId(context.jobId),
+          id: getBilibiliReplyMessageId(context),
           createdAt: context.createdAt,
           text: "",
           attachments: [{ id: attachmentId, name: reusable.fileName, mimeType: reusable.mimeType, size: reusable.size, path: reusable.relativePath, clientId: context.chat.hostClientId, kind: String(reusable.mimeType || "").startsWith("video/") ? "video" : "file" }],
@@ -864,17 +1815,17 @@ export function createBilibiliDownloaderPlugin() {
         return { chatReply, importedFiles: [reusable], artifacts: [] };
       }
 
-      const downloadedPath = await downloadMedia(source, tempDir, api, metadata);
+      const downloadedPath = await downloadMedia(source, tempDir, api, metadata, downloadOptions);
       await api.emitProgress({ phase: "import-library", label: "入库中", percent: 88 });
       const imported = await importFileIntoLibrary({ sourcePath: downloadedPath, storageRoot: api.storageRoot, targetFolder, fileName: path.basename(downloadedPath) });
       await api.appendLog(`imported file: ${imported.relativePath}`);
-      await rememberImportedResult({ appDataRoot: api.appDataRoot, source, metadata, imported });
+      await rememberImportedResult({ appDataRoot: api.appDataRoot, source, metadata, imported, downloadOptions });
       await triggerLibraryRescan({ syncFiles: api.dependencies?.syncFiles });
       await api.emitProgress({ phase: "append-chat-reply", label: "生成结果卡片", percent: 95 });
 
       const attachmentId = `bot-asset:${context.jobId}`;
       const chatReply = await api.publishChatReply({
-        id: createBotJobMessageId(context.jobId),
+        id: getBilibiliReplyMessageId(context),
         createdAt: context.createdAt,
         text: "",
         attachments: [{ id: attachmentId, name: imported.fileName, mimeType: imported.mimeType, size: imported.size, path: imported.relativePath, clientId: context.chat.hostClientId, kind: String(imported.mimeType || "").startsWith("video/") ? "video" : "file" }],

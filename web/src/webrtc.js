@@ -2,12 +2,12 @@ import { toWsUrl } from "./api";
 
 const FILE_TRANSFER_TIMEOUT_MS = 300_000;
 const PEER_IDLE_CLOSE_MS = 60_000;
-const DEFAULT_CHANNEL_NAMES = ["file", "thumb", "preview", "upload", "control"];
+const DEFAULT_CHANNEL_NAMES = ["file", "thumb", "preview", "audio", "upload", "control"];
 const PEER_ROLE_ORDER = ["download", "upload", "preview", "control"];
 const PEER_ROLE_CONFIG = {
   download: { name: "downloadPeer", channelNames: ["file"] },
   upload: { name: "uploadPeer", channelNames: ["upload"] },
-  preview: { name: "previewPeer", channelNames: ["thumb", "preview"] },
+  preview: { name: "previewPeer", channelNames: ["thumb", "preview", "audio"] },
   control: { name: "controlPeer", channelNames: ["control"] }
 };
 const CHANNEL_ROLE_MAP = {
@@ -15,6 +15,7 @@ const CHANNEL_ROLE_MAP = {
   upload: "upload",
   thumb: "preview",
   preview: "preview",
+  audio: "preview",
   control: "control"
 };
 
@@ -1479,7 +1480,12 @@ export class P2PBridge {
       if (message.type === "bot-catalog-result") op.onBotCatalogResult?.(message);
       if (message.type === "bot-job-accepted") op.onBotJobAccepted?.(message);
       if (message.type === "bot-job-result") op.onBotJobResult?.(message);
+      if (message.type === "bot-job-log-result") op.onBotJobLogResult?.(message);
       if (message.type === "bot-job-cancelled") op.onBotJobCancelled?.(message);
+      if (message.type === "music-player-state-result") op.onMusicPlayerStateResult?.(message);
+      if (message.type === "music-search-result") op.onMusicSearchResult?.(message);
+      if (message.type === "music-track-enqueued") op.onMusicTrackEnqueued?.(message);
+      if (message.type === "music-player-control-result") op.onMusicPlayerControlResult?.(message);
       if (message.type === "put-file-cancelled") {
         const err = new Error("上传已取消");
         err.cancelled = true;
@@ -1592,8 +1598,13 @@ export class P2PBridge {
         };
 
         this.currentOp.set(opKey, ctx);
-        this.logInfo("op-send", "get-file", clientId, opChannelName, `ch=${channel.readyState}`, relativePath);
-        channel.send(JSON.stringify(this.buildRequestPayload({ type: "get-file", path: relativePath, requestId }, options)));
+        this.logInfo("op-send", "get-file", clientId, opChannelName, `ch=${channel.readyState}`, relativePath, options.transcode || "direct");
+        channel.send(JSON.stringify(this.buildRequestPayload({
+          type: "get-file",
+          path: relativePath,
+          requestId,
+          transcode: options.transcode || null
+        }, options)));
       });
     })));
   }
@@ -1797,8 +1808,9 @@ export class P2PBridge {
 
   async getHlsManifest(clientId, relativePath, options = {}) {
     this.markClientActivity(clientId);
-    return this.enqueueClientTask(clientId, "preview", async () => this.withPeerRetry(clientId, async (peer) => {
-      const { channel, opChannelName } = await this.getChannelForOp(peer, "preview");
+    const preferredChannel = options.profile === "audio" ? "audio" : "preview";
+    return this.enqueueClientTask(clientId, preferredChannel, async () => this.withPeerRetry(clientId, async (peer) => {
+      const { channel, opChannelName } = await this.getChannelForOp(peer, preferredChannel);
       const requestId = this.generateRequestId();
       this.log("op-start", "hls-manifest", clientId, relativePath, requestId, options.profile || "720p");
       return new Promise((resolve, reject) => {
@@ -1815,7 +1827,10 @@ export class P2PBridge {
               manifest: String(message.manifest || ""),
               hlsId: String(message.hlsId || ""),
               profile: String(message.profile || options.profile || "720p"),
-              codec: String(message.codec || "")
+              codec: String(message.codec || ""),
+              availableProfiles: Array.isArray(message.availableProfiles) ? message.availableProfiles : [],
+              sourceWidth: Number(message.sourceWidth || 0),
+              sourceHeight: Number(message.sourceHeight || 0)
             });
           },
           onProgress: (message) => {
@@ -1842,8 +1857,9 @@ export class P2PBridge {
 
   async getHlsSegment(clientId, hlsId, segmentName, options = {}) {
     this.markClientActivity(clientId);
-    return this.enqueueClientTask(clientId, "preview", async () => this.withPeerRetry(clientId, async (peer) => {
-      const { channel, opChannelName } = await this.getChannelForOp(peer, "preview");
+    const preferredChannel = options.channelName || "preview";
+    return this.enqueueClientTask(clientId, preferredChannel, async () => this.withPeerRetry(clientId, async (peer) => {
+      const { channel, opChannelName } = await this.getChannelForOp(peer, preferredChannel);
       const requestId = this.generateRequestId();
       this.log("op-start", "hls-segment", clientId, `${hlsId}/${segmentName}`, requestId);
       return new Promise((resolve, reject) => {
@@ -1887,8 +1903,9 @@ export class P2PBridge {
 
   async streamPreviewFile(clientId, relativePath, onReady, options = {}) {
     this.markClientActivity(clientId);
-    return this.enqueueClientTask(clientId, "preview", async () => this.withPeerRetry(clientId, async (peer) => {
-      const { channel, opChannelName } = await this.getChannelForOp(peer, "preview");
+    const preferredChannel = options.channelName || "preview";
+    return this.enqueueClientTask(clientId, preferredChannel, async () => this.withPeerRetry(clientId, async (peer) => {
+      const { channel, opChannelName } = await this.getChannelForOp(peer, preferredChannel);
       const requestId = this.generateRequestId();
       this.log("op-start", "preview", clientId, relativePath, requestId, options?.transcode ? "transcode" : "direct");
       return new Promise((resolve, reject) => {
@@ -1985,7 +2002,7 @@ export class P2PBridge {
               return;
             }
             if (typeof MediaSource === "undefined") {
-              streamCtx.onError?.(new Error("MediaSource unsupported"));
+              streamCtx.fallback = true;
               return;
             }
             try {
@@ -1993,15 +2010,6 @@ export class P2PBridge {
               const objectUrl = URL.createObjectURL(mediaSource);
               streamCtx.mediaSource = mediaSource;
               streamCtx.objectUrl = objectUrl;
-
-              if (!streamCtx.resolved) {
-                streamCtx.resolved = true;
-                onReady?.({
-                  url: objectUrl,
-                  meta,
-                  release: () => URL.revokeObjectURL(objectUrl)
-                });
-              }
 
               mediaSource.addEventListener("sourceopen", () => {
                 const candidates = [];
@@ -2041,11 +2049,24 @@ export class P2PBridge {
 
                 if (!sourceBuffer) {
                   this.log("preview-sourcebuffer-fallback", clientId, requestId, mimeType || "unknown");
-                  streamCtx.onError?.(new Error(`SourceBuffer unsupported: ${mimeType || "unknown"}`));
+                  streamCtx.fallback = true;
+                  if (streamCtx.objectUrl) {
+                    URL.revokeObjectURL(streamCtx.objectUrl);
+                    streamCtx.objectUrl = null;
+                  }
                   return;
                 }
 
                 streamCtx.sourceBuffer = sourceBuffer;
+
+                if (!streamCtx.resolved) {
+                  streamCtx.resolved = true;
+                  onReady?.({
+                    url: objectUrl,
+                    meta,
+                    release: () => URL.revokeObjectURL(objectUrl)
+                  });
+                }
 
                 streamCtx.sourceBuffer.addEventListener("updateend", () => {
                   streamCtx.flush();
@@ -2055,7 +2076,8 @@ export class P2PBridge {
                 streamCtx.flush();
               });
             } catch (error) {
-              streamCtx.onError?.(new Error(`MediaSource init failed: ${error?.message || "unknown"}`));
+              this.log("preview-mediasource-fallback", clientId, requestId, error?.message || "unknown");
+              streamCtx.fallback = true;
             }
           },
           onChunk: (chunk) => {
@@ -2603,6 +2625,41 @@ export class P2PBridge {
     }));
   }
 
+  async getBotJobLog(clientId, jobId, options = {}) {
+    this.markClientActivity(clientId);
+    return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
+      const { channel, opChannelName } = await this.getChannelForOp(peer, "control");
+      const requestId = this.generateRequestId();
+      return new Promise((resolve, reject) => {
+        const timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 30_000);
+        const opKey = this.opKey(clientId, opChannelName);
+        const ctx = {
+          requestId,
+          onBotJobLogResult: (message) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            resolve({
+              jobId: message.jobId || jobId,
+              log: message.log || { jobId, content: "", truncated: false }
+            });
+          },
+          onError: (error) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            reject(error);
+          }
+        };
+        this.currentOp.set(opKey, ctx);
+        channel.send(JSON.stringify({
+          type: "get-bot-job-log",
+          requestId,
+          jobId,
+          maxBytes: Number(options.maxBytes || 64 * 1024)
+        }));
+      });
+    }));
+  }
+
   async cancelBotJob(clientId, jobId) {
     this.markClientActivity(clientId);
     return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
@@ -2626,6 +2683,173 @@ export class P2PBridge {
         };
         this.currentOp.set(opKey, ctx);
         channel.send(JSON.stringify({ type: "cancel-bot-job", requestId, jobId }));
+      });
+    }));
+  }
+
+  async getMusicPlayerState(clientId) {
+    this.markClientActivity(clientId);
+    return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
+      const { channel, opChannelName } = await this.getChannelForOp(peer, "control");
+      const requestId = this.generateRequestId();
+      return new Promise((resolve, reject) => {
+        const timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 20_000);
+        const opKey = this.opKey(clientId, opChannelName);
+        const ctx = {
+          requestId,
+          onMusicPlayerStateResult: (message) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            resolve({ state: message.state || null });
+          },
+          onError: (error) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            reject(error);
+          }
+        };
+        this.currentOp.set(opKey, ctx);
+        channel.send(JSON.stringify({ type: "get-music-player-state", requestId }));
+      });
+    }));
+  }
+
+  async enqueueMusicTrack(clientId, keyword, source, submittedBy = "") {
+    this.markClientActivity(clientId);
+    return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
+      const { channel, opChannelName } = await this.getChannelForOp(peer, "control");
+      const requestId = this.generateRequestId();
+      return new Promise((resolve, reject) => {
+        const timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 45_000);
+        const opKey = this.opKey(clientId, opChannelName);
+        const ctx = {
+          requestId,
+          onMusicTrackEnqueued: (message) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            resolve({
+              track: message.track || null,
+              state: message.state || null
+            });
+          },
+          onError: (error) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            reject(error);
+          }
+        };
+        this.currentOp.set(opKey, ctx);
+        channel.send(JSON.stringify({
+          type: "enqueue-music-track",
+          requestId,
+          keyword,
+          source,
+          submittedBy
+        }));
+      });
+    }));
+  }
+
+  async searchMusicCandidates(clientId, keyword, source, limit = 8) {
+    this.markClientActivity(clientId);
+    return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
+      const { channel, opChannelName } = await this.getChannelForOp(peer, "control");
+      const requestId = this.generateRequestId();
+      return new Promise((resolve, reject) => {
+        const timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 45_000);
+        const opKey = this.opKey(clientId, opChannelName);
+        const ctx = {
+          requestId,
+          onMusicSearchResult: (message) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            resolve({
+              source: message.source || source,
+              candidates: Array.isArray(message.candidates) ? message.candidates : []
+            });
+          },
+          onError: (error) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            reject(error);
+          }
+        };
+        this.currentOp.set(opKey, ctx);
+        channel.send(JSON.stringify({
+          type: "search-music-candidates",
+          requestId,
+          keyword,
+          source,
+          limit
+        }));
+      });
+    }));
+  }
+
+  async enqueueMusicSelection(clientId, source, candidate, submittedBy = "") {
+    this.markClientActivity(clientId);
+    return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
+      const { channel, opChannelName } = await this.getChannelForOp(peer, "control");
+      const requestId = this.generateRequestId();
+      return new Promise((resolve, reject) => {
+        const timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 45_000);
+        const opKey = this.opKey(clientId, opChannelName);
+        const ctx = {
+          requestId,
+          onMusicTrackEnqueued: (message) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            resolve({
+              track: message.track || null,
+              state: message.state || null
+            });
+          },
+          onError: (error) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            reject(error);
+          }
+        };
+        this.currentOp.set(opKey, ctx);
+        channel.send(JSON.stringify({
+          type: "enqueue-music-selection",
+          requestId,
+          source,
+          candidate,
+          submittedBy
+        }));
+      });
+    }));
+  }
+
+  async controlMusicPlayer(clientId, action, payload = {}) {
+    this.markClientActivity(clientId);
+    return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
+      const { channel, opChannelName } = await this.getChannelForOp(peer, "control");
+      const requestId = this.generateRequestId();
+      return new Promise((resolve, reject) => {
+        const timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 20_000);
+        const opKey = this.opKey(clientId, opChannelName);
+        const ctx = {
+          requestId,
+          onMusicPlayerControlResult: (message) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            resolve({ state: message.state || null });
+          },
+          onError: (error) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            reject(error);
+          }
+        };
+        this.currentOp.set(opKey, ctx);
+        channel.send(JSON.stringify({
+          type: "control-music-player",
+          requestId,
+          action,
+          payload
+        }));
       });
     }));
   }
@@ -2819,8 +3043,32 @@ export class P2PBridgePool {
     return this.getBridge("control").getBotJob(clientId, jobId);
   }
 
+  getBotJobLog(clientId, jobId, options = {}) {
+    return this.getBridge("control").getBotJobLog(clientId, jobId, options);
+  }
+
   cancelBotJob(clientId, jobId) {
     return this.getBridge("control").cancelBotJob(clientId, jobId);
+  }
+
+  getMusicPlayerState(clientId) {
+    return this.getBridge("control").getMusicPlayerState(clientId);
+  }
+
+  enqueueMusicTrack(clientId, keyword, source, submittedBy = "") {
+    return this.getBridge("control").enqueueMusicTrack(clientId, keyword, source, submittedBy);
+  }
+
+  searchMusicCandidates(clientId, keyword, source, limit = 8) {
+    return this.getBridge("control").searchMusicCandidates(clientId, keyword, source, limit);
+  }
+
+  enqueueMusicSelection(clientId, source, candidate, submittedBy = "") {
+    return this.getBridge("control").enqueueMusicSelection(clientId, source, candidate, submittedBy);
+  }
+
+  controlMusicPlayer(clientId, action, payload = {}) {
+    return this.getBridge("control").controlMusicPlayer(clientId, action, payload);
   }
 
   sendServerMessage(message) {

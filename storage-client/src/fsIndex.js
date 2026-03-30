@@ -30,6 +30,7 @@ export async function scanFiles(rootDir) {
   const directories = [];
   const previewCacheDirName = process.env.PREVIEW_CACHE_DIR_NAME || ".nas-preview-cache";
   const hlsCacheDirName = process.env.HLS_CACHE_DIR_NAME || ".nas-hls-cache";
+  const audioStreamCacheDirName = process.env.AUDIO_STREAM_CACHE_DIR_NAME || ".nas-audio-stream-cache";
   const avatarDirName = process.env.PROFILE_AVATAR_DIR_NAME || ".nas-user-avatars";
   const chatRoomDirName = process.env.CHAT_ROOM_DIR_NAME || ".nas-chat-room";
   const botAppDataDirName = process.env.BOT_APP_DATA_DIR_NAME || ".nas-bot";
@@ -38,6 +39,7 @@ export async function scanFiles(rootDir) {
     return (
       name === previewCacheDirName ||
       name === hlsCacheDirName ||
+      name === audioStreamCacheDirName ||
       name === avatarDirName ||
       name === chatRoomDirName ||
       name === botAppDataDirName

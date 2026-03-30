@@ -152,6 +152,26 @@ npm run deploy:stop:linux
         - `COPILOT_MODEL=你在 /v1/models 里看到的模型 id`
         - `COPILOT_API_KEY=dummy`（如代理未要求真实 token，可直接用默认值）
       - 如果所选模型支持看图，再额外设置 `COPILOT_MULTIMODAL_MODEL`
+      - Playwright 现在改为通用配置，bilibili 下载和 AI 联网搜索共用一组变量
+        - `PLAYWRIGHT_EXECUTABLE_PATH=`：可选，指定系统 Chrome / Edge 路径
+        - `PLAYWRIGHT_HEADLESS=1`：默认无头模式；排查页面时可设为 `0`
+        - `PLAYWRIGHT_PROXY=`：可选，给所有 Playwright 场景统一走代理
+      - AI 联网搜索默认会优先走结构化 Search API；未配置时会先走 `fetch`，必要时自动回退到 `playwright`
+        - 可选配置：
+          - `BOT_WEB_SEARCH_PROVIDER=auto`：默认；`builtin` 继续走内置网页搜索，`metaso` 通过 Playwright 模拟秘塔网页搜索
+          - `BOT_WEB_SEARCH_BACKEND=auto`：默认；若已配置 Search API，则优先 API，否则先 `fetch`，失败再 `playwright`
+          - `BOT_WEB_SEARCH_BACKEND=api`：强制只走结构化搜索 API
+          - `BOT_WEB_SEARCH_BACKEND=playwright`：强制浏览器抓取，更兼容搜索引擎页面
+          - `BOT_WEB_SEARCH_API_BACKEND=brave`：启用 Brave Search API，返回结构化 JSON 结果，更稳，不依赖搜索结果页面 DOM
+          - `BOT_WEB_SEARCH_API_KEY=`：对应 Search API 的密钥
+          - `BOT_WEB_SEARCH_API_BASE_URL=`：可选，自定义 API 地址，默认 `https://api.search.brave.com`
+          - `BOT_WEB_SEARCH_ENDPOINTS=`：可自定义搜索端点，默认依次尝试 DuckDuckGo HTML 和 Bing
+          - 选择 `metaso` 后，搜索阶段会直接打开秘塔首页输入问题，抓取结果页里的 AI 答案摘要；若秘塔触发滑块/拼图验证，则当前查询会失败
+      - bilibili 下载相关配置：
+        - `BOT_BILIBILI_DOWNLOAD_BACKEND=playwright`
+        - `BOT_BILIBILI_IMPORT_DIR=downloads/bilibili`
+        - `BOT_BILIBILI_COOKIE_FILE=`：可选，用于会员或受限内容
+        - 浏览器优先方案现在会针对 Bing 和 DuckDuckGo 分别使用专门的 DOM 选择器，不再只依赖一套通用抓取规则
   - （可选，建议）启用转码预览：
     - `ENABLE_TRANSCODE=1`
     - `FFMPEG_PATH=ffmpeg`（或 ffmpeg 可执行文件完整路径）

@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import AvatarFace from "./AvatarFace";
 import { useResolvedP2PAssetUrl } from "./p2pAsset";
 import { InlineVideoPlayer } from "./VideoViewportSurface";
+import { apiRequest, toWsUrl } from "../api";
 
 const CHAT_ROOM_DIR_NAME = ".nas-chat-room";
 const CHAT_HISTORY_PREFIX = `${CHAT_ROOM_DIR_NAME}/history`;
@@ -34,7 +35,7 @@ function parseChatBotInvocation(text = "") {
   if (!raw) {
     return null;
   }
-  const mentionMatch = raw.match(/(?:^|\s)@(?<alias>ai|assistant|bili|bilibili)(?=\s|$)/i);
+  const mentionMatch = raw.match(/(?:^|\s)@\s*(?<alias>ai|assistant|bili|bilibili)(?=\s|$)/i);
   if (!mentionMatch?.groups?.alias) {
     return null;
   }
@@ -48,6 +49,29 @@ function parseChatBotInvocation(text = "") {
       supported: true,
       parsedArgs: {
         prompt: afterMention
+      }
+    };
+  }
+  const commandToken = String(afterMention.split(/\s+/)[0] || "").trim().toLowerCase();
+  const action = new Map([
+    ["login", "login"],
+    ["登录", "login"],
+    ["status", "status"],
+    ["状态", "status"],
+    ["logout", "logout"],
+    ["退出", "logout"],
+    ["relogin", "relogin"],
+    ["重新登录", "relogin"]
+  ]).get(commandToken);
+  if (action) {
+    return {
+      botId: "bilibili.downloader",
+      mention: mentionMatch[0].trim(),
+      source: "",
+      supported: true,
+      rawText: raw,
+      parsedArgs: {
+        action
       }
     };
   }
@@ -82,6 +106,13 @@ function getBotExampleCommands(bot) {
   const botId = String(bot?.botId || "").trim();
   if (botId === "ai.chat") {
     return [
+      "@ai /new 工作会话",
+      "@ai /sessions",
+      "@ai /rename #123 新名字",
+      "@ai /delete #123",
+      "@ai #123 继续刚才的话题",
+      "@ai /search 今天的 AI 新闻",
+      "@ai /search --site=github react compiler",
       "@ai /models",
       "@ai /models tool-calls",
       "@ai /models vision",
@@ -90,13 +121,30 @@ function getBotExampleCommands(bot) {
       "@ai 看图",
       "@ai /model set gpt-4.1",
       "@ai /model gpt-4.1 解释这段聊天",
-      "@ai @bili BV1xx..."
+      "@ai @bili BV1xx...",
+      "@ai @music 点歌 晴天"
+    ];
+  }
+  if (botId === "music.control") {
+    return [
+      "@music 状态",
+      "@music 搜歌 夜曲",
+      "@music 选第 2 首",
+      "@music 点歌 晴天",
+      "@music 暂停",
+      "@music 下一曲",
+      "@music /source qq"
     ];
   }
   if (botId === "bilibili.downloader") {
     return [
+      "@bili login",
+      "@bili status",
+      "@bili logout",
       "@bili BV1xx...",
-      "@bili https://www.bilibili.com/video/BV1xx..."
+      "@bili https://www.bilibili.com/video/BV1xx...",
+      "@bili https://www.bilibili.com/video/BV1xx... p=2",
+      "@bili https://www.bilibili.com/video/BV1xx... p=2 quality=720p"
     ];
   }
   const alias = Array.isArray(bot?.aliases) && bot.aliases.length ? bot.aliases[0] : botId;
@@ -109,6 +157,12 @@ function getLocalizedBotMeta(bot = {}) {
     return {
       displayName: "AI 助手",
       description: "结合聊天上下文回答问题、总结内容、看图分析，并可委派给其他助手。"
+    };
+  }
+  if (botId === "music.control") {
+    return {
+      displayName: "音乐助手",
+      description: "控制网页上的全局音乐播放器，支持搜歌、点歌、切歌、暂停和查看队列。"
     };
   }
   if (botId === "bilibili.downloader") {
@@ -196,6 +250,28 @@ function formatRelativeTime(value) {
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}分钟前`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}小时前`;
   return `${Math.floor(diff / 86_400_000)}天前`;
+}
+
+function formatElapsedTime(value, now = Date.now()) {
+  if (!value) return "刚刚";
+  const ts = Date.parse(value);
+  if (!Number.isFinite(ts)) return "刚刚";
+  const diff = Math.max(0, now - ts);
+  if (diff < 10_000) return "刚刚";
+  if (diff < 60_000) return `${Math.floor(diff / 1000)}秒`;
+  if (diff < 3_600_000) {
+    const minutes = Math.floor(diff / 60_000);
+    const seconds = Math.floor((diff % 60_000) / 1000);
+    return seconds > 0 ? `${minutes}分${seconds}秒` : `${minutes}分钟`;
+  }
+  if (diff < 86_400_000) {
+    const hours = Math.floor(diff / 3_600_000);
+    const minutes = Math.floor((diff % 3_600_000) / 60_000);
+    return minutes > 0 ? `${hours}小时${minutes}分` : `${hours}小时`;
+  }
+  const days = Math.floor(diff / 86_400_000);
+  const hours = Math.floor((diff % 86_400_000) / 3_600_000);
+  return hours > 0 ? `${days}天${hours}小时` : `${days}天`;
 }
 
 function formatClockTime(value) {
@@ -396,6 +472,7 @@ function normalizeMessage(message) {
           body: String(message.card.body || ""),
           progress: Number.isFinite(message.card.progress) ? Math.max(0, Math.min(100, Number(message.card.progress))) : null,
           imageUrl: String(message.card.imageUrl || ""),
+          imageFit: String(message.card.imageFit || "cover"),
           imageAlt: String(message.card.imageAlt || ""),
           mediaAttachmentId: String(message.card.mediaAttachmentId || ""),
           sourceLabel: String(message.card.sourceLabel || ""),
@@ -404,8 +481,13 @@ function normalizeMessage(message) {
             ? message.card.actions.map((action) => ({
                 type: String(action?.type || ""),
                 label: String(action?.label || ""),
+                rawText: String(action?.rawText || ""),
+                botId: String(action?.botId || ""),
                 url: String(action?.url || ""),
-                attachmentId: String(action?.attachmentId || "")
+                attachmentId: String(action?.attachmentId || ""),
+                parsedArgs: action?.parsedArgs && typeof action.parsedArgs === "object"
+                  ? action.parsedArgs
+                  : null
               })).filter((action) => action.type && action.label)
             : []
         }
@@ -680,6 +762,7 @@ function ChatQueuedPreview({ asset }) {
 }
 
 export default function ChatRoom({
+  authToken,
   currentUser,
   clients,
   p2p,
@@ -700,6 +783,7 @@ export default function ChatRoom({
   const hostClientId = hostClient?.id || "";
   const todayKey = useMemo(() => getDayKey(), []);
   const [messages, setMessages] = useState([]);
+  const [chatConnectionState, setChatConnectionState] = useState(() => (authToken ? "connecting" : "offline"));
   const [loadedDays, setLoadedDays] = useState([]);
   const [nextOlderDayKey, setNextOlderDayKey] = useState(shiftDayKey(todayKey, -1));
   const [hasOlderHistory, setHasOlderHistory] = useState(true);
@@ -722,6 +806,14 @@ export default function ChatRoom({
   const [queueExpanded, setQueueExpanded] = useState(false);
   const [saveToLibraryDraft, setSaveToLibraryDraft] = useState(null);
   const [savingToLibrary, setSavingToLibrary] = useState(false);
+  const [botLogDialog, setBotLogDialog] = useState({
+    open: false,
+    title: "",
+    content: "",
+    loading: false,
+    truncated: false,
+    error: ""
+  });
   const [emojiPopupStyle, setEmojiPopupStyle] = useState({});
   const [contextMenuStyle, setContextMenuStyle] = useState({});
   const [botTooltipOpen, setBotTooltipOpen] = useState(false);
@@ -732,6 +824,7 @@ export default function ChatRoom({
   const [botMentionStyle, setBotMentionStyle] = useState({});
   const [activeBotMentionIndex, setActiveBotMentionIndex] = useState(0);
   const [dismissedBotMentionKey, setDismissedBotMentionKey] = useState("");
+  const [statusClock, setStatusClock] = useState(() => Date.now());
   const fileInputRef = useRef(null);
   const customEmojiInputRef = useRef(null);
   const composerInputRef = useRef(null);
@@ -744,10 +837,12 @@ export default function ChatRoom({
   const botTooltipCloseTimerRef = useRef(null);
   const contextMenuRef = useRef(null);
   const listRef = useRef(null);
+  const botLogCacheRef = useRef(new Map());
   const queuedFilesRef = useRef([]);
   const scrollRestoreRef = useRef(null);
   const pendingScrollModeRef = useRef("");
   const loadedDaySetRef = useRef(new Set());
+  const chatSocketRef = useRef(null);
 
   const todayMessageCount = useMemo(
     () => messages.filter((item) => item.dayKey === todayKey).length,
@@ -776,13 +871,38 @@ export default function ChatRoom({
     () => messages.filter((message) => selectedMessageIdSet.has(message.id)),
     [messages, selectedMessageIdSet]
   );
+  const hasActiveBotStatusCard = useMemo(
+    () => messages.some((message) => message?.card?.type === "bot-status" && ["queued", "running", "info"].includes(String(message?.card?.status || ""))),
+    [messages]
+  );
 
   useEffect(() => {
     queuedFilesRef.current = queuedFiles;
   }, [queuedFiles]);
 
   useEffect(() => {
+    if (!hasActiveBotStatusCard) {
+      return undefined;
+    }
+    const timer = window.setInterval(() => {
+      setStatusClock(Date.now());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [hasActiveBotStatusCard]);
+
+  useEffect(() => {
     return () => revokeQueuedAssets(queuedFilesRef.current);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      const socket = chatSocketRef.current;
+      chatSocketRef.current = null;
+      try {
+        socket?.close();
+      } catch {
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -1000,19 +1120,35 @@ export default function ChatRoom({
   }, []);
 
   async function loadHistoryDay(dayKey) {
-    if (!p2p || !hostClientId || !dayKey) {
+    if (!authToken || !dayKey) {
       return [];
     }
-    const result = await p2p.downloadFile(hostClientId, getHistoryPath(dayKey));
-    const text = await result.blob.text();
-    return parseHistoryText(text);
+    const response = await apiRequest(`/api/chat/messages?dayKey=${encodeURIComponent(dayKey)}`, {
+      token: authToken
+    });
+    const serverMessages = Array.isArray(response?.messages) ? response.messages.map((item) => normalizeMessage(item)) : [];
+    if (serverMessages.length || !p2p || !hostClientId) {
+      return serverMessages;
+    }
+    try {
+      const legacyResult = await p2p.downloadFile(hostClientId, getHistoryPath(dayKey));
+      const legacyText = await legacyResult.blob.text();
+      const legacyMessages = parseHistoryText(legacyText);
+      return legacyMessages.length ? legacyMessages : serverMessages;
+    } catch (error) {
+      if (!isMissingHistoryError(error)) {
+        throw error;
+      }
+      return serverMessages;
+    }
   }
 
   async function loadInitialHistory() {
-    if (!p2p || !hostClientId) {
+    if (!authToken) {
       setMessages([]);
       setLoadedDays([]);
       loadedDaySetRef.current = new Set();
+      setChatConnectionState("offline");
       return;
     }
     setLoadingToday(true);
@@ -1041,7 +1177,7 @@ export default function ChatRoom({
 
   useEffect(() => {
     loadInitialHistory();
-  }, [hostClientId, p2p, todayKey]);
+  }, [authToken, todayKey]);
 
   useEffect(() => {
     if (!p2p || !hostClientId) {
@@ -1073,30 +1209,87 @@ export default function ChatRoom({
   }, [hostClientId, p2p]);
 
   useEffect(() => {
-    if (!p2p) {
+    if (!authToken) {
+      setChatConnectionState("offline");
       return undefined;
     }
-    return p2p.onServerMessage((message) => {
-      if (message?.type === "chat-room-error") {
-        setMessage?.(message.message || "聊天室消息发送失败", "error");
+    let active = true;
+    let reconnectTimer = 0;
+    let reconnectAttempts = 0;
+
+    const connectChatSocket = () => {
+      if (!active) {
         return;
       }
-      if (message?.type !== "chat-room-message" || !message.payload) {
-        return;
+      setChatConnectionState("connecting");
+      const socket = new WebSocket(toWsUrl(authToken, { channel: "chat" }));
+      chatSocketRef.current = socket;
+
+      socket.addEventListener("open", () => {
+        reconnectAttempts = 0;
+        if (active && chatSocketRef.current === socket) {
+          setChatConnectionState("connected");
+        }
+      });
+
+      socket.addEventListener("message", (event) => {
+        try {
+          const message = JSON.parse(String(event.data || "{}"));
+          if (message?.type === "chat-room-error") {
+            setMessage?.(message.message || "聊天室消息发送失败", "error");
+            return;
+          }
+          if (message?.type !== "chat-room-message" || !message.payload) {
+            return;
+          }
+          const nextMessage = normalizeMessage(message.payload);
+          const container = listRef.current;
+          const nearBottom = !container || container.scrollHeight - container.scrollTop - container.clientHeight < 120;
+          if (nearBottom || nextMessage.author.id === currentUser?.id) {
+            pendingScrollModeRef.current = "bottom";
+          }
+          setMessages((prev) => mergeMessages(prev, [nextMessage]));
+          if (nextMessage.dayKey && !loadedDaySetRef.current.has(nextMessage.dayKey)) {
+            loadedDaySetRef.current.add(nextMessage.dayKey);
+            setLoadedDays((prev) => [...prev, nextMessage.dayKey]);
+          }
+        } catch {
+        }
+      });
+
+      socket.addEventListener("close", () => {
+        if (!active || chatSocketRef.current !== socket) {
+          return;
+        }
+        setChatConnectionState("connecting");
+        reconnectAttempts += 1;
+        const delay = Math.min(5000, 800 * reconnectAttempts);
+        reconnectTimer = window.setTimeout(connectChatSocket, delay);
+      });
+
+      socket.addEventListener("error", () => {
+        try {
+          socket.close();
+        } catch {
+        }
+      });
+    };
+
+    connectChatSocket();
+    return () => {
+      active = false;
+      if (reconnectTimer) {
+        window.clearTimeout(reconnectTimer);
       }
-      const nextMessage = normalizeMessage(message.payload);
-      const container = listRef.current;
-      const nearBottom = !container || container.scrollHeight - container.scrollTop - container.clientHeight < 120;
-      if (nearBottom || nextMessage.author.id === currentUser?.id) {
-        pendingScrollModeRef.current = "bottom";
+      if (chatSocketRef.current) {
+        try {
+          chatSocketRef.current.close();
+        } catch {
+        }
+        chatSocketRef.current = null;
       }
-      setMessages((prev) => mergeMessages(prev, [nextMessage]));
-      if (nextMessage.dayKey && !loadedDaySetRef.current.has(nextMessage.dayKey)) {
-        loadedDaySetRef.current.add(nextMessage.dayKey);
-        setLoadedDays((prev) => [...prev, nextMessage.dayKey]);
-      }
-    });
-  }, [currentUser?.id, p2p, setMessage]);
+    };
+  }, [authToken, currentUser?.id, setMessage]);
 
   useLayoutEffect(() => {
     const container = listRef.current;
@@ -1116,7 +1309,7 @@ export default function ChatRoom({
   }, [messages]);
 
   async function loadOlderHistory() {
-    if (!p2p || !hostClientId || loadingOlder || !hasOlderHistory || !nextOlderDayKey) {
+    if (!authToken || loadingOlder || !hasOlderHistory || !nextOlderDayKey) {
       return;
     }
     setLoadingOlder(true);
@@ -1172,6 +1365,10 @@ export default function ChatRoom({
   }
 
   function enqueueFiles(fileList, source = "picker") {
+    if (!hostClientId) {
+      setComposerError("当前没有在线的存储终端，暂时无法发送图片或视频");
+      return;
+    }
     const selected = [...(fileList || [])].filter((file) => isSupportedQueuedFile(file));
     if (!selected.length) {
       if (source !== "silent") {
@@ -1375,6 +1572,51 @@ export default function ChatRoom({
     if (!action?.type) {
       return;
     }
+    if (action.type === "invoke-bot") {
+      const botId = String(action.botId || message?.bot?.botId || "").trim();
+      const rawText = String(action.rawText || "").trim();
+      const baseArgs = action?.parsedArgs && typeof action.parsedArgs === "object"
+        ? action.parsedArgs
+        : (rawText ? { prompt: rawText } : {});
+      const parsedArgs = {
+        ...(baseArgs && typeof baseArgs === "object" ? baseArgs : {}),
+        __actionLabel: String(action.label || "").trim()
+      };
+      const replyMode = String(parsedArgs.__chatReplyMode || "append-chat-history").trim() || "append-chat-history";
+      if (!botId || !message?.hostClientId || !p2p) {
+        setMessage?.("当前动作无法执行", "warning");
+        return;
+      }
+      p2p.invokeBot(message.hostClientId, {
+        botId,
+        trigger: {
+          type: "card-action",
+          rawText,
+          parsedArgs
+        },
+        requester: {
+          userId: String(currentUser?.id || ""),
+          displayName: String(currentUser?.displayName || ""),
+          role: String(currentUser?.role || "user")
+        },
+        chat: {
+          hostClientId: message.hostClientId,
+          dayKey: message.dayKey,
+          historyPath: message.historyPath,
+          messageId: message.id,
+          replyMode
+        }
+      })
+        .then((invoked) => {
+          if (invoked?.job?.jobId) {
+            setMessage?.(`已执行 ${action.label}，任务 ${invoked.job.jobId.slice(0, 12)} 已创建`, "success");
+          }
+        })
+        .catch((error) => {
+          setMessage?.(error?.message || "动作执行失败", "error");
+        });
+      return;
+    }
     if (action.type === "retry-bot-job") {
       const jobId = String(message?.bot?.jobId || "").trim();
       if (!jobId || !message?.hostClientId || !p2p) {
@@ -1437,6 +1679,12 @@ export default function ChatRoom({
         });
       return;
     }
+    if (action.type === "open-bot-log") {
+      openBotLogDialog(message).catch((error) => {
+        setMessage?.(error?.message || "读取日志失败", "error");
+      });
+      return;
+    }
     if (action.type === "open-url" && action.url) {
       window.open(action.url, "_blank", "noopener,noreferrer");
       return;
@@ -1468,6 +1716,18 @@ export default function ChatRoom({
     return !cardBody || cardBody !== text;
   }
 
+  function getAiChatStatusBody(message, cardStatus) {
+    const rawBody = String(message?.card?.body || "").trim();
+    const normalized = rawBody.toLowerCase();
+    if (rawBody && normalized !== "running" && normalized !== "queued" && normalized !== "processing") {
+      return rawBody;
+    }
+    if (cardStatus === "queued") {
+      return "AI 已收到请求，正在排队。";
+    }
+    return "AI 正在处理这条消息。可以点“查看日志”了解当前步骤。";
+  }
+
   function renderMessageCardBody(message) {
     if (!message?.card) {
       return null;
@@ -1475,27 +1735,47 @@ export default function ChatRoom({
     const mediaAttachment = message.card.mediaAttachmentId
       ? message.attachments.find((attachment) => attachment.id === message.card.mediaAttachmentId)
       : null;
+    const cardStatus = String(message.card.status || "");
+    const isAiChatStatusCard = message.card.type === "bot-status"
+      && String(message?.bot?.botId || "").trim() === "ai.chat";
+    const isActiveBotStatusCard = message.card.type === "bot-status"
+      && ["queued", "running", "info"].includes(cardStatus);
+    const elapsedText = isActiveBotStatusCard
+      ? `${cardStatus === "queued" ? "已等待" : "已耗时"} ${formatElapsedTime(message.createdAt, statusClock)}`
+      : "";
     const showProgress = typeof message.card.progress === "number"
-      && !["succeeded", "failed", "cancelled"].includes(String(message.card.status || ""));
+      && !isAiChatStatusCard
+      && !["succeeded", "failed", "cancelled"].includes(cardStatus);
+    const cardBody = isAiChatStatusCard ? getAiChatStatusBody(message, cardStatus) : String(message.card.body || "").trim();
+    const cardActions = Array.isArray(message.card.actions) ? [...message.card.actions] : [];
+    if (isAiChatStatusCard && String(message?.bot?.jobId || "").trim() && !cardActions.some((action) => action?.type === "open-bot-log")) {
+      cardActions.push({ type: "open-bot-log", label: "查看日志" });
+    }
     return (
-      <div className={`chatDynamicCard status-${message.card.status || "info"}`}>
-        {message.card.imageUrl ? <img className="chatDynamicCardCover" src={message.card.imageUrl} alt={message.card.imageAlt || message.card.title || "封面"} referrerPolicy="no-referrer" /> : null}
+      <div className={`chatDynamicCard status-${cardStatus || "info"}`}>
+        {message.card.imageUrl ? <img className={`chatDynamicCardCover fit-${String(message.card.imageFit || "cover")}`} src={message.card.imageUrl} alt={message.card.imageAlt || message.card.title || "封面"} referrerPolicy="no-referrer" /> : null}
         <div className="chatDynamicCardHeader">
           <div className="chatDynamicCardTitleBlock">
             <div className="chatDynamicCardTitleRow">
-              <span className={`chatDynamicStatusDot status-${message.card.status || "info"}`} aria-hidden="true" />
+              <span className={`chatDynamicStatusDot status-${cardStatus || "info"}`} aria-hidden="true" />
               <Text>{message.card.title || message.author.displayName}</Text>
             </div>
             {message.card.subtitle ? <Caption1>{message.card.subtitle}</Caption1> : null}
-            {message.card.body ? <MarkdownBlock className="chatMarkdownBlock chatDynamicMarkdown" text={message.card.body} /> : null}
+            {cardBody ? <MarkdownBlock className="chatMarkdownBlock chatDynamicMarkdown" text={cardBody} /> : null}
           </div>
         </div>
+        {isActiveBotStatusCard ? (
+          <div className="chatDynamicMetaRow">
+            <Caption1>{elapsedText}</Caption1>
+            {typeof message.card.progress === "number" && !isAiChatStatusCard ? <Caption1>{Math.round(message.card.progress)}%</Caption1> : null}
+          </div>
+        ) : null}
         {showProgress ? (
           <div className="chatDynamicProgress">
             <div className="chatDynamicProgressBar">
               <div className="chatDynamicProgressValue" style={{ width: `${Math.max(0, Math.min(100, message.card.progress))}%` }} />
             </div>
-            <Caption1>{Math.round(message.card.progress)}%</Caption1>
+            {!isActiveBotStatusCard ? <Caption1>{Math.round(message.card.progress)}%</Caption1> : null}
           </div>
         ) : null}
         {mediaAttachment && isVideoAttachment(mediaAttachment) ? (
@@ -1508,9 +1788,9 @@ export default function ChatRoom({
             />
           </div>
         ) : null}
-        {Array.isArray(message.card.actions) && message.card.actions.length ? (
+        {cardActions.length ? (
           <div className="chatDynamicActionRow">
-            {message.card.actions.map((action) => (
+            {cardActions.map((action) => (
               <button key={`${message.id}:${action.type}:${action.label}`} type="button" className="chatDynamicActionButton" onClick={() => handleCardAction(message, action)}>
                 {action.label}
               </button>
@@ -1519,6 +1799,68 @@ export default function ChatRoom({
         ) : null}
       </div>
     );
+  }
+
+  function isCompletedAiChatBotMessage(message) {
+    if (String(message?.bot?.botId || "").trim() !== "ai.chat") {
+      return false;
+    }
+    if (!String(message?.bot?.jobId || "").trim()) {
+      return false;
+    }
+    const status = String(message?.card?.status || "succeeded").trim().toLowerCase();
+    return !["queued", "running", "info"].includes(status);
+  }
+
+  async function openBotLogDialog(message) {
+    const jobId = String(message?.bot?.jobId || "").trim();
+    const clientId = String(message?.hostClientId || "").trim();
+    if (!jobId || !clientId || !p2p) {
+      setMessage?.("当前消息没有可读取的日志", "warning");
+      return;
+    }
+    const cacheKey = `${clientId}:${jobId}`;
+    const cached = botLogCacheRef.current.get(cacheKey);
+    setBotLogDialog({
+      open: true,
+      title: `AI Chat 日志 · ${jobId.slice(0, 12)}`,
+      content: cached?.content || "",
+      loading: !cached,
+      truncated: Boolean(cached?.truncated),
+      error: ""
+    });
+    if (cached) {
+      return;
+    }
+    try {
+      const result = await p2p.getBotJobLog(clientId, jobId, { maxBytes: 96 * 1024 });
+      const next = {
+        content: String(result?.log?.content || "").trim() || "暂无日志内容",
+        truncated: result?.log?.truncated === true
+      };
+      botLogCacheRef.current.set(cacheKey, next);
+      setBotLogDialog({
+        open: true,
+        title: `AI Chat 日志 · ${jobId.slice(0, 12)}`,
+        content: next.content,
+        loading: false,
+        truncated: next.truncated,
+        error: ""
+      });
+    } catch (error) {
+      setBotLogDialog({
+        open: true,
+        title: `AI Chat 日志 · ${jobId.slice(0, 12)}`,
+        content: "",
+        loading: false,
+        truncated: false,
+        error: String(error?.message || "读取日志失败").trim()
+      });
+    }
+  }
+
+  function closeBotLogDialog() {
+    setBotLogDialog((prev) => ({ ...prev, open: false }));
   }
 
   async function copyTextToClipboard(value, successMessage) {
@@ -1706,14 +2048,18 @@ export default function ChatRoom({
       successMessage
     } = options;
 
-    if (!p2p || !hostClientId) {
-      setComposerError("当前没有在线的聊天存储终端");
+    if (!authToken) {
+      setComposerError("当前登录状态失效，请重新登录");
       return false;
     }
     const text = String(textOverride ?? draft).trim();
     const currentQueue = queuedAssets;
     if (!text && !currentQueue.length) {
       setComposerError("请输入消息或选择图片/视频");
+      return false;
+    }
+    if (currentQueue.length && (!p2p || !hostClientId)) {
+      setComposerError("当前没有在线的存储终端，无法发送附件");
       return false;
     }
     if (!currentUser?.id) {
@@ -1794,18 +2140,21 @@ export default function ChatRoom({
           avatarFileId: currentUser.avatarFileId || ""
         }
       });
-      await p2p.appendChatMessage(hostClientId, historyPath, message);
-      const realtimeEnvelope = { type: "chat-room-message", payload: message };
-      const realtimeBytes = new TextEncoder().encode(JSON.stringify(realtimeEnvelope)).length;
-      if (realtimeBytes > CHAT_REALTIME_LIMIT_BYTES) {
-        throw new Error("消息元数据超过 100KB，无法通过实时通道发送");
-      }
-      await p2p.sendServerMessage(realtimeEnvelope);
+      const result = await apiRequest("/api/chat/messages", {
+        method: "POST",
+        token: authToken,
+        body: message
+      });
+      const storedMessage = normalizeMessage(result?.message || message);
+      setMessages((prev) => mergeMessages(prev, [storedMessage]));
 
       const botInvocation = resolveBotInvocation(text);
       if (botInvocation) {
         if (!botInvocation.supported) {
-          setMessage?.("@bili 目前只支持 bilibili 链接或 BV 号", "warning");
+          setMessage?.("@bili 目前支持 login/status/logout，或 bilibili 链接 / BV 号", "warning");
+        } else {
+        if (!hostClientId || !p2p) {
+          setMessage?.("当前没有在线的存储终端，暂时无法调用 bot", "warning");
         } else {
         try {
           const invoked = await p2p.invokeBot(hostClientId, {
@@ -1834,6 +2183,7 @@ export default function ChatRoom({
           }
         } catch (botError) {
           setMessage?.(botError?.message || `${botInvocation.mention} 任务创建失败`, "error");
+        }
         }
         }
       }
@@ -1917,7 +2267,7 @@ export default function ChatRoom({
       .map((value) => String(value || "").toLowerCase())
       .includes(alias));
     if (!target) {
-      return null;
+      return parseChatBotInvocation(raw);
     }
     const afterMention = raw.slice(mentionMatch.index + mentionMatch[0].length).trim();
     if (target.botId === "ai.chat") {
@@ -2066,6 +2416,7 @@ export default function ChatRoom({
     const videoAttachment = message.attachments.find((attachment) => isVideoAttachment(attachment));
     const hasCopyable = Boolean(message.text || message.attachments.length);
     const iconOnly = variant === "toolbar";
+    const canViewLog = isCompletedAiChatBotMessage(message);
     return (
       <>
         {hasCopyable ? (
@@ -2143,6 +2494,20 @@ export default function ChatRoom({
             {iconOnly ? null : <span>{variant === "menu" ? "预览视频" : "视频"}</span>}
           </button>
         ) : null}
+        {canViewLog ? (
+          <button
+            type="button"
+            className={`chatMessageActionButton${variant === "menu" ? " menu" : ""}`}
+            onClick={() => {
+              openBotLogDialog(message).catch(() => {});
+              setContextMenuState(null);
+            }}
+            aria-label="查看日志"
+            title="查看日志"
+          >
+            {iconOnly ? <span className="chatMessageActionGlyph">志</span> : <><span className="chatMessageActionGlyph">志</span><span>查看日志</span></>}
+          </button>
+        ) : null}
         <button
           type="button"
           className={`chatMessageActionButton${variant === "menu" ? " menu" : ""}`}
@@ -2194,13 +2559,16 @@ export default function ChatRoom({
       setContextMenuState(null);
       setEmojiPanelOpen(false);
     }}>
-      <div className="chatRoomShell surfaceCard">
+      <div className="chatRoomShell">
         <div className="chatRoomHeader compact">
           <Subtitle1>聊天室</Subtitle1>
           <div className="chatRoomMinimalMeta rightAligned">
-            <Badge appearance="outline" color={hostClientId ? "success" : "warning"}>{hostClientId ? "在线" : "离线"}</Badge>
+            <Badge appearance="outline" color={chatConnectionState === "connected" ? "success" : authToken ? "warning" : "danger"}>
+              {chatConnectionState === "connected" ? "聊天已连接" : authToken ? "聊天重连中" : "未登录"}
+            </Badge>
+            <Badge appearance="outline" color={hostClientId ? "success" : "warning"}>{hostClientId ? "存储在线" : "存储离线"}</Badge>
             <Caption1>今日 {todayMessageCount} 条</Caption1>
-            <Caption1>{hostClientId ? getClientDisplayName(hostClientId) : "等待存储终端"}</Caption1>
+            <Caption1>{hostClientId ? getClientDisplayName(hostClientId) : "文字聊天可用，附件和 Bot 需等待存储终端"}</Caption1>
           </div>
         </div>
 
@@ -2232,7 +2600,7 @@ export default function ChatRoom({
               {!loadingToday && !messages.length ? (
                 <div className="chatEmptyState">
                   <Subtitle1>今天还没有聊天记录</Subtitle1>
-                  <Text>发送文本或媒体后，这里会从隐藏目录同步历史并通过 P2P 回读。</Text>
+                  <Text>文本聊天历史现在由服务器保存；图片、视频和 Bot 仍依赖在线存储终端。</Text>
                   {hasOlderHistory ? <Button appearance="secondary" size="small" onClick={() => loadOlderHistory().catch(() => {})}>尝试加载更早消息</Button> : null}
                 </div>
               ) : null}
@@ -2355,7 +2723,7 @@ export default function ChatRoom({
                     }}
                     aria-label="表情"
                     title="表情"
-                    disabled={!hostClientId || sending}
+                    disabled={!authToken || sending}
                   >
                     😀
                   </Button>
@@ -2377,7 +2745,7 @@ export default function ChatRoom({
                   </Button>
                 </div>
                 <Button className="chatComposerIconButton" appearance="secondary" size="small" icon={<ArrowUploadRegular />} aria-label="添加媒体" title="添加媒体" onClick={() => fileInputRef.current?.click()} disabled={!hostClientId || sending} />
-                <Button className="chatComposerIconButton send" appearance="primary" size="small" icon={<SendRegular />} aria-label={sending ? "发送中" : "发送消息"} title={sending ? "发送中" : "发送消息"} onClick={handleSend} disabled={!hostClientId || sending} />
+                <Button className="chatComposerIconButton send" appearance="primary" size="small" icon={<SendRegular />} aria-label={sending ? "发送中" : "发送消息"} title={sending ? "发送中" : "发送消息"} onClick={handleSend} disabled={!authToken || sending} />
               </div>
 
               <div className="chatComposerInputWrap" ref={composerInputWrapRef}>
@@ -2396,7 +2764,7 @@ export default function ChatRoom({
                   onPaste={handlePaste}
                   placeholder="Enter 发送，Shift+Enter 换行，也可直接粘贴截图或把图片视频拖到这里"
                   rows={3}
-                  disabled={!hostClientId || sending}
+                  disabled={!authToken || sending}
                 />
                 {queuedFiles.length ? (
                   <div className="chatComposerQueueDock">
@@ -2547,7 +2915,7 @@ export default function ChatRoom({
                 <div className="chatBotTooltipHeaderTopline">
                   <Text>可用助手</Text>
                 </div>
-                <Caption1>{loadingBotCatalog ? "正在读取当前存储终端的助手目录" : hostClientId ? `来自 ${getClientDisplayName(hostClientId)}，点击命令可直接填入输入框` : "等待在线终端后显示可用助手"}</Caption1>
+                <Caption1>{loadingBotCatalog ? "正在读取当前存储终端的助手目录" : hostClientId ? `来自 ${getClientDisplayName(hostClientId)}，点击命令可直接填入输入框` : "Bot 功能依赖在线存储终端"}</Caption1>
               </div>
             </div>
             {botCatalog.length ? (
@@ -2601,7 +2969,7 @@ export default function ChatRoom({
               </div>
             ) : (
               <div className="chatBotEmptyHint">
-                <Caption1>{hostClientId ? "当前终端尚未返回 bot catalog，或 bot 运行时尚未初始化。" : "等待在线的存储终端后再读取 bot catalog。"}</Caption1>
+                <Caption1>{hostClientId ? "当前终端尚未返回 bot catalog，或 bot 运行时尚未初始化。" : "文字聊天已可用；待存储终端上线后再读取 bot catalog。"}</Caption1>
               </div>
             )}
           </div>,
@@ -2718,6 +3086,24 @@ export default function ChatRoom({
                 >
                   {savingToLibrary ? "转存中" : "确认转存"}
                 </Button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {botLogDialog.open ? (
+          <div className="overlay drawerOverlay" onClick={closeBotLogDialog}>
+            <div className="modalWindow chatBotLogDialog" onClick={(event) => event.stopPropagation()}>
+              <div className="chatSaveDialogHeader chatBotLogDialogHeader">
+                <div>
+                  <Subtitle1>{botLogDialog.title || "AI Chat 日志"}</Subtitle1>
+                  <Caption1>{botLogDialog.loading ? "正在读取日志" : botLogDialog.truncated ? "日志内容过长，当前仅展示尾部片段" : "按时间顺序展示本次 bot 执行日志"}</Caption1>
+                </div>
+                <Button size="small" onClick={closeBotLogDialog}>关闭</Button>
+              </div>
+              <div className="chatBotLogDialogBody">
+                {botLogDialog.loading ? <Spinner label="正在读取日志..." /> : null}
+                {!botLogDialog.loading && botLogDialog.error ? <div className="chatComposerError">{botLogDialog.error}</div> : null}
+                {!botLogDialog.loading && !botLogDialog.error ? <pre className="chatBotLogPre">{botLogDialog.content || "暂无日志内容"}</pre> : null}
               </div>
             </div>
           </div>

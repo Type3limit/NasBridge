@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Badge, Button, Caption1, Input, Spinner, Subtitle1, Text } from "@fluentui/react-components";
-import { ArrowDownloadRegular, ArrowReplyRegular, BugRegular, ChevronDownRegular, ChevronUpRegular, DismissRegular, EditRegular, SendRegular, SettingsRegular, ShareRegular, StarFilled, StarRegular } from "@fluentui/react-icons";
+import { Badge, Button, Caption1, Dropdown, Input, Option, Spinner, Subtitle1, Text } from "@fluentui/react-components";
+import { ArrowDownloadRegular, ArrowDownRegular, ArrowReplyRegular, ArrowUpRegular, BugRegular, ChevronDownRegular, ChevronUpRegular, DismissRegular, EditRegular, EyeRegular, SendRegular, SettingsRegular, ShareRegular, StarFilled, StarRegular } from "@fluentui/react-icons";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { apiRequest } from "../api";
@@ -112,6 +112,7 @@ const DANMAKU_SCROLL_DURATION_MS = 9000;
 const DANMAKU_FIXED_DURATION_MS = 4200;
 const DANMAKU_SCROLL_LANES = 8;
 const DANMAKU_FIXED_LANES = 3;
+const DANMAKU_SUBMIT_DEDUPE_WINDOW_MS = 1500;
 const VIDEO_SEEK_STEP_SEC = 5;
 const DANMAKU_SETTINGS_STORAGE_PREFIX = "nas_preview_danmaku_settings_v1";
 const DEFAULT_DANMAKU_SETTINGS = {
@@ -267,6 +268,17 @@ function mergeDanmakuItems(existing = [], incoming = []) {
   return [...map.values()].sort((left, right) => left.timeSec - right.timeSec || left.createdAt.localeCompare(right.createdAt));
 }
 
+function buildDanmakuSubmitFingerprint({ fileId = "", content = "", timeSec = 0, color = "#FFFFFF", mode = "scroll" } = {}) {
+  const snappedTime = Math.round(Math.max(0, Number(timeSec || 0)) * 10) / 10;
+  return [
+    String(fileId || ""),
+    String(content || "").trim(),
+    snappedTime.toFixed(1),
+    String(color || "#FFFFFF").trim().toUpperCase(),
+    String(mode || "scroll").trim()
+  ].join("|");
+}
+
 export default function PreviewModal({
   previewing,
   previewName,
@@ -280,6 +292,7 @@ export default function PreviewModal({
   previewDebug,
   previewHlsSource,
   p2p,
+  onSelectHlsProfile,
   setPreviewHlsSource,
   setPreviewDebug,
   setMessage,
@@ -328,6 +341,7 @@ export default function PreviewModal({
   const [danmakuTextOpacity, setDanmakuTextOpacity] = useState(DEFAULT_DANMAKU_SETTINGS.textOpacity);
   const [danmakuSettingsOpen, setDanmakuSettingsOpen] = useState(false);
   const [danmakuSettingsReady, setDanmakuSettingsReady] = useState(false);
+  const [danmakuSubmitting, setDanmakuSubmitting] = useState(false);
   const [activeDanmaku, setActiveDanmaku] = useState([]);
   const [videoCurrentTime, setVideoCurrentTime] = useState(0);
   const [videoDuration, setVideoDuration] = useState(0);
@@ -342,10 +356,15 @@ export default function PreviewModal({
   const danmakuBottomLaneRef = useRef(0);
   const danmakuSequenceRef = useRef(0);
   const danmakuTimersRef = useRef(new Map());
+  const activeDanmakuIdsRef = useRef(new Set());
   const lastVideoTimeRef = useRef(0);
+  const danmakuSubmitRef = useRef({ pending: false, lastFingerprint: "", lastSubmittedAt: 0 });
   const formatCommentTime = typeof formatRelativeTime === "function" ? formatRelativeTime : fallbackRelativeTime;
   const markdownPreview = isMarkdownPreview({ mimeType: previewMime, previewName, previewPath });
   const canUseComments = Boolean(commentsEnabled && authToken && previewFileId);
+  const availableHlsProfiles = Array.isArray(previewHlsSource?.availableProfiles) ? previewHlsSource.availableProfiles : [];
+  const activeHlsProfile = String(previewHlsSource?.profile || previewDebug?.hlsProfile || "");
+  const activeHlsProfileLabel = availableHlsProfiles.find((profile) => String(profile?.id || "") === activeHlsProfile)?.label || activeHlsProfile || "分辨率";
   const canUsePictureInPicture = previewMime.startsWith("video/")
     && typeof document !== "undefined"
     && Boolean(document.pictureInPictureEnabled);
@@ -380,10 +399,14 @@ export default function PreviewModal({
       clearTimeout(timer);
     }
     danmakuTimersRef.current.clear();
+    activeDanmakuIdsRef.current.clear();
     setActiveDanmaku([]);
   }
 
   function enqueueDanmaku(item) {
+    if (!item?.id || activeDanmakuIdsRef.current.has(item.id)) {
+      return;
+    }
     const overlayId = `${item.id}:${danmakuSequenceRef.current++}`;
     const isScroll = item.mode === "scroll";
     const lane = isScroll
@@ -398,9 +421,11 @@ export default function PreviewModal({
       lane,
       durationMs
     };
+    activeDanmakuIdsRef.current.add(item.id);
     setActiveDanmaku((prev) => [...prev, next]);
     const timer = window.setTimeout(() => {
       danmakuTimersRef.current.delete(overlayId);
+      activeDanmakuIdsRef.current.delete(item.id);
       setActiveDanmaku((prev) => prev.filter((entry) => entry.overlayId !== overlayId));
     }, durationMs + 400);
     danmakuTimersRef.current.set(overlayId, timer);
@@ -1245,11 +1270,30 @@ export default function PreviewModal({
     if (!content || !authToken || !previewFileId) {
       return;
     }
+    const currentTime = Number.isFinite(previewVideoRef.current?.currentTime)
+      ? Number(previewVideoRef.current.currentTime)
+      : Number(videoCurrentTime || 0);
+    const fingerprint = buildDanmakuSubmitFingerprint({
+      fileId: previewFileId,
+      content,
+      timeSec: currentTime,
+      color: danmakuColor,
+      mode: danmakuMode
+    });
+    const now = Date.now();
+    if (danmakuSubmitRef.current.pending) {
+      return;
+    }
+    if (
+      danmakuSubmitRef.current.lastFingerprint === fingerprint
+      && now - danmakuSubmitRef.current.lastSubmittedAt < DANMAKU_SUBMIT_DEDUPE_WINDOW_MS
+    ) {
+      return;
+    }
     try {
+      danmakuSubmitRef.current.pending = true;
+      setDanmakuSubmitting(true);
       setDanmakuError("");
-      const currentTime = Number.isFinite(previewVideoRef.current?.currentTime)
-        ? Number(previewVideoRef.current.currentTime)
-        : Number(videoCurrentTime || 0);
       const data = await apiRequest("/api/file-danmaku", {
         method: "POST",
         token: authToken,
@@ -1261,6 +1305,8 @@ export default function PreviewModal({
           mode: danmakuMode
         }
       });
+      danmakuSubmitRef.current.lastFingerprint = fingerprint;
+      danmakuSubmitRef.current.lastSubmittedAt = Date.now();
       setDanmakuItems((prev) => mergeDanmakuItems(prev, data.danmaku));
       setDanmakuDraft("");
       const created = normalizeDanmakuItems([data.item])[0];
@@ -1272,6 +1318,9 @@ export default function PreviewModal({
       }
     } catch (error) {
       setDanmakuError(error?.message || "弹幕发送失败");
+    } finally {
+      danmakuSubmitRef.current.pending = false;
+      setDanmakuSubmitting(false);
     }
   }
 
@@ -1349,7 +1398,7 @@ export default function PreviewModal({
           danmakuFontScale={danmakuFontScale}
           onDanmakuFontScaleChange={(value) => setDanmakuFontScale(clampNumber(value, 0.8, 1.6, danmakuFontScale))}
           onSubmit={() => submitDanmaku().catch(() => {})}
-          sendDisabled={!authToken || !String(danmakuDraft || "").trim()}
+          sendDisabled={danmakuSubmitting || !authToken || !String(danmakuDraft || "").trim()}
           inputNode={(
             <div className="previewDanmakuInputShell">
               <span className="previewDanmakuInputGlyph" aria-hidden="true">A</span>
@@ -1474,11 +1523,38 @@ export default function PreviewModal({
     <div className="overlay previewOverlay">
       <div ref={previewModalRef} className={`modalWindow previewModal${pageFillActive ? " pageFillActive" : ""}`} onClick={(event) => event.stopPropagation()} tabIndex={-1}>
         <div className="previewTopBar">
-          <div>
-            <Subtitle1>{previewName || "文件"}</Subtitle1>
-            <Caption1>{previewMime || "未知类型"}</Caption1>
+          <div className="previewHeaderMeta">
+            <Subtitle1 className="previewHeaderTitle" title={previewName || "文件"}>{previewName || "文件"}</Subtitle1>
+            <Caption1 className="previewHeaderMime">{previewMime || "未知类型"}</Caption1>
           </div>
           <div className="previewToolbar">
+            {previewHlsSource && availableHlsProfiles.length > 1 ? (
+              <Dropdown
+                className="filterDropdown dialogDropdown previewResolutionDropdown"
+                disabled={previewing}
+                size="small"
+                selectedOptions={activeHlsProfile ? [activeHlsProfile] : []}
+                value={activeHlsProfileLabel}
+                aria-label="HLS 分辨率切换"
+                title={activeHlsProfileLabel}
+                onOptionSelect={(_, data) => {
+                  const nextProfileId = String(data.optionValue || "");
+                  if (!nextProfileId || nextProfileId === activeHlsProfile) {
+                    return;
+                  }
+                  onSelectHlsProfile?.(nextProfileId);
+                }}
+              >
+                {availableHlsProfiles.map((profile) => {
+                  const profileId = String(profile?.id || "");
+                  return (
+                    <Option key={profileId} value={profileId} text={profile?.label || profileId}>
+                      {profile?.label || profileId}
+                    </Option>
+                  );
+                })}
+              </Dropdown>
+            ) : null}
             {onFavorite ? (
               <button
                 type="button"

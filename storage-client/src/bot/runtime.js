@@ -6,6 +6,30 @@ import { BotJobQueue } from "./queue.js";
 import { BotRegistry } from "./registry.js";
 import { validatePluginPermissions } from "./permissions.js";
 
+function formatErrorForLog(error) {
+  if (!error) {
+    return "unknown error";
+  }
+  const lines = [];
+  const name = String(error?.name || "Error").trim();
+  const message = String(error?.message || error || "unknown error").trim();
+  lines.push(`${name}: ${message}`.trim());
+  if (error?.code) {
+    lines.push(`code: ${String(error.code).trim()}`);
+  }
+  if (error?.cause) {
+    const causeMessage = String(error.cause?.message || error.cause || "").trim();
+    if (causeMessage) {
+      lines.push(`cause: ${causeMessage}`);
+    }
+  }
+  if (error?.stack) {
+    lines.push("stack:");
+    lines.push(String(error.stack).trim());
+  }
+  return lines.join("\n");
+}
+
 function createInitialJob(context) {
   return {
     jobId: context.jobId,
@@ -14,7 +38,8 @@ function createInitialJob(context) {
     phase: "parse-input",
     progress: {
       label: "Queued",
-      percent: 0
+      percent: 0,
+      details: null
     },
     requester: context.requester,
     chat: context.chat,
@@ -40,6 +65,12 @@ function createInitialJob(context) {
     finishedAt: null,
     updatedAt: context.createdAt
   };
+}
+
+function shouldForceReplaceChatMessage(context, plugin) {
+  return String(plugin?.botId || "").trim() === "bilibili.downloader"
+    && String(context?.trigger?.type || "").trim() === "card-action"
+    && String(context?.chat?.messageId || "").trim() !== "";
 }
 
 export class BotRuntime {
@@ -73,6 +104,10 @@ export class BotRuntime {
 
   async getJob(jobId) {
     return this.activeJobs.get(jobId) || this.store.get(jobId);
+  }
+
+  async getJobLog(jobId, options = {}) {
+    return this.store.readLog(jobId, options);
   }
 
   async cancelJob(jobId) {
@@ -116,12 +151,20 @@ export class BotRuntime {
       throw new Error("bot not found");
     }
     context.botId = plugin.botId;
+    if (shouldForceReplaceChatMessage(context, plugin)) {
+      context.chat = {
+        ...context.chat,
+        replyMode: "replace-chat-message"
+      };
+    }
 
     const permissionCheck = validatePluginPermissions(plugin);
     const baseJob = await this.store.save(createInitialJob(context));
     this.activeJobs.set(baseJob.jobId, baseJob);
-    await this.store.appendLog(baseJob.jobId, `accepted by ${plugin.botId}`);
+    // Fire the status event immediately so the WS broadcast goes out ASAP;
+    // log append is non-critical and can happen in the background.
     this.events.emit("job", baseJob);
+    this.store.appendLog(baseJob.jobId, `accepted by ${plugin.botId}`).catch(() => {});
 
     void this.queue.enqueue(async () => {
       await this.runJob(plugin, context, baseJob, permissionCheck);
@@ -146,7 +189,8 @@ export class BotRuntime {
       phase: "running",
       progress: {
         label: "Running",
-        percent: 5
+        percent: 5,
+        details: job?.progress?.details ?? null
       },
       startedAt: new Date().toISOString(),
       audit: {
@@ -170,7 +214,8 @@ export class BotRuntime {
         phase: "completed",
         progress: {
           label: "Completed",
-          percent: 100
+          percent: 100,
+          details: null
         },
         finishedAt: new Date().toISOString(),
         result: {
@@ -210,8 +255,9 @@ export class BotRuntime {
       }
     });
     this.activeJobs.set(jobId, next);
-    await this.store.appendLog(jobId, `failed: ${next.error.message}`);
     this.events.emit("job", next);
+    this.store.appendLog(jobId, `failed: ${next.error.message}`).catch(() => {});
+    this.store.appendLog(jobId, `failure detail [phase=${String(current?.phase || "unknown")}]:\n${formatErrorForLog(error)}`).catch(() => {});
     return next;
   }
 
@@ -261,7 +307,10 @@ export class BotRuntime {
           phase: String(patch.phase || current.phase || "running"),
           progress: {
             label: String(patch.label || current.progress?.label || "Running"),
-            percent: Number.isFinite(patch.percent) ? Math.max(0, Math.min(100, Number(patch.percent))) : Number(current.progress?.percent || 0)
+            percent: Number.isFinite(patch.percent) ? Math.max(0, Math.min(100, Number(patch.percent))) : Number(current.progress?.percent || 0),
+            details: Object.prototype.hasOwnProperty.call(patch, "details")
+              ? (patch.details && typeof patch.details === "object" ? patch.details : null)
+              : (current.progress?.details ?? null)
           }
         });
         this.activeJobs.set(job.jobId, next);
@@ -284,11 +333,13 @@ export class BotRuntime {
           historyPath: payload.historyPath || context.chat.historyPath,
           hostClientId: payload.hostClientId || context.chat.hostClientId
         });
-        if (typeof this.dependencies.appendChatMessage === "function") {
-          await this.dependencies.appendChatMessage(message.historyPath, message);
-        }
+        // Broadcast via WS first so the browser sees the final reply immediately,
+        // then write the JSONL history file in the background (fire-and-forget).
         if (typeof this.dependencies.publishChatMessage === "function") {
           await this.dependencies.publishChatMessage(message);
+        }
+        if (typeof this.dependencies.appendChatMessage === "function") {
+          this.dependencies.appendChatMessage(message.historyPath, message).catch(() => {});
         }
         return message;
       },
@@ -334,6 +385,15 @@ export class BotRuntime {
         type: "bot-job-result",
         requestId: message.requestId || "",
         job
+      };
+    }
+    if (message.type === "get-bot-job-log") {
+      const log = await this.getJobLog(message.jobId, { maxBytes: message.maxBytes });
+      return {
+        type: "bot-job-log-result",
+        requestId: message.requestId || "",
+        jobId: message.jobId || "",
+        log
       };
     }
     if (message.type === "cancel-bot-job") {

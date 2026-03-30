@@ -16,7 +16,8 @@ const defaultDb = {
   uploadJobs: [],
   fileShares: [],
   comments: [],
-  danmaku: []
+  danmaku: [],
+  tvSources: []
 };
 
 function ensureDb() {
@@ -52,6 +53,9 @@ function readDb() {
   }
   if (!Array.isArray(db.danmaku)) {
     db.danmaku = [];
+  }
+  if (!Array.isArray(db.tvSources)) {
+    db.tvSources = [];
   }
   writeDb(db);
   return db;
@@ -716,6 +720,38 @@ export function listFileDanmaku(fileId) {
       }
       return String(left.createdAt || "").localeCompare(String(right.createdAt || ""));
     });
+}
+
+// ── TV Sources ──────────────────────────────────────────────────────────────
+
+const TV_SOURCE_MAX_CONTENT_BYTES = 512 * 1024; // 512 KB cap per source
+const TV_SOURCE_MAX_HISTORY = 50;
+
+export function listTvSources() {
+  return readDb().tvSources;
+}
+
+export function saveTvSource({ label, url = null, content = null, channelCount }) {
+  const db = readDb();
+  const now = new Date().toISOString();
+  const safeContent = content && content.length <= TV_SOURCE_MAX_CONTENT_BYTES ? content : null;
+  const entity = {
+    id: nanoid(14),
+    label: String(label || "").trim().slice(0, 120),
+    url: url ? String(url).trim() : null,
+    content: safeContent,
+    channelCount: Math.max(0, Number(channelCount) || 0),
+    savedAt: now
+  };
+  db.tvSources = [entity, ...db.tvSources].slice(0, TV_SOURCE_MAX_HISTORY);
+  writeDb(db);
+  return entity;
+}
+
+export function deleteTvSource(id) {
+  const db = readDb();
+  db.tvSources = db.tvSources.filter((item) => item.id !== id);
+  writeDb(db);
 }
 
 export function createFileDanmaku({ fileId, content, timeSec = 0, color = "#FFFFFF", mode = "scroll", createdByUserId, createdByDisplayName, createdByAvatarUrl, createdByAvatarClientId = "", createdByAvatarPath = "", createdByAvatarFileId = "" }) {

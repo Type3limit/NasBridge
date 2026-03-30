@@ -46,11 +46,16 @@ import {
   createFileComment,
   setCommentReaction,
   listFileDanmaku,
-  createFileDanmaku
+  createFileDanmaku,
+  listTvSources,
+  saveTvSource,
+  deleteTvSource
 } from "./db.js";
 import { signUserToken, signClientToken, signShareToken } from "./auth.js";
 import { requireAuth, requireRole } from "./middleware.js";
 import { initWsHub } from "./wsHub.js";
+import { listChatMessagesByDay, persistChatMessage } from "./chatDb.js";
+import { sanitizeUserChatPayload } from "./chatMessages.js";
 
 const app = express();
 const server = http.createServer(app);
@@ -204,6 +209,11 @@ function sanitizeProfilePatch(body = {}) {
   };
 }
 
+function sanitizeChatDayKey(value = "") {
+  const dayKey = String(value || "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(dayKey) ? dayKey : "";
+}
+
 function buildCommentTree(comments, currentUserId) {
   const nodes = comments.map((item) => {
     const reactions = Array.isArray(item.reactions) ? item.reactions : [];
@@ -352,6 +362,24 @@ app.patch("/api/me", requireAuth, (req, res) => {
   return res.json({ token, user: serializeUser(updated) });
 });
 
+app.get("/api/chat/messages", requireAuth, (req, res) => {
+  const dayKey = sanitizeChatDayKey(req.query.dayKey || "");
+  if (!dayKey) {
+    return res.status(400).json({ message: "dayKey is required" });
+  }
+  return res.json({ messages: listChatMessagesByDay(dayKey) });
+});
+
+app.post("/api/chat/messages", requireAuth, (req, res) => {
+  const sanitized = sanitizeUserChatPayload(req.body || {}, req.auth.sub);
+  if (!sanitized) {
+    return res.status(400).json({ message: "聊天室消息格式无效" });
+  }
+  const stored = persistChatMessage(sanitized);
+  wsHub.broadcastToChatUsers({ type: "chat-room-message", payload: stored });
+  return res.json({ message: stored });
+});
+
 app.get("/api/file-comments", requireAuth, (req, res) => {
   const fileId = String(req.query.fileId || "").trim();
   if (!fileId) {
@@ -463,6 +491,140 @@ app.post("/api/file-danmaku", requireAuth, (req, res) => {
     item: serializedItem,
     danmaku: serializeDanmakuItems(listFileDanmaku(fileId))
   });
+});
+
+app.get("/api/tv/sources", requireAuth, (req, res) => {
+  return res.json({ sources: listTvSources() });
+});
+
+app.post("/api/tv/sources", requireAuth, (req, res) => {
+  const label = String(req.body?.label || "").trim();
+  const url   = String(req.body?.url   || "").trim() || null;
+  const content = typeof req.body?.content === "string" ? req.body.content : null;
+  const channelCount = Number(req.body?.channelCount) || 0;
+  if (!label || channelCount < 1) {
+    return res.status(400).json({ error: "label and channelCount >= 1 required" });
+  }
+  if (!url && !content) {
+    return res.status(400).json({ error: "url or content required" });
+  }
+  if (url) {
+    let parsed;
+    try { parsed = new URL(url); } catch {
+      return res.status(400).json({ error: "invalid url" });
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return res.status(400).json({ error: "unsupported protocol" });
+    }
+  }
+  const entity = saveTvSource({ label, url, content, channelCount });
+  return res.json({ source: entity });
+});
+
+app.delete("/api/tv/sources/:id", requireAuth, (req, res) => {
+  const id = String(req.params.id || "").trim();
+  if (!id) return res.status(400).json({ error: "id required" });
+  deleteTvSource(id);
+  return res.json({ ok: true });
+});
+
+// HLS stream proxy — fetches any HLS resource server-side, rewrites M3U8 segment URLs
+// to go through this proxy so the browser avoids CORS/mixed-content issues.
+app.get("/api/tv/stream", requireAuth, async (req, res) => {
+  const raw = String(req.query.url || "").trim();
+  if (!raw) return res.status(400).json({ error: "url required" });
+  let parsed;
+  try { parsed = new URL(raw); } catch {
+    return res.status(400).json({ error: "invalid url" });
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return res.status(400).json({ error: "unsupported protocol" });
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const upstream = await fetch(raw, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+        "Accept": "application/x-mpegURL, application/vnd.apple.mpegurl, video/mp2t, */*",
+      },
+    });
+    clearTimeout(timer);
+    if (!upstream.ok) {
+      return res.status(502).json({ error: "upstream error", status: upstream.status });
+    }
+    const contentType = (upstream.headers.get("content-type") || "").toLowerCase();
+    const pathNoQuery = raw.split("?")[0];
+    const isM3u8 = contentType.includes("mpegurl") || contentType.includes("x-mpegurl") ||
+                   /\.m3u8$/i.test(pathNoQuery);
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Cache-Control", "no-cache");
+    if (isM3u8) {
+      const text = await upstream.text();
+      // Build base URL for resolving relative paths in the manifest
+      const pathParts = parsed.pathname.split("/");
+      pathParts.pop();
+      const base = `${parsed.protocol}//${parsed.host}${pathParts.join("/")}/`;
+      const toProxy = (urlStr) => {
+        let abs;
+        if (/^https?:\/\//i.test(urlStr)) { abs = urlStr; }
+        else if (urlStr.startsWith("//")) { abs = `https:${urlStr}`; }
+        else if (urlStr.startsWith("/")) { abs = `${parsed.protocol}//${parsed.host}${urlStr}`; }
+        else { abs = base + urlStr; }
+        return `/api/tv/stream?url=${encodeURIComponent(abs)}`;
+      };
+      const rewritten = text.split(/\r?\n/).map((line) => {
+        const t = line.trim();
+        if (!t || t.startsWith("#")) return line;
+        // EXT-X-KEY URI rewrite
+        if (/^#EXT-X-KEY/i.test(t)) {
+          return line.replace(/URI="([^"]+)"/, (_, u) => `URI="${toProxy(u)}"`);
+        }
+        return toProxy(t);
+      }).join("\n");
+      res.setHeader("Content-Type", "application/vnd.apple.mpegurl; charset=utf-8");
+      return res.send(rewritten);
+    } else {
+      // Binary segment (TS, AAC key, etc.) — stream through
+      res.setHeader("Content-Type", contentType || "video/mp2t");
+      const { Readable } = await import("node:stream");
+      return Readable.fromWeb(upstream.body).pipe(res);
+    }
+  } catch (err) {
+    clearTimeout(timer);
+    if (!res.headersSent) {
+      return res.status(502).json({ error: "fetch failed", detail: err.message });
+    }
+  }
+});
+
+app.get("/api/tv/playlist", requireAuth, async (req, res) => {
+  const raw = String(req.query.url || "").trim();
+  if (!raw) return res.status(400).json({ error: "url required" });
+  let parsed;
+  try { parsed = new URL(raw); } catch {
+    return res.status(400).json({ error: "invalid url" });
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return res.status(400).json({ error: "unsupported protocol" });
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const upstream = await fetch(raw, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!upstream.ok) {
+      return res.status(502).json({ error: "upstream error", status: upstream.status });
+    }
+    const text = await upstream.text();
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    return res.send(text);
+  } catch (err) {
+    clearTimeout(timer);
+    return res.status(502).json({ error: "fetch failed", detail: err.message });
+  }
 });
 
 app.get("/api/files", requireAuth, (req, res) => {

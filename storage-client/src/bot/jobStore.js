@@ -35,6 +35,17 @@ export class BotJobStore {
     }
   }
 
+  async waitForPendingLog(jobId) {
+    const pending = this.logQueues.get(jobId);
+    if (!pending) {
+      return;
+    }
+    try {
+      await pending;
+    } catch {
+    }
+  }
+
   async save(job) {
     if (!job?.jobId) {
       throw new Error("jobId is required");
@@ -57,13 +68,16 @@ export class BotJobStore {
       }
     });
     this.writeQueues.set(job.jobId, trackedTask);
-    await trackedTask;
+    // Update in-memory cache immediately so callers (status events, WS broadcasts) are not
+    // blocked by disk I/O — the write continues in the background via the serialized queue.
     this.jobCache.set(job.jobId, next);
     return next;
   }
 
   async get(jobId) {
     try {
+      // Cache is always up-to-date after save() returns synchronously, so no need to wait
+      // for pending disk writes before checking it.
       await this.waitForPendingWrite(jobId);
       const cached = this.jobCache.get(jobId);
       if (cached) {
@@ -93,5 +107,35 @@ export class BotJobStore {
     });
     this.logQueues.set(jobId, trackedTask);
     await trackedTask;
+  }
+
+  async readLog(jobId, options = {}) {
+    await this.init();
+    await this.waitForPendingLog(jobId);
+    const maxBytes = Math.max(1024, Math.min(Number(options.maxBytes || 64 * 1024), 512 * 1024));
+    try {
+      const content = await fs.promises.readFile(this.getLogPath(jobId), "utf-8");
+      if (content.length <= maxBytes) {
+        return {
+          jobId,
+          content,
+          truncated: false
+        };
+      }
+      return {
+        jobId,
+        content: content.slice(content.length - maxBytes),
+        truncated: true
+      };
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        return {
+          jobId,
+          content: "",
+          truncated: false
+        };
+      }
+      throw error;
+    }
   }
 }

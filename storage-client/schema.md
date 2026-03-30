@@ -725,8 +725,11 @@ Bot id:
 
 Input:
 
+- optional action: login/status/logout/relogin
 - source: BV id or Bilibili URL
 - optional targetFolder
+- optional page: 1-based 分 P 序号
+- optional quality: 期望清晰度，例如 1080p、720p、4k、80
 
 Behavior:
 
