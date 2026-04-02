@@ -1,4 +1,5 @@
 import { createAiChatPlugin } from "./plugins/ai-chat.js";
+import { createTorrentDownloaderPlugin } from "./plugins/torrent.js";
 import { createBilibiliDownloaderPlugin } from "./plugins/bilibili.js";
 import { createMusicControlPlugin } from "./plugins/music.js";
 import { createMultimodalImagePlugin } from "./plugins/multimodal-image.js";
@@ -35,6 +36,7 @@ export class BotRegistry {
     this.register(createMusicControlPlugin());
     this.register(createAiChatPlugin());
     this.register(createMultimodalImagePlugin());
+    this.register(createTorrentDownloaderPlugin());
     return this;
   }
 

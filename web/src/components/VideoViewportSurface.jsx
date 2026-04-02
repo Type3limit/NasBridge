@@ -155,9 +155,12 @@ export default function VideoViewportSurface({
       }}
       onDoubleClick={onDoubleClick}
       onClick={onClick}
+      onTouchStart={revealControls}
     >
-      {children}
-      {overlay}
+      <div className="videoViewportMedia">
+        {children}
+        {overlay}
+      </div>
       {controls ? <div className="videoViewportControls">{controls}</div> : null}
     </div>
   );

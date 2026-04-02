@@ -5,6 +5,7 @@ import { listReferencedChatAttachments } from "./chatAssets.js";
 import { invokeMultimodalModel, invokeTextModel } from "./llmClient.js";
 import { fetchWebPageSummary, getSourcePreferenceLabel, normalizeSourcePreference, searchWeb } from "./httpFetch.js";
 import { buildRealtimeContextText } from "./realtimeContext.js";
+import { searchYYeTsShows, getYYeTsResource, extractEpisodeMagnets, sanitizeShowName } from "./yyetsApi.js";
 
 const MAX_HISTORY_LIMIT = 60;
 const MAX_IMAGE_TOOL_LIMIT = 3;
@@ -399,6 +400,35 @@ export function getAiToolDefinitions() {
           preferredSource: { type: "string", enum: ["", "official", "github", "docs", "news"] },
           maxResults: { type: "integer", minimum: 1, maximum: MAX_WEB_SEARCH_RESULTS },
           fetchPages: { type: "integer", minimum: 0, maximum: MAX_WEB_PAGE_SUMMARIES }
+        }
+      }
+    },
+    {
+      name: "search_yyets_show",
+      description: "在 YYeTs（人人影视）资源站搜索剧集、电影，返回资源 ID 和名称列表。找到后再调用 download_yyets_episodes 按剧集下载磁力。",
+      inputSchema: {
+        type: "object",
+        required: ["keyword"],
+        properties: {
+          keyword: { type: "string", description: "搜索关键词，如剧集中文名或英文名" }
+        }
+      }
+    },
+    {
+      name: "download_yyets_episodes",
+      description: "根据 YYeTs 资源 ID 批量提取磁力链接并交给 torrent.downloader 下载，下载内容保存在以剧集名命名的专属文件夹。通常先调用 search_yyets_show 获得 resource_id 再调用本工具。",
+      inputSchema: {
+        type: "object",
+        required: ["resource_id"],
+        properties: {
+          resource_id: { type: "string", description: "YYeTs 资源 ID（从 search_yyets_show 返回）" },
+          season_num: { type: "string", description: "季号，如 \"1\"、\"2\"；单剧/电影填 \"101\"；不填则所有季" },
+          episodes: {
+            type: "array",
+            items: { type: ["string", "integer"] },
+            description: "集号列表，如 [1, 2, 3]；不填则全季"
+          },
+          max_episodes: { type: "integer", minimum: 1, maximum: 50, description: "最多下载集数，默认 10" }
         }
       }
     }
@@ -814,6 +844,98 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
       preferredSourceLabel: getSourcePreferenceLabel(plan.preferredSource || preferredSource),
       resultCount: enrichedResults.length,
       results: enrichedResults
+    });
+  }
+
+  if (name === "search_yyets_show") {
+    const keyword = String(input.keyword || "").trim();
+    if (!keyword) {
+      throw new Error("keyword is required");
+    }
+    await api.emitProgress({ phase: "tool-search-yyets", label: `搜索 YYeTs：${keyword}`, percent: 42 });
+    const results = await searchYYeTsShows(keyword, api.signal);
+    return safeJson({
+      keyword,
+      count: results.length,
+      results
+    });
+  }
+
+  if (name === "download_yyets_episodes") {
+    const resourceId = String(input.resource_id || "").trim();
+    if (!resourceId) {
+      throw new Error("resource_id is required");
+    }
+    const seasonNum = input.season_num ? String(input.season_num).trim() : undefined;
+    const episodes = Array.isArray(input.episodes) && input.episodes.length
+      ? input.episodes.map((ep) => String(ep))
+      : undefined;
+    const maxEpisodes = clamp(input.max_episodes ?? 10, 1, 50);
+
+    await api.emitProgress({ phase: "tool-yyets-fetch", label: `获取 YYeTs 资源详情（id=${resourceId}）`, percent: 42 });
+    const resourceData = await getYYeTsResource(resourceId, api.signal);
+    const cnname = sanitizeShowName(resourceData?.info?.cnname || resourceId);
+
+    await api.emitProgress({ phase: "tool-yyets-magnets", label: `提取磁力链接：${cnname}`, percent: 50 });
+    const magnets = extractEpisodeMagnets(resourceData, { seasonNum, episodes, maxEpisodes });
+
+    if (!magnets.length) {
+      return safeJson({
+        status: "no_magnets",
+        cnname,
+        message: `未能从 YYeTs 找到资源 ${cnname} 的磁力链接（季号=${seasonNum ?? "全部"}，集号=${episodes?.join(",") ?? "全部"}）。可能仅提供网盘或电驴资源。`
+      });
+    }
+
+    const dispatched = [];
+    const failed = [];
+
+    await api.emitProgress({ phase: "tool-yyets-dispatch", label: `提交 ${magnets.length} 个磁力下载任务`, percent: 55 });
+
+    await Promise.allSettled(
+      magnets.map(async (item) => {
+        const seasonFolder = item.season_cn ? sanitizeShowName(item.season_cn) : "";
+        const targetFolder = ["TV shows", cnname, seasonFolder].filter(Boolean).join("/");
+        try {
+          const delegatedJob = await api.invokeBot({
+            botId: "torrent.downloader",
+            trigger: {
+              type: "tool-call",
+              rawText: item.magnet,
+              parsedArgs: {
+                source: item.magnet,
+                targetFolder,
+                __chatReplyMode: "new-chat-message"
+              }
+            },
+            options: {
+              delegatedBy: api.botId,
+              parentJobId: api.jobId,
+              toolName: name
+            }
+          });
+          dispatched.push({
+            episode: item.episode,
+            season_cn: item.season_cn,
+            name: item.name,
+            size: item.size,
+            format: item.format,
+            jobId: delegatedJob.jobId || "",
+            targetFolder
+          });
+        } catch (err) {
+          failed.push({ episode: item.episode, name: item.name, error: err.message });
+        }
+      })
+    );
+
+    return safeJson({
+      status: dispatched.length > 0 ? "dispatched" : "failed",
+      cnname,
+      season: seasonNum ?? "全部",
+      totalMagnets: magnets.length,
+      dispatched,
+      failed
     });
   }
 

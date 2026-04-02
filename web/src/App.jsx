@@ -3848,6 +3848,58 @@ export default function App() {
     );
   }
 
+  // ─── 移动端辅助函数 ───────────────────────────────────────────
+
+  // Android 回退键：在 moreNavigatedTab 子页面时，物理返回键回到更多抽屉
+  useEffect(() => {
+    if (!moreNavigatedTab) return;
+    window.history.pushState({ moreNav: true }, "");
+    const onPop = () => {
+      // 若当前处于全屏状态（如 TV 视频全屏），重新推入历史避免误触页面导航
+      if (document.fullscreenElement || document.webkitFullscreenElement) {
+        window.history.pushState({ moreNav: true }, "");
+        return;
+      }
+      setMoreNavigatedTab(null);
+      setMoreSheetOpen(true);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [moreNavigatedTab]);
+
+  // 移动端预览弹窗打开时：物理返回键关闭预览
+  useEffect(() => {
+    if (!previewOpen || !isMobile) return;
+    window.history.pushState({ previewBack: true }, "");
+    const onPop = () => {
+      if (document.fullscreenElement || document.webkitFullscreenElement) {
+        // 已在全屏中，重新推历史以防后退键退出全屏时误关预览
+        window.history.pushState({ previewBack: true }, "");
+        return;
+      }
+      // Android Chrome 在 requestFullscreen() 时会先触发 popstate，
+      // 此时 fullscreenElement 尚未赋值（转场中）。
+      // 延迟一帧再判断，让全屏转场有机会完成。
+      window.setTimeout(() => {
+        if (document.fullscreenElement || document.webkitFullscreenElement) {
+          window.history.pushState({ previewBack: true }, "");
+          return;
+        }
+        stopActivePreviewSession();
+      }, 60);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [previewOpen, isMobile]);
+
+  // 移动端切换回文件页时恢复滚动位置
+  useEffect(() => {
+    if (!isMobile || activeWorkspaceTab !== "explorer") return;
+    if (mobilePageContentRef.current) {
+      mobilePageContentRef.current.scrollTop = listScrollTop;
+    }
+  }, [activeWorkspaceTab, isMobile]);
+
   if (!token || !user) {
     return (
       <div className="page authPage">
@@ -4010,28 +4062,6 @@ export default function App() {
     );
   }
 
-  // ─── 移动端辅助函数 ───────────────────────────────────────────
-
-  // Android 回退键：在 moreNavigatedTab 子页面时，物理返回键回到更多抽屉
-  useEffect(() => {
-    if (!moreNavigatedTab) return;
-    window.history.pushState({ moreNav: true }, "");
-    const onPop = () => {
-      setMoreNavigatedTab(null);
-      setMoreSheetOpen(true);
-    };
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
-  }, [moreNavigatedTab]);
-
-  // 移动端切换回文件页时恢复滚动位置
-  useEffect(() => {
-    if (!isMobile || activeWorkspaceTab !== "explorer") return;
-    if (mobilePageContentRef.current) {
-      mobilePageContentRef.current.scrollTop = listScrollTop;
-    }
-  }, [activeWorkspaceTab, isMobile]);
-
   function handleMobileTabChange(id) {
     if (id === "more") {
       setMoreSheetOpen(true);
@@ -4048,262 +4078,9 @@ export default function App() {
     setActiveWorkspaceTab("more");
   }
 
-  function renderMobileActivePage() {
-    if (activeWorkspaceTab === "more" && moreNavigatedTab) {
-      return renderMoreSubPage(moreNavigatedTab);
-    }
-    if (activeWorkspaceTab === "chat") {
-      return (
-        <ChatRoom
-          authToken={token}
-          currentUser={user}
-          clients={clients}
-          p2p={p2p}
-          setMessage={setMessage}
-          getClientDisplayName={getClientDisplayName}
-          openMediaPreview={preview}
-          saveChatAttachmentToLibrary={saveChatAttachmentToLibrary}
-        />
-      );
-    }
-    if (activeWorkspaceTab === "overview") return renderOverviewPage();
-    if (activeWorkspaceTab === "tv") {
-      return (
-        <Suspense fallback={<Spinner size="large" />}>
-          <TVStream authToken={token} setMessage={setMessage} />
-        </Suspense>
-      );
-    }
-    return renderExplorerPage();
-  }
-
-  function renderMoreSubPage(tabId) {
+  function renderDialogs() {
     return (
-      <div className="mobileSubPage">
-        <div className="mobileSubPageHeader">
-          <button
-            type="button"
-            className="mobileBackButton"
-            onClick={() => {
-              setMoreNavigatedTab(null);
-              setMoreSheetOpen(true);
-            }}
-          >
-            ← 更多
-          </button>
-        </div>
-        {tabId === "transfers"     && renderTransfersPage()}
-        {tabId === "shares"        && renderSharesPage()}
-        {tabId === "terminals"     && renderTerminalsPage()}
-        {tabId === "admin-users"   && renderAdminUsersPage()}
-        {tabId === "admin-clients" && renderAdminClientsPage()}
-      </div>
-    );
-  }
-
-  function renderMobileLayout() {
-    const activeBadge = visibleUploadJobs.length + downloadingCount;
-    return (
-      <div className="page">
-        {renderToastViewport()}
-        {/* GlobalMusicPlayer 保持挂载以维持音频实例，CSS 隐藏悬浮 UI */}
-        <GlobalMusicPlayer p2p={p2p} clients={clients} user={user} onToast={setMessage} />
-        <div className="mobileApp">
-          {/* 顶栏 */}
-          <header className="mobileTopbar">
-            <div className="mobileTopbarBrand">
-              <Title3>NAS Console</Title3>
-            </div>
-            <div className="mobileTopbarActions">
-              <button
-                type="button"
-                className="iconActionButton mobileTopbarAvatarButton"
-                title="用户档案"
-                aria-label="用户档案"
-                onClick={() => setProfileOpen(true)}
-              >
-                <AvatarFace
-                  displayName={user.displayName}
-                  avatarUrl={user.avatarUrl}
-                  avatarClientId={user.avatarClientId}
-                  avatarPath={user.avatarPath}
-                  avatarFileId={user.avatarFileId}
-                  p2p={p2p}
-                  style={{ width: 30, height: 30 }}
-                />
-              </button>
-              <button
-                type="button"
-                className="iconActionButton mobileTopbarIconButton"
-                title="上传文件"
-                aria-label="上传文件"
-                onClick={() => setUploadOpen(true)}
-              >
-                <ArrowDownloadRegular />
-              </button>
-              <button
-                type="button"
-                className="iconActionButton mobileTopbarIconButton"
-                title="同步索引"
-                aria-label="同步索引"
-                onClick={() => refreshAll()}
-              >
-                {loading ? <Spinner size="tiny" /> : <ArrowSwapRegular />}
-              </button>
-            </div>
-          </header>
-
-          {/* 内容区 */}
-          <div
-            ref={mobilePageContentRef}
-            className={`mobilePageContent${activeWorkspaceTab === "chat" ? " chatMode" : ""}`}
-          >
-            {renderMobileActivePage()}
-          </div>
-
-          {/* 迷你音乐栏（有曲目时显示） */}
-          <MiniMusicBar />
-
-          {/* 底部导航栏 */}
-          <MobileBottomTabBar
-            activeTab={activeWorkspaceTab}
-            moreSheetOpen={moreSheetOpen}
-            onTabChange={handleMobileTabChange}
-            explorerBadge={filteredOnlineFiles.length > 0 ? String(filteredOnlineFiles.length) : null}
-            moreBadge={activeBadge > 0 ? String(activeBadge) : null}
-          />
-        </div>
-
-        {/* 更多抽屉（Portal 到 body） */}
-        <MobileMoreSheet
-          open={moreSheetOpen}
-          onClose={() => setMoreSheetOpen(false)}
-          onNavigate={handleMoreNavigate}
-          user={user}
-          transferCount={visibleUploadJobs.length + downloadingCount}
-          shareCount={shares.length}
-          onlineClientCount={onlineCount}
-          onLogout={logout}
-        />
-        {/* 筛选抽屉（Portal 到 body） */}
-        <MobileFilterSheet
-          open={filterSheetOpen}
-          onClose={() => setFilterSheetOpen(false)}
-          keyword={keyword}
-          columnFilter={columnFilter}
-          typeFilter={typeFilter}
-          sortBy={sortBy}
-          columns={columns}
-          onApply={({ keyword: k, columnFilter: c, typeFilter: t, sortBy: s }) => {
-            setKeyword(k);
-            setColumnFilter(c);
-            setTypeFilter(t);
-            setSortBy(s);
-            setFilterSheetOpen(false);
-          }}
-          onReset={() => {
-            setKeyword("");
-            setColumnFilter("all");
-            setTypeFilter("all");
-            setSortBy("createdAt");
-            setFilterSheetOpen(false);
-          }}
-        />
-      </div>
-    );
-  }
-
-  // 移动端早期返回（在桌面布局之前判断）
-  if (isMobile) {
-    return renderMobileLayout();
-  }
-
-  return (
-    <div className="page">
-      {renderToastViewport()}
-      <div className="shell appShell">
-        <header className="appTopbar surfaceCard">
-          <div className="topbarStart">
-            <button
-              type="button"
-              className={`workspaceFlyoutTrigger topbarFlyoutTrigger${navExpanded ? " active" : ""}`}
-              aria-label={navExpanded ? "收起工作区导航" : "展开工作区导航"}
-              title={navExpanded ? "收起工作区导航" : "展开工作区导航"}
-              onClick={() => setNavExpanded((prev) => !prev)}
-            >
-              <AppsListRegular />
-            </button>
-            <div className="brandBlock">
-              <div className="brandIdentity compact">
-                <Title3>NAS Console</Title3>
-                <GlobalMusicPlayer p2p={p2p} clients={clients} user={user} onToast={setMessage} />
-              </div>
-            </div>
-          </div>
-          <div className="topbarActions">
-            <button type="button" className="profileTrigger" onClick={() => setProfileOpen(true)}>
-              <AvatarFace
-                className="profileTriggerAvatar"
-                displayName={user.displayName}
-                avatarUrl={user.avatarUrl}
-                avatarClientId={user.avatarClientId}
-                avatarPath={user.avatarPath}
-                avatarFileId={user.avatarFileId}
-                p2p={p2p}
-              />
-              <span className="profileTriggerText">
-                <Text>{user.displayName} · {user.role === "admin" ? "管理员" : "成员"}</Text>
-                <Caption1>{user.email}</Caption1>
-              </span>
-            </button>
-            <button type="button" className="iconActionButton topbarIconButton" title="上传文件" aria-label="上传文件" onClick={() => setUploadOpen(true)}>
-              <ArrowDownloadRegular className="topbarUploadIcon" />
-            </button>
-            <button type="button" className="iconActionButton topbarIconButton" title="同步索引" aria-label="同步索引" onClick={() => refreshAll()}>
-              {loading ? <Spinner size="tiny" /> : <ArrowSwapRegular />}
-            </button>
-            <button type="button" className="iconActionButton topbarIconButton" title="退出" aria-label="退出" onClick={logout}>
-              <ArrowRightRegular />
-            </button>
-          </div>
-        </header>
-
-        <div className={`workspaceLayout${navExpanded ? " navExpanded" : ""}`}>
-          <aside className={`controlRail navRail${navExpanded ? " expanded" : ""}`}>
-            <Card className="surfaceCard panelCard workspaceNavCard">
-              <div className="workspaceNavHeader">
-                <Subtitle1>工作区导航</Subtitle1>
-                <Caption1>左侧切换模块，右侧展示对应页面内容。</Caption1>
-              </div>
-              <div className="workspaceNavList" role="tablist" aria-orientation="vertical">
-                {workspaceTabs.map((tab) => (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    role="tab"
-                    aria-selected={activeWorkspaceTab === tab.id}
-                    className={`workspaceNavButton${activeWorkspaceTab === tab.id ? " active" : ""}`}
-                    onClick={() => handleWorkspaceTabSelect(tab.id)}
-                    title={tab.label}
-                  >
-                    <span className="workspaceNavButtonMain">
-                      <span className="railSectionIcon workspaceNavIcon" aria-hidden="true">{tab.icon}</span>
-                      <span className="workspaceNavText">
-                        <span className="workspaceNavLabel">{tab.label}</span>
-                      </span>
-                    </span>
-                    <Badge appearance="outline" color={activeWorkspaceTab === tab.id ? "informative" : "subtle"}>{tab.meta}</Badge>
-                  </button>
-                ))}
-              </div>
-            </Card>
-          </aside>
-
-          <main className="mainCanvas">
-            {renderActiveWorkspacePage()}
-          </main>
-        </div>
-
+      <>
         {shareDialogOpen && shareTarget && (
           <div className="overlay drawerOverlay dialogOverlayRaised">
             <div className="modalWindow shareModal drawerSheet dialogModal" onClick={(event) => event.stopPropagation()}>
@@ -4539,7 +4316,7 @@ export default function App() {
                       }) : (
                         <div className="uploadEmptyState">
                           <Text>还没有选择本地文件</Text>
-                          <Caption1>先点上面的“选择本地文件”，选择后这里才会出现待上传列表。</Caption1>
+                          <Caption1>先点上面的"选择本地文件"，选择后这里才会出现待上传列表。</Caption1>
                         </div>
                       )}
                     </div>
@@ -4919,6 +4696,268 @@ export default function App() {
           onClose={() => setProfileOpen(false)}
           onSave={saveProfile}
         />
+      </>
+    );
+  }
+
+  function renderMobileActivePage() {
+    if (activeWorkspaceTab === "more" && moreNavigatedTab) {
+      return renderMoreSubPage(moreNavigatedTab);
+    }
+    if (activeWorkspaceTab === "chat") {
+      return (
+        <ChatRoom
+          authToken={token}
+          currentUser={user}
+          clients={clients}
+          p2p={p2p}
+          setMessage={setMessage}
+          getClientDisplayName={getClientDisplayName}
+          openMediaPreview={preview}
+          saveChatAttachmentToLibrary={saveChatAttachmentToLibrary}
+        />
+      );
+    }
+    if (activeWorkspaceTab === "overview") return renderOverviewPage();
+    if (activeWorkspaceTab === "tv") {
+      return (
+        <Suspense fallback={<Spinner size="large" />}>
+          <TVStream authToken={token} setMessage={setMessage} />
+        </Suspense>
+      );
+    }
+    return renderExplorerPage();
+  }
+
+  function renderMoreSubPage(tabId) {
+    return (
+      <div className="mobileSubPage">
+        <div className="mobileSubPageHeader">
+          <button
+            type="button"
+            className="mobileBackButton"
+            onClick={() => {
+              setMoreNavigatedTab(null);
+              setMoreSheetOpen(true);
+            }}
+          >
+            ← 更多
+          </button>
+        </div>
+        {tabId === "transfers"     && renderTransfersPage()}
+        {tabId === "shares"        && renderSharesPage()}
+        {tabId === "terminals"     && renderTerminalsPage()}
+        {tabId === "admin-users"   && renderAdminUsersPage()}
+        {tabId === "admin-clients" && renderAdminClientsPage()}
+      </div>
+    );
+  }
+
+  function renderMobileLayout() {
+    const activeBadge = visibleUploadJobs.length + downloadingCount;
+    return (
+      <div className="page">
+        {renderToastViewport()}
+        {/* GlobalMusicPlayer 保持挂载以维持音频实例，CSS 隐藏悬浮 UI */}
+        <GlobalMusicPlayer p2p={p2p} clients={clients} user={user} onToast={setMessage} />
+        <div className="mobileApp">
+          {/* 顶栏 */}
+          <header className="mobileTopbar">
+            <div className="mobileTopbarBrand">
+              <Title3>NAS Console</Title3>
+            </div>
+            <div className="mobileTopbarActions">
+              <button
+                type="button"
+                className="iconActionButton mobileTopbarAvatarButton"
+                title="用户档案"
+                aria-label="用户档案"
+                onClick={() => setProfileOpen(true)}
+              >
+                <AvatarFace
+                  className="mobileTopbarAvatar"
+                  displayName={user.displayName}
+                  avatarUrl={user.avatarUrl}
+                  avatarClientId={user.avatarClientId}
+                  avatarPath={user.avatarPath}
+                  avatarFileId={user.avatarFileId}
+                  p2p={p2p}
+                />
+              </button>
+              <button
+                type="button"
+                className="iconActionButton mobileTopbarIconButton"
+                title="上传文件"
+                aria-label="上传文件"
+                onClick={() => setUploadOpen(true)}
+              >
+                <ArrowDownloadRegular />
+              </button>
+              <button
+                type="button"
+                className="iconActionButton mobileTopbarIconButton"
+                title="同步索引"
+                aria-label="同步索引"
+                onClick={() => refreshAll()}
+              >
+                {loading ? <Spinner size="tiny" /> : <ArrowSwapRegular />}
+              </button>
+            </div>
+          </header>
+
+          {/* 内容区 */}
+          <div
+            ref={mobilePageContentRef}
+            className={`mobilePageContent${activeWorkspaceTab === "chat" ? " chatMode" : ""}`}
+          >
+            {renderMobileActivePage()}
+          </div>
+
+          {/* 迷你音乐栏（有曲目时显示） */}
+          <MiniMusicBar />
+
+          {/* 底部导航栏 */}
+          <MobileBottomTabBar
+            activeTab={activeWorkspaceTab}
+            moreSheetOpen={moreSheetOpen}
+            onTabChange={handleMobileTabChange}
+            explorerBadge={filteredOnlineFiles.length > 0 ? String(filteredOnlineFiles.length) : null}
+            moreBadge={activeBadge > 0 ? String(activeBadge) : null}
+          />
+        </div>
+
+        {/* 更多抽屉（Portal 到 body） */}
+        <MobileMoreSheet
+          open={moreSheetOpen}
+          onClose={() => setMoreSheetOpen(false)}
+          onNavigate={handleMoreNavigate}
+          user={user}
+          transferCount={visibleUploadJobs.length + downloadingCount}
+          shareCount={shares.length}
+          onlineClientCount={onlineCount}
+          onLogout={logout}
+        />
+        {/* 筛选抽屉（Portal 到 body） */}
+        <MobileFilterSheet
+          open={filterSheetOpen}
+          onClose={() => setFilterSheetOpen(false)}
+          keyword={keyword}
+          columnFilter={columnFilter}
+          typeFilter={typeFilter}
+          sortBy={sortBy}
+          columns={columns}
+          onApply={({ keyword: k, columnFilter: c, typeFilter: t, sortBy: s }) => {
+            setKeyword(k);
+            setColumnFilter(c);
+            setTypeFilter(t);
+            setSortBy(s);
+            setFilterSheetOpen(false);
+          }}
+          onReset={() => {
+            setKeyword("");
+            setColumnFilter("all");
+            setTypeFilter("all");
+            setSortBy("createdAt");
+            setFilterSheetOpen(false);
+          }}
+        />
+        {renderDialogs()}
+      </div>
+    );
+  }
+
+  // 移动端早期返回（在桌面布局之前判断）
+  if (isMobile) {
+    return renderMobileLayout();
+  }
+
+  return (
+    <div className="page">
+      {renderToastViewport()}
+      <div className="shell appShell">
+        <header className="appTopbar surfaceCard">
+          <div className="topbarStart">
+            <button
+              type="button"
+              className={`workspaceFlyoutTrigger topbarFlyoutTrigger${navExpanded ? " active" : ""}`}
+              aria-label={navExpanded ? "收起工作区导航" : "展开工作区导航"}
+              title={navExpanded ? "收起工作区导航" : "展开工作区导航"}
+              onClick={() => setNavExpanded((prev) => !prev)}
+            >
+              <AppsListRegular />
+            </button>
+            <div className="brandBlock">
+              <div className="brandIdentity compact">
+                <Title3>NAS Console</Title3>
+                <GlobalMusicPlayer p2p={p2p} clients={clients} user={user} onToast={setMessage} />
+              </div>
+            </div>
+          </div>
+          <div className="topbarActions">
+            <button type="button" className="profileTrigger" onClick={() => setProfileOpen(true)}>
+              <AvatarFace
+                className="profileTriggerAvatar"
+                displayName={user.displayName}
+                avatarUrl={user.avatarUrl}
+                avatarClientId={user.avatarClientId}
+                avatarPath={user.avatarPath}
+                avatarFileId={user.avatarFileId}
+                p2p={p2p}
+              />
+              <span className="profileTriggerText">
+                <Text>{user.displayName} · {user.role === "admin" ? "管理员" : "成员"}</Text>
+                <Caption1>{user.email}</Caption1>
+              </span>
+            </button>
+            <button type="button" className="iconActionButton topbarIconButton" title="上传文件" aria-label="上传文件" onClick={() => setUploadOpen(true)}>
+              <ArrowDownloadRegular className="topbarUploadIcon" />
+            </button>
+            <button type="button" className="iconActionButton topbarIconButton" title="同步索引" aria-label="同步索引" onClick={() => refreshAll()}>
+              {loading ? <Spinner size="tiny" /> : <ArrowSwapRegular />}
+            </button>
+            <button type="button" className="iconActionButton topbarIconButton" title="退出" aria-label="退出" onClick={logout}>
+              <ArrowRightRegular />
+            </button>
+          </div>
+        </header>
+
+        <div className={`workspaceLayout${navExpanded ? " navExpanded" : ""}`}>
+          <aside className={`controlRail navRail${navExpanded ? " expanded" : ""}`}>
+            <Card className="surfaceCard panelCard workspaceNavCard">
+              <div className="workspaceNavHeader">
+                <Subtitle1>工作区导航</Subtitle1>
+                <Caption1>左侧切换模块，右侧展示对应页面内容。</Caption1>
+              </div>
+              <div className="workspaceNavList" role="tablist" aria-orientation="vertical">
+                {workspaceTabs.map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeWorkspaceTab === tab.id}
+                    className={`workspaceNavButton${activeWorkspaceTab === tab.id ? " active" : ""}`}
+                    onClick={() => handleWorkspaceTabSelect(tab.id)}
+                    title={tab.label}
+                  >
+                    <span className="workspaceNavButtonMain">
+                      <span className="railSectionIcon workspaceNavIcon" aria-hidden="true">{tab.icon}</span>
+                      <span className="workspaceNavText">
+                        <span className="workspaceNavLabel">{tab.label}</span>
+                      </span>
+                    </span>
+                    <Badge appearance="outline" color={activeWorkspaceTab === tab.id ? "informative" : "subtle"}>{tab.meta}</Badge>
+                  </button>
+                ))}
+              </div>
+            </Card>
+          </aside>
+
+          <main className="mainCanvas">
+            {renderActiveWorkspacePage()}
+          </main>
+        </div>
+
+        {renderDialogs()}
 
       </div>
     </div>

@@ -6653,21 +6653,58 @@ button.chatAttachmentTile:disabled {
 
 .videoViewportSurface:fullscreen,
 .videoViewportSurface:-webkit-full-screen {
-  width: 100%;
-  height: 100%;
-  border-radius: 0;
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 0 !important;
   background: #020617;
+  /* 全屏时恢复 flex 列但让媒体区撑满，控制栏悬浮覆盖 */
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+/* 全屏：媒体区撑满可用高度，取消移动端 aspect-ratio 限制 */
+.videoViewportSurface:fullscreen .videoViewportMedia,
+.videoViewportSurface:-webkit-full-screen .videoViewportMedia {
+  flex: 1 1 auto !important;
+  height: auto !important;
+  aspect-ratio: unset !important;
+  border-radius: 0 !important;
+  width: 100% !important;
+}
+
+/* 全屏：视频帧与弹幕层回到绝对定位填满媒体区 */
+.videoViewportSurface:fullscreen .previewVideoViewportFrame,
+.videoViewportSurface:-webkit-full-screen .previewVideoViewportFrame {
+  position: absolute !important;
+  inset: 0 !important;
 }
 
 .videoViewportSurface:fullscreen .preview,
 .videoViewportSurface:-webkit-full-screen .preview,
 .videoViewportSurface:fullscreen .chatInlineVideoTile,
-.videoViewportSurface:-webkit-full-screen .chatInlineVideoTile,
-.videoViewportSurface:fullscreen .previewVideoViewportFrame,
-.videoViewportSurface:-webkit-full-screen .previewVideoViewportFrame {
+.videoViewportSurface:-webkit-full-screen .chatInlineVideoTile {
   width: 100%;
   height: 100%;
   border-radius: 0;
+}
+
+/* 全屏：控制栏恢复绝对定位，悬浮在视频底部 */
+.videoViewportSurface:fullscreen .videoViewportControls,
+.videoViewportSurface:-webkit-full-screen .videoViewportControls {
+  position: absolute !important;
+  left: 16px !important;
+  right: 16px !important;
+  bottom: 16px !important;
+  opacity: 0 !important;
+  transform: translateY(10px) !important;
+  pointer-events: none !important;
+}
+
+.videoViewportSurface.controlsVisible:fullscreen .videoViewportControls,
+.videoViewportSurface.controlsVisible:-webkit-full-screen .videoViewportControls {
+  opacity: 1 !important;
+  transform: translateY(0) !important;
+  pointer-events: auto !important;
 }
 
 .videoViewportControls {
@@ -6682,6 +6719,14 @@ button.chatAttachmentTile:disabled {
   transition: opacity 160ms ease, transform 160ms ease;
 }
 
+.videoViewportMedia {
+  position: relative;
+  /* 桌面端：撑满父元素（父元素由 previewBody 网格给定高度）*/
+  width: 100%;
+  height: 100%;
+}
+
+/* 移动端在媒体查询里会用 height: auto + aspect-ratio 覆盖 */
 .videoViewportSurface.controlsVisible .videoViewportControls {
   opacity: 1;
   transform: translateY(0);
@@ -8944,6 +8989,172 @@ button.chatAttachmentTile:disabled {
   .debugHighlightGrid {
     grid-template-columns: 1fr 1fr;
   }
+
+  /* ── 移动端预览弹窗：全屏 + 固定标题栏高度 ── */
+
+  /* overlay 全屏拉伸（在 760px 宽度范围内统一处理，不再只靠 520px 分支） */
+  .previewOverlay {
+    padding: 0;
+    align-items: stretch;
+    justify-content: stretch;
+  }
+
+  /* 模态占满整个视口 */
+  .previewOverlay .previewModal {
+    width: 100vw;
+    height: 100dvh;
+    max-width: 100vw;
+    max-height: 100dvh;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+    /* 固定 44px 标题栏，视频区始终可见 */
+    grid-template-rows: 44px minmax(0, 1fr);
+  }
+
+  /* 固定标题栏高度：防止字体/按钮大小影响比例 */
+  .previewOverlay .previewTopBar {
+    height: 44px;
+    min-height: 44px;
+    max-height: 44px;
+    padding: 0 8px;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  /* 标题栏按钮稍小，节省空间 */
+  .previewOverlay .previewToolbarButton {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+  }
+
+  /* 隐藏 mime 类型，标题显示更多 */
+  .previewOverlay .previewHeaderMime {
+    display: none;
+  }
+
+  /* 视频区自适应高度（不再限制 45vh），评论区占余下空间 */
+  .previewOverlay .previewBody {
+    grid-template-rows: auto minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  /* 播放区去掉多余 padding，节省空间；min-height 保证加载时 spinner 可见 */
+  .previewOverlay .playerSurface {
+    padding: 6px 8px;
+    min-height: 180px;
+  }
+
+  /* 评论侧栏在移动端可滚动，不受旧的 38vh 限制 */
+  .previewOverlay .previewSidePanel {
+    max-height: none;
+    overflow-y: auto;
+  }
+
+  /* ═══════════════════════════════════════════════
+     移动端视频预览：仿 Bilibili 竖屏布局
+     视频区（16:9）在上，控制栏在视频正下方（流式排列）
+
+     关键：previewVideoViewport 和 videoViewportSurface 是同一个元素，
+     必须直接对 .previewVideoViewport 设置 flex-column，
+     不能用 .previewVideoViewport .videoViewportSurface（后代选择器永远匹配不到）
+     ═══════════════════════════════════════════════ */
+
+  /* Surface 本身：flex 列，高度由内容决定 */
+  .previewOverlay .previewVideoViewport {
+    display: flex !important;
+    flex-direction: column !important;
+    height: auto !important;
+    background: #020617;
+  }
+
+  /* 视频媒体区：16:9 比例，不因 flex 拉伸 */
+  .previewOverlay .previewVideoViewport .videoViewportMedia {
+    width: 100%;
+    height: auto !important;        /* 覆盖基础 CSS 的 height:100% */
+    aspect-ratio: 16 / 9;
+    flex-shrink: 0;
+    position: relative;
+    overflow: hidden;
+    background: #020617;
+    border-radius: 10px 10px 0 0;
+  }
+
+  /* 视频帧：填满媒体区 */
+  .previewOverlay .previewVideoViewport .previewVideoViewportFrame {
+    position: absolute;
+    inset: 0;
+  }
+
+  /* 弹幕层：相对 videoViewportMedia 定位 */
+  .previewOverlay .previewVideoViewport .previewDanmakuLayer {
+    inset: 8px;
+  }
+
+  /* 控制栏：脱离绝对定位，流入文档流排列在视频下方 */
+  .previewOverlay .previewVideoViewport .videoViewportControls {
+    position: static !important;
+    opacity: 1 !important;
+    transform: none !important;
+    pointer-events: auto !important;
+  }
+
+  /* 隐藏弹幕发送区（多行换行会撑高控制栏） */
+  .previewOverlay .previewVideoViewport .previewPlayerExtra {
+    display: none;
+  }
+
+  /* 隐藏 PiP / 页面铺满按钮，仅保留全屏 */
+  .previewOverlay .previewVideoViewport [aria-label="画中画"],
+  .previewOverlay .previewVideoViewport [aria-label="退出画中画"],
+  .previewOverlay .previewVideoViewport [aria-label="页面铺满"],
+  .previewOverlay .previewVideoViewport [aria-label="退出页面铺满"] {
+    display: none;
+  }
+
+  /* 控制面板：无缝接续视频底部 */
+  .previewOverlay .previewVideoViewport .previewDanmakuPanel {
+    border-radius: 0 0 10px 10px;
+    border-top: none;
+    padding: 6px 12px 10px;
+    gap: 0;
+  }
+
+  /* ── 仿 Bilibili 竖屏控制栏：
+     第一行：[⏸]  [时间·flex]  [⛶全屏]
+     第二行：[══════════进度条·全宽══════════]
+  ── */
+  .previewOverlay .previewVideoViewport .previewTransportBar {
+    flex-wrap: wrap;
+    gap: 2px 6px;
+    align-items: center;
+    padding: 4px 0 2px;
+  }
+
+  .previewOverlay .previewVideoViewport .previewTransportMeta.playback {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    justify-content: flex-start;
+  }
+
+  .previewOverlay .previewVideoViewport .previewTransportActions {
+    flex: 0 0 auto;
+    width: auto;
+    gap: 2px;
+    margin-left: 0;
+  }
+
+  /* 进度条独占第二行，全宽 */
+  .previewOverlay .previewVideoViewport .previewTimelineBlock {
+    order: 10;
+    flex: 1 1 100%;
+    min-width: 0;
+    height: 20px;
+    padding: 0;
+  }
 }
 
 @media (max-width: 520px) {
@@ -9194,6 +9405,24 @@ button.chatAttachmentTile:disabled {
     overflow-x: hidden;
   }
 
+  /* 移动端预览播放器控制栏：强制单行不换行 */
+  .previewOverlay .previewTransportBar {
+    flex-wrap: nowrap;
+    gap: 6px;
+    overflow: hidden;
+  }
+
+  .previewOverlay .previewTransportMeta.playback {
+    width: auto;
+    min-width: 0;
+    flex: 0 0 auto;
+  }
+
+  .previewOverlay .previewDanmakuInputShell {
+    flex: 1 1 0;
+    min-width: 40px;
+  }
+
   .previewOverlay .previewTopBar .fui-Subtitle1,
   .previewOverlay .previewTopBar .fui-Caption1 {
     white-space: normal;
@@ -9285,6 +9514,29 @@ button.chatAttachmentTile:disabled {
   min-width: 44px;
   min-height: 44px;
   border-radius: 10px;
+  overflow: hidden;
+}
+
+.mobileTopbarAvatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.16), rgba(37, 99, 235, 0.2));
+  color: var(--accent);
+  font-weight: 800;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.mobileTopbarAvatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .mobileTopbarIconButton {
@@ -9643,21 +9895,14 @@ button.chatAttachmentTile:disabled {
     max-height: 56vw;
   }
 
-  /* TV 频道列表水平滚动 */
+  /* TV 频道列表纵向滚动 */
   .mobilePageContent .tvChannelList {
-    display: flex;
-    flex-direction: row;
-    overflow-x: auto;
-    overflow-y: hidden;
-    gap: 8px;
-    padding: 8px 14px;
-    scroll-snap-type: x mandatory;
-    -webkit-overflow-scrolling: touch;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
 
   .mobilePageContent .tvChannelItem {
-    flex-shrink: 0;
-    scroll-snap-align: start;
+    width: 100%;
   }
 
   /* 上传工作台单列 */
@@ -9690,12 +9935,20 @@ button.chatAttachmentTile:disabled {
     overflow-y: auto;
   }
 
-  /* 聊天页：让 chatRoomShell 撑满内容区 */
+  /* 聊天页：让 chatRoomShell 撑满内容区，覆盖 720px 断点的 dvh 计算 */
   .mobilePageContent.chatMode .chatRoomShell {
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
+    height: 100% !important;
+  }
+
+  /* 聊天输入框在移动端不需要那么高 */
+  .mobilePageContent.chatMode .chatComposerInput {
+    min-height: 72px;
+    max-height: 24vh;
+  }
+
+  /* 确保 composer 不被 flex 压缩 */
+  .mobilePageContent.chatMode .chatComposerBar {
+    flex-shrink: 0;
   }
 
   /* 分享行外层支持换行 */
@@ -9990,5 +10243,60 @@ button.chatAttachmentTile:disabled {
 
 .mobileMinimusicBtn:active {
   background: var(--chip-bg, rgba(148, 163, 184, 0.18));
+}
+
+/* ══════════════════════════════════════════════════════════════
+   全屏覆写（必须置于文件末尾，覆盖所有 @media 中的 !important 规则）
+   根本原因：:fullscreen 与 @media(max-width:760px) 同等优先级，
+   后者因出现更晚而获胜；将全屏规则放到文件绝对末尾解决此问题。
+   ══════════════════════════════════════════════════════════════ */
+.videoViewportSurface:fullscreen,
+.videoViewportSurface:-webkit-full-screen {
+  display: flex !important;
+  flex-direction: column !important;
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 0 !important;
+  background: #020617 !important;
+}
+
+/* 全屏：媒体区填满可用高度，取消移动端 aspect-ratio 约束 */
+.videoViewportSurface:fullscreen .videoViewportMedia,
+.videoViewportSurface:-webkit-full-screen .videoViewportMedia {
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  height: auto !important;
+  aspect-ratio: unset !important;
+  border-radius: 0 !important;
+  position: relative !important;
+}
+
+/* 全屏：视频帧绝对定位填满媒体区 */
+.videoViewportSurface:fullscreen .previewVideoViewportFrame,
+.videoViewportSurface:-webkit-full-screen .previewVideoViewportFrame {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* 全屏：控制栏恢复绝对定位悬浮在视频底部 */
+.videoViewportSurface:fullscreen .videoViewportControls,
+.videoViewportSurface:-webkit-full-screen .videoViewportControls {
+  position: absolute !important;
+  left: 16px !important;
+  right: 16px !important;
+  bottom: 16px !important;
+  opacity: 0 !important;
+  transform: translateY(10px) !important;
+  pointer-events: none !important;
+}
+
+/* 全屏 + 用户交互时显示控制栏 */
+.videoViewportSurface.controlsVisible:fullscreen .videoViewportControls,
+.videoViewportSurface.controlsVisible:-webkit-full-screen .videoViewportControls {
+  opacity: 1 !important;
+  transform: translateY(0) !important;
+  pointer-events: auto !important;
 }
 

@@ -1206,10 +1206,14 @@ export default function PreviewModal({
       return;
     }
     if (typeof video.webkitEnterFullscreen === "function" && typeof viewport.requestFullscreen !== "function") {
+      // iOS Safari：直接调 video 原生全屏（自动横屏）
       video.webkitEnterFullscreen();
       return;
     }
     await requestElementFullscreen(viewport);
+    // 注意：不调用 screen.orientation.lock()。
+    // 在非 PWA 环境（普通网页）中，锁定方向在部分 Android 设备上会触发页面刷新。
+    // 横屏显示效果由全屏 CSS (@media orientation:landscape) 控制即可。
   }
 
   async function submitComment(parentId = null) {

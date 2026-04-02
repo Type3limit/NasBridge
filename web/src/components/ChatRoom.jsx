@@ -35,12 +35,28 @@ function parseChatBotInvocation(text = "") {
   if (!raw) {
     return null;
   }
-  const mentionMatch = raw.match(/(?:^|\s)@\s*(?<alias>ai|assistant|bili|bilibili)(?=\s|$)/i);
+  const mentionMatch = raw.match(/(?:^|\s)@\s*(?<alias>ai|assistant|bili|bilibili|dl|torrent|下载)(?=\s|$)/i);
   if (!mentionMatch?.groups?.alias) {
     return null;
   }
   const alias = String(mentionMatch.groups.alias || "").toLowerCase();
   const afterMention = raw.slice(mentionMatch.index + mentionMatch[0].length).trim();
+
+  // ── torrent / dl / 下载 bot ──
+  if (alias === "dl" || alias === "torrent" || alias === "下载") {
+    const source = afterMention.match(/magnet:\?[^\s]*/i)?.[0]
+      || afterMention.match(/https?:\/\/\S+/i)?.[0]
+      || "";
+    return {
+      botId: "torrent.downloader",
+      mention: mentionMatch[0].trim(),
+      source,
+      supported: Boolean(source),
+      rawText: raw,
+      parsedArgs: { source }
+    };
+  }
+
   if (alias === "ai" || alias === "assistant") {
     return {
       botId: "ai.chat",
@@ -122,7 +138,10 @@ function getBotExampleCommands(bot) {
       "@ai /model set gpt-4.1",
       "@ai /model gpt-4.1 解释这段聊天",
       "@ai @bili BV1xx...",
-      "@ai @music 点歌 晴天"
+      "@ai @music 点歌 晴天",
+      "@ai 帮我下载权力的游戏第一季",
+      "@ai 下载逃避可耻却有用全集",
+      "@ai 下载绝命毒师第三季第1到5集"
     ];
   }
   if (botId === "music.control") {
@@ -147,6 +166,13 @@ function getBotExampleCommands(bot) {
       "@bili https://www.bilibili.com/video/BV1xx... p=2 quality=720p"
     ];
   }
+  if (botId === "torrent.downloader") {
+    return [
+      "@dl magnet:?xt=urn:btih:...",
+      "@dl https://example.com/file.torrent",
+      "@dl magnet:?xt=urn:btih:... folder=movies"
+    ];
+  }
   const alias = Array.isArray(bot?.aliases) && bot.aliases.length ? bot.aliases[0] : botId;
   return [`@${alias} `];
 }
@@ -169,6 +195,12 @@ function getLocalizedBotMeta(bot = {}) {
     return {
       displayName: "Bilibili 下载助手",
       description: "根据 BV 号或视频链接下载 Bilibili 视频，并导入本地资源库。"
+    };
+  }
+  if (botId === "torrent.downloader") {
+    return {
+      displayName: "磁力下载助手",
+      description: "通过 webtorrent 下载磁力链接（magnet:?）及 .torrent 文件，自动入库。无需外部工具。"
     };
   }
   return {
