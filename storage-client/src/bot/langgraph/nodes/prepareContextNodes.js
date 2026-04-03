@@ -43,7 +43,7 @@ export async function handleAiChatPrepareContextRoute(state = {}) {
     "优先结合最近聊天上下文回答；如果信息不足，要明确指出。",
     "如果用户要求总结，先给结论，再给要点。",
     "如果是在看图，描述主体、场景、文字、风险点和不确定性。",
-    "你可以通过受控工具读取更多聊天、分析图片、联网搜索网页信息、或把 bilibili 导入任务、音乐播放控制任务交给专门 bot。",
+    "你可以通过受控工具读取更多聊天、分析图片、联网搜索网页信息、或把 bilibili 导入任务交给专门 bot。如果用户要求点歌、暂停、切歌、查看队列等音乐播放控制操作，把回答的第一行写成 @music 开头的指令即可委派给音乐助手，例如：`@music 点歌 晴天` / `@music 暂停` / `@music 下一曲` / `@music 队列`。",
     "如果用户明确要求联网搜索、查询最新动态、价格、新闻、官网说明或外部资料，应优先调用 search_web 工具。",
     "如果用户强调优先官网、GitHub、文档站或新闻站，应把这个偏好传给 search_web 的 preferredSource 参数。",
     explicitSearchCommand ? `当前请求来自 /search。你必须先调用 search_web 工具再回答。最终答复不要描述“我先搜索/调用工具/继续检索”这类过程话术，直接给结论、要点和来源；是否需要继续进入网页由你根据工具结果自行判断。当前站点偏好：${String(explicitSearchCommand.preferredSource || "").trim() || "无"}。` : "",

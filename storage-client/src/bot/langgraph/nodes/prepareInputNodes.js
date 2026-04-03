@@ -1,6 +1,6 @@
 import { parseModelDirective } from "../../plugins/ai-chat/parsers/modelDirectives.js";
 import { parseAiSessionDirective } from "../../plugins/ai-chat/parsers/sessionDirectives.js";
-import { findNaturalLanguageMusicInvocation, findNestedBotInvocation } from "../../plugins/ai-chat/selectors/botInvocations.js";
+import { findNestedBotInvocation } from "../../plugins/ai-chat/selectors/botInvocations.js";
 import { isImageAttachment, stripSelfMention, wantsVision } from "../../plugins/ai-chat/selectors/intents.js";
 import { formatAiSessionLabel, getAiSession } from "../../plugins/ai-chat/services/aiSessions.js";
 import { getEffectiveMultimodalModel, getEffectiveTextModel, readAiModelSettings } from "../../plugins/ai-chat/services/modelSettings.js";
@@ -93,25 +93,6 @@ export async function prepareAiChatGraphState(state = {}) {
             : `已委派给 ${nestedInvocation.target.displayName}`
         }
       };
-    } else {
-      const naturalMusicInvocation = findNaturalLanguageMusicInvocation(effectivePrompt, catalog);
-      if (naturalMusicInvocation) {
-        route = "delegate";
-        delegatedInvocation = {
-          kind: "natural-music",
-          invocation: naturalMusicInvocation,
-          options: {
-            triggerType: "delegated-from-ai-natural-language",
-            subtitle: modelOverride
-              ? `模型: ${modelOverride} · 已委派给 ${naturalMusicInvocation.target.displayName}`
-              : `已委派给 ${naturalMusicInvocation.target.displayName}`,
-            extraOptions: {
-              delegatedFromNaturalLanguage: true,
-              originalPrompt: effectivePrompt
-            }
-          }
-        };
-      }
     }
   }
 
