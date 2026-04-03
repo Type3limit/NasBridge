@@ -1204,6 +1204,11 @@ function getPreferredHlsProfileId(videoInfo, requestedProfile = defaultHlsProfil
     return matched.id;
   }
 
+  // "max" = 始终选可用的最高档位
+  if (normalizedRequested === "max") {
+    return availableProfiles[availableProfiles.length - 1]?.id || defaultHlsProfileId;
+  }
+
   const preferredDefault = availableProfiles.find((profile) => profile.id === defaultHlsProfileId);
   if (preferredDefault) {
     return preferredDefault.id;
@@ -1839,6 +1844,7 @@ async function generateSingleBitrateHls(inputFile, outputDir, profile = "720p", 
   }
 
   let selectedCodec = "";
+  let lastReportedProgress;
   await runFfmpegWithCodecFallback(
     (codec) => {
       const codecArgs = buildCodecArgs(codec, "hls", {
@@ -1896,9 +1902,12 @@ async function generateSingleBitrateHls(inputFile, outputDir, profile = "720p", 
       sourcePath: inputFile,
       onCodecSelected: (codec) => {
         selectedCodec = codec;
+        lastReportedProgress = undefined;
       },
       onProgress: (text) => {
         const progress = extractProgressFromFfmpegLog(text, durationSeconds);
+        if (progress === lastReportedProgress) return;
+        lastReportedProgress = progress;
         onProgress?.({
           stage: "transcoding",
           progress,

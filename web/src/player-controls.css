@@ -1,0 +1,676 @@
+﻿.iconActionButton {
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--text-soft);
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.iconActionButton:hover {
+  transform: translateY(-1px);
+  background: rgba(241, 245, 249, 0.98);
+  border-color: rgba(59, 130, 246, 0.22);
+  color: var(--text);
+}
+
+.iconActionButton.danger {
+  color: #dc2626;
+}
+
+.queueIconButton {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.miniListBadges {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.videoViewportSurface {
+  position: relative;
+}
+
+.videoViewportSurface:fullscreen,
+.videoViewportSurface:-webkit-full-screen {
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 0 !important;
+  background: #020617;
+  /* 鍏ㄥ睆鏃舵仮澶?flex 鍒椾絾璁╁獟浣撳尯鎾戞弧锛屾帶鍒舵爮鎮诞瑕嗙洊 */
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+/* 鍏ㄥ睆锛氬獟浣撳尯鎾戞弧鍙敤楂樺害锛屽彇娑堢Щ鍔ㄧ aspect-ratio 闄愬埗 */
+.videoViewportSurface:fullscreen .videoViewportMedia,
+.videoViewportSurface:-webkit-full-screen .videoViewportMedia {
+  flex: 1 1 auto !important;
+  height: auto !important;
+  aspect-ratio: unset !important;
+  border-radius: 0 !important;
+  width: 100% !important;
+}
+
+/* 鍏ㄥ睆锛氳棰戝抚涓庡脊骞曞眰鍥炲埌缁濆瀹氫綅濉弧濯掍綋鍖?*/
+.videoViewportSurface:fullscreen .previewVideoViewportFrame,
+.videoViewportSurface:-webkit-full-screen .previewVideoViewportFrame {
+  position: absolute !important;
+  inset: 0 !important;
+}
+
+.videoViewportSurface:fullscreen .preview,
+.videoViewportSurface:-webkit-full-screen .preview,
+.videoViewportSurface:fullscreen .chatInlineVideoTile,
+.videoViewportSurface:-webkit-full-screen .chatInlineVideoTile {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+}
+
+/* 鍏ㄥ睆锛氭帶鍒舵爮鎭㈠缁濆瀹氫綅锛屾偓娴湪瑙嗛搴曢儴 */
+.videoViewportSurface:fullscreen .videoViewportControls,
+.videoViewportSurface:-webkit-full-screen .videoViewportControls {
+  position: absolute !important;
+  left: 16px !important;
+  right: 16px !important;
+  bottom: 16px !important;
+  opacity: 0 !important;
+  transform: translateY(10px) !important;
+  pointer-events: none !important;
+}
+
+.videoViewportSurface.controlsVisible:fullscreen .videoViewportControls,
+.videoViewportSurface.controlsVisible:-webkit-full-screen .videoViewportControls {
+  opacity: 1 !important;
+  transform: translateY(0) !important;
+  pointer-events: auto !important;
+}
+
+.videoViewportControls {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  z-index: 4;
+  opacity: 0;
+  transform: translateY(10px);
+  pointer-events: none;
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.videoViewportMedia {
+  position: relative;
+  /* 妗岄潰绔細鎾戞弧鐖跺厓绱狅紙鐖跺厓绱犵敱 previewBody 缃戞牸缁欏畾楂樺害*/
+  width: 100%;
+  height: 100%;
+}
+
+/* 绉诲姩绔湪濯掍綋鏌ヨ閲屼細鐢?height: auto + aspect-ratio 瑕嗙洊 */
+.videoViewportSurface.controlsVisible .videoViewportControls {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.mediaViewport {
+  border-radius: 16px;
+}
+
+.previewVideoViewport {
+  position: relative;
+  background: #020617;
+  isolation: isolate;
+}
+
+.previewVideoViewport.pageFillActive,
+.previewModal.pageFillActive .previewVideoViewport {
+  flex: 1 1 auto;
+  min-height: 100%;
+  border-radius: 0;
+}
+
+.previewVideoViewportFrame {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.previewVideoViewport .preview {
+  height: 100%;
+  object-fit: contain;
+}
+
+.previewModal.pageFillActive .previewVideoViewport .preview {
+  border-radius: 0;
+}
+
+.previewDanmakuLayer {
+  position: absolute;
+  inset: 12px 12px 112px 12px;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.previewDanmakuItem {
+  position: absolute;
+  left: 0;
+  max-width: min(72%, 720px);
+  font-size: clamp(18px, 2vw, 28px);
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  text-shadow: 0 2px 3px rgba(0, 0, 0, 0.88), 0 0 10px rgba(0, 0, 0, 0.65);
+  will-change: transform, opacity;
+}
+
+.previewDanmakuItem span {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: rgba(2, 6, 23, 0.12);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+
+.previewDanmakuItem.scroll {
+  left: auto;
+  right: -8%;
+  animation-name: previewDanmakuScroll;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+.previewDanmakuItem.top,
+.previewDanmakuItem.bottom {
+  left: 50%;
+  transform: translateX(-50%);
+  animation-name: previewDanmakuFixed;
+  animation-timing-function: ease-out;
+  animation-fill-mode: forwards;
+}
+
+@keyframes previewDanmakuScroll {
+  from {
+    transform: translate3d(0, 0, 0);
+    opacity: 0;
+  }
+  8% {
+    opacity: 1;
+  }
+  to {
+    transform: translate3d(calc(-100vw - 120%), 0, 0);
+    opacity: 1;
+  }
+}
+
+@keyframes previewDanmakuFixed {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+  10% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+  90% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-6px);
+  }
+}
+
+.previewDanmakuPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(30, 41, 59, 0.72);
+  background: linear-gradient(180deg, rgba(13, 17, 26, 0.82), rgba(20, 24, 34, 0.72));
+  color: #f8fafc;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.28);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+}
+
+.previewPlayerBar {
+  gap: 10px;
+}
+
+.previewPlayerExtra {
+  min-width: 0;
+}
+
+.previewTransportBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.previewTransportMeta {
+  min-width: 120px;
+  justify-content: flex-start;
+}
+
+.previewTransportActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.previewDanmakuMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: auto;
+}
+
+.previewDanmakuMeta.playback {
+  min-width: 112px;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.previewDanmakuMeta .fui-Caption1 {
+  color: rgba(203, 213, 225, 0.72);
+}
+
+.previewPlaybackTime {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.previewPlaybackTime.current {
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f8fafc;
+  font-weight: 800;
+}
+
+.previewPlaybackTime.total {
+  color: rgba(226, 232, 240, 0.84);
+}
+
+.previewPlaybackSeparator {
+  color: rgba(148, 163, 184, 0.7);
+}
+
+.previewDanmakuComposer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 52px 90px auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.previewDanmakuComposer.singleLine {
+  grid-template-columns: auto minmax(0, 1fr) 52px 90px auto auto;
+}
+
+.previewDanmakuComposer.singleLine.unified {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  min-width: 0;
+  overflow: visible;
+  overflow-y: visible;
+}
+
+.previewDanmakuComposerBili {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+.previewDanmakuStatusBlock {
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.previewDanmakuStatusBlock .fui-Text {
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.previewDanmakuStatusBlock .fui-Caption1 {
+  color: rgba(203, 213, 225, 0.72);
+}
+
+.previewDanmakuComposer .fui-Input,
+.previewDanmakuComposer .fui-Input::before,
+.previewDanmakuComposer .fui-Input::after {
+  min-width: 0;
+}
+
+.previewDanmakuInput {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.previewTimelineBlock {
+  flex: 1 1 420px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+  height: 30px;
+  border-radius: 999px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.previewTimelineRange {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  min-width: 0;
+  height: 4px;
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+}
+
+.previewTimelineRange::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #f8fafc;
+  border: 2px solid rgba(56, 189, 248, 0.96);
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.32);
+}
+
+.previewTimelineRange::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #f8fafc;
+  border: 2px solid rgba(56, 189, 248, 0.96);
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.32);
+}
+
+.previewTimelineRange::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.previewDanmakuColor {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
+.previewDanmakuColor::-webkit-color-swatch-wrapper {
+  padding: 0;
+  border-radius: 50%;
+}
+
+.previewDanmakuColor::-webkit-color-swatch {
+  border: none;
+  border-radius: 50%;
+}
+
+.previewDanmakuColor::-moz-color-swatch {
+  border: none;
+  border-radius: 50%;
+}
+
+.previewDanmakuColorButton {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.42);
+  cursor: pointer;
+}
+
+.previewDanmakuModeGroup {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.previewModeChip {
+  border: none;
+  min-width: 28px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(226, 232, 240, 0.92);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.previewModeChip.iconOnly {
+  min-width: 26px;
+  width: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.previewModeGlyph {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.previewModeChip.active {
+  background: rgba(14, 165, 233, 0.22);
+  color: #f8fafc;
+}
+
+.previewControlButton {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.previewControlButton.active {
+  background: rgba(14, 165, 233, 0.2);
+  color: #f8fafc;
+  border-color: rgba(56, 189, 248, 0.28);
+}
+
+.debugHighlightCard.wide {
+  grid-column: 1 / -1;
+}
+
+.previewControlButton.primary {
+  background: linear-gradient(180deg, rgba(251, 191, 36, 0.96), rgba(245, 158, 11, 0.96));
+  color: #111827;
+  border-color: rgba(251, 191, 36, 0.4);
+}
+
+.previewControlButton.primary:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.previewControlGlyph {
+  font-size: 15px;
+  line-height: 1;
+}
+
+.previewControlGlyph.text {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.previewDanmakuSettingsWrap {
+  position: relative;
+  flex: 0 0 auto;
+  z-index: 12;
+}
+
+.previewDanmakuInputShell {
+  flex: 1 1 380px;
+  min-width: 0;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.previewDanmakuInputGlyph {
+  flex: 0 0 auto;
+  color: rgba(226, 232, 240, 0.82);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.previewDanmakuInputBili,
+.previewDanmakuInputBili::before,
+.previewDanmakuInputBili::after {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.previewDanmakuInputBili input {
+  color: #f8fafc;
+}
+
+.previewDanmakuInputBili input::placeholder {
+  color: rgba(203, 213, 225, 0.54);
+}
+
+.previewDanmakuEtiquetteButton {
+  height: 44px;
+  padding: 0 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(226, 232, 240, 0.86);
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.previewDanmakuEtiquetteButton.active,
+.previewDanmakuEtiquetteButton:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(125, 211, 252, 0.2);
+  color: #f8fafc;
+}
+
+.previewDanmakuSendButton {
+  flex: 0 0 auto;
+  height: 44px;
+  min-width: 96px;
+  padding: 0 24px;
+  border: none;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #22c1f1, #0ea5e9);
+  color: #fff;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 16px 28px rgba(14, 165, 233, 0.24);
+  transition: transform 0.15s ease, opacity 0.15s ease, box-shadow 0.15s ease;
+}
+
+.previewDanmakuSendButton:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 18px 30px rgba(14, 165, 233, 0.28);
+}
+
+.previewDanmakuSendButton:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.previewDanmakuSettingsPopup {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  width: min(300px, 72vw);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(15, 23, 42, 0.96);
+  box-shadow: 0 20px 40px rgba(2, 6, 23, 0.38);
+  z-index: 40;
+}
+
+.previewDanmakuSettingField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.previewDanmakuColorField {
+  align-items: flex-start;
+}
+
+.previewDanmakuSettingField .fui-Caption1 {
+  color: rgba(226, 232, 240, 0.84);
+}
+
+.previewDanmakuSettingField input[type="range"] {
+  width: 100%;
+}
+
+.frameViewport {
+  height: 100%;
+}

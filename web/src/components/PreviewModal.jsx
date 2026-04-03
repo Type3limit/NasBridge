@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Badge, Button, Caption1, Dropdown, Input, Option, Spinner, Subtitle1, Text } from "@fluentui/react-components";
-import { ArrowDownloadRegular, ArrowDownRegular, ArrowReplyRegular, ArrowUpRegular, BugRegular, ChevronDownRegular, ChevronUpRegular, DismissRegular, EditRegular, EyeRegular, SendRegular, SettingsRegular, ShareRegular, StarFilled, StarRegular } from "@fluentui/react-icons";
+import { ArrowDownloadRegular, ArrowDownRegular, ArrowReplyRegular, ArrowUpRegular, BugRegular, ChevronDownRegular, ChevronUpRegular, DismissRegular, EditRegular, EyeRegular, SendRegular, SettingsRegular, ShareRegular, StarFilled, StarRegular, StreamRegular } from "@fluentui/react-icons";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { apiRequest } from "../api";
@@ -303,6 +303,7 @@ export default function PreviewModal({
   onEdit,
   onShare,
   onDownload,
+  onOpenInLivingRoom,
   getClientDisplayName,
   formatBytes,
   formatRelativeTime,
@@ -862,6 +863,10 @@ export default function PreviewModal({
         });
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           setPreviewDebug((prev) => ({ ...prev, hlsState: "manifest-parsed", lastHlsEvent: "MANIFEST_PARSED" }));
+          // 默认选最高质量档位
+          if (hls.levels && hls.levels.length > 0) {
+            hls.currentLevel = hls.levels.length - 1;
+          }
           video.play().catch(() => {});
         });
         hls.on(Hls.Events.FRAG_LOADING, (_event, data) => {
@@ -1583,6 +1588,17 @@ export default function PreviewModal({
             <button type="button" className="iconActionButton previewToolbarButton" title="下载" aria-label="下载" onClick={onDownload}>
               <ArrowDownloadRegular />
             </button>
+            {onOpenInLivingRoom && (previewMime.startsWith("video/") || previewMime.startsWith("audio/")) ? (
+              <button
+                type="button"
+                className="iconActionButton previewToolbarButton"
+                title="大屏播放"
+                aria-label="大屏播放"
+                onClick={onOpenInLivingRoom}
+              >
+                <StreamRegular />
+              </button>
+            ) : null}
             <div className="previewToolbarPopupWrap">
               <button
                 type="button"

@@ -371,7 +371,7 @@ export function getAiToolDefinitions() {
         required: ["source"],
         properties: {
           source: { type: "string" },
-          targetFolder: { type: "string" },
+          targetFolder: { type: "string", description: "保存目录（相对于存储根目录）。不传则保存到根目录。示例：'movies'、'bilibili/教程'。" },
           page: { type: "integer", minimum: 1 },
           quality: { type: "string" }
         }

@@ -688,6 +688,16 @@ export default function App() {
 
   const [p2p, setP2p] = useState(null);
 
+  // 跨页面启动：大屏页「↗ 主页预览」跳回时自动打开 PreviewModal
+  const mainToPreviewLaunchRef = useRef((() => {
+    try {
+      const raw = sessionStorage.getItem("lr_to_main_preview");
+      if (!raw) return null;
+      sessionStorage.removeItem("lr_to_main_preview");
+      return JSON.parse(raw);
+    } catch { return null; }
+  })());
+
   function getDownloadJobId(file) {
     return `${file.clientId}|${file.path}`;
   }
@@ -1253,7 +1263,7 @@ export default function App() {
   function renderOverviewPage() {
     return (
       <section className="workspacePage">
-        <Card className="surfaceCard panelCard workspacePageCard commandCard">
+        <div className="workspacePageCard commandCard">
           <div className="workspacePageHeader">
             <div className="workspacePageTitleBlock">
               <Subtitle1>系统概览</Subtitle1>
@@ -1301,7 +1311,7 @@ export default function App() {
               <Text>{shares.length} 条</Text>
             </div>
           </div>
-        </Card>
+        </div>
       </section>
     );
   }
@@ -1309,7 +1319,7 @@ export default function App() {
   function renderTerminalsPage() {
     return (
       <section className="workspacePage">
-        <Card className="surfaceCard panelCard workspacePageCard">
+        <div className="workspacePageCard">
           <div className="workspacePageHeader">
             <div className="workspacePageTitleBlock">
               <Subtitle1>终端状态</Subtitle1>
@@ -1338,7 +1348,7 @@ export default function App() {
             ))}
             {!clients.length && <Caption1>暂无终端数据</Caption1>}
           </div>
-        </Card>
+        </div>
       </section>
     );
   }
@@ -1346,7 +1356,7 @@ export default function App() {
   function renderTransfersPage() {
     return (
       <section className="workspacePage">
-        <Card className="surfaceCard panelCard workspacePageCard">
+        <div className="workspacePageCard">
           <div className="workspacePageHeader">
             <div className="workspacePageTitleBlock">
               <Subtitle1>传输队列</Subtitle1>
@@ -1363,7 +1373,7 @@ export default function App() {
             {visibleUploadJobs.map((job) => renderTransferQueueRow(job, "upload"))}
             {!downloadJobs.length && !visibleUploadJobs.length && <Caption1>当前没有正在传输的任务</Caption1>}
           </div>
-        </Card>
+        </div>
       </section>
     );
   }
@@ -1371,7 +1381,7 @@ export default function App() {
   function renderSharesPage() {
     return (
       <section className="workspacePage">
-        <Card className="surfaceCard panelCard workspacePageCard">
+        <div className="workspacePageCard">
           <div className="workspacePageHeader">
             <div className="workspacePageTitleBlock">
               <Subtitle1>分享管理</Subtitle1>
@@ -1433,7 +1443,7 @@ export default function App() {
             ))}
             {!shares.length && <Caption1>当前还没有已生成的分享链接</Caption1>}
           </div>
-        </Card>
+        </div>
       </section>
     );
   }
@@ -1441,7 +1451,7 @@ export default function App() {
   function renderAdminUsersPage() {
     return (
       <section className="workspacePage">
-        <Card className="surfaceCard panelCard workspacePageCard">
+        <div className="workspacePageCard">
           <div className="workspacePageHeader">
             <div className="workspacePageTitleBlock">
               <Subtitle1>后台管理 - 用户</Subtitle1>
@@ -1462,7 +1472,7 @@ export default function App() {
             ))}
             {!users.length && <Caption1>暂无用户数据</Caption1>}
           </div>
-        </Card>
+        </div>
       </section>
     );
   }
@@ -1470,7 +1480,7 @@ export default function App() {
   function renderAdminClientsPage() {
     return (
       <section className="workspacePage">
-        <Card className="surfaceCard panelCard workspacePageCard">
+        <div className="workspacePageCard">
           <div className="workspacePageHeader">
             <div className="workspacePageTitleBlock">
               <Subtitle1>后台管理 - 存储终端</Subtitle1>
@@ -1500,7 +1510,7 @@ export default function App() {
             ))}
             {!clients.length && <Caption1>暂无存储终端数据</Caption1>}
           </div>
-        </Card>
+        </div>
       </section>
     );
   }
@@ -1508,7 +1518,7 @@ export default function App() {
   function renderExplorerPage() {
     return (
       <section className="workspacePage filePanel explorerPanel">
-        <Card className="surfaceCard panelCard explorerShell workspacePageCard">
+        <div className="explorerShell workspacePageCard">
           <div className="explorerTop">
             <div className="explorerTitleBlock">
               <Subtitle1>资源浏览器</Subtitle1>
@@ -1830,7 +1840,7 @@ export default function App() {
           {!currentExplorerEntries.length && !visibleUploadJobs.length && (
             <Text>{filteredOnlineFiles.length ? "当前目录下暂无内容，可返回上级继续查看。" : "暂无可用文件，等待在线存储终端上报。"}</Text>
           )}
-        </Card>
+        </div>
       </section>
     );
   }
@@ -2560,6 +2570,16 @@ export default function App() {
     refreshAll();
   }, [token]);
 
+  // 大屏页「↗ 主页预览」跳回时自动打开 PreviewModal
+  useEffect(() => {
+    const launch = mainToPreviewLaunchRef.current;
+    if (!launch || !p2p || !files.length) return;
+    const file = files.find((f) => f.id === launch.fileId);
+    if (!file) return;
+    mainToPreviewLaunchRef.current = null; // 消费，防止重复触发
+    preview(file);
+  }, [p2p, files]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (!token) return;
     let consecutiveErrors = 0;
@@ -3025,7 +3045,7 @@ export default function App() {
         Math.max(90_000, Math.ceil(Number(file.size || 0) / (1024 * 1024)) * 1200)
       );
       const fallbackDownloadTimeoutMs = Math.min(12 * 60 * 1000, Math.max(120_000, sizeBasedTimeoutMs));
-      const requestedHlsProfile = String(options.hlsProfile || "720p");
+      const requestedHlsProfile = String(options.hlsProfile || "max");
       const hlsCapability = isVideoMime(file.mimeType) && !options.forceTranscode && !options.skipHls
         ? await getHlsPlaybackSupport()
         : { supported: false, reason: "当前预览流程未启用 HLS" };
@@ -3060,7 +3080,8 @@ export default function App() {
                   }
                 }
               }),
-              Math.max(300000, sizeBasedTimeoutMs)
+              // 内层超时 480s × 2（单次重试）+ 60s 缓冲，外层必须比这长，否则在重试期间会过早超时
+              Math.max(480_000 * 2 + 60_000, sizeBasedTimeoutMs)
             );
             setPreviewName(file.name);
             setPreviewMime("video/mp4");
@@ -3692,6 +3713,44 @@ export default function App() {
     }
   }
 
+  const livingRoomWinRef = useRef(null);
+
+  function openInLivingRoom(file) {
+    // 关闭预览窗，停止本页播放
+    clearPreview();
+    setPreviewOpen(false);
+
+    const payload = {
+      id: file.id,
+      clientId: file.clientId,
+      path: file.path,
+      name: file.name,
+      mimeType: file.mimeType,
+      size: file.size
+    };
+    const win = livingRoomWinRef.current;
+    if (win && !win.closed) {
+      win.postMessage({ type: "lr_play_file", file: payload }, window.location.origin);
+      try { win.focus(); } catch { }
+      return;
+    }
+    // Broadcast to any existing living-room tab (works across sessions/reloads)
+    try {
+      const bc = new BroadcastChannel("nas_living_room_bc");
+      bc.postMessage({ type: "lr_play_file", file: payload });
+      bc.close();
+    } catch { }
+    // Write to sessionStorage for brand-new windows (consumed at module load)
+    try {
+      sessionStorage.setItem("lr_main_launch", JSON.stringify(payload));
+    } catch { }
+    const newWin = window.open("/living-room.html", "nas_living_room");
+    if (newWin) {
+      livingRoomWinRef.current = newWin;
+      try { newWin.focus(); } catch { }
+    }
+  }
+
   function renderFileActionTray(file, floating = false) {
     const deletingDisabled = isUploadingFile(file);
     return (
@@ -3742,6 +3801,17 @@ export default function App() {
         >
           <ArrowDownloadRegular />
         </button>
+        {(isVideoMime(file.mimeType) || isAudioMime(file.mimeType)) && (
+          <button
+            type="button"
+            className="actionChip"
+            title="大屏播放"
+            aria-label="大屏播放"
+            onClick={() => openInLivingRoom(file)}
+          >
+            <StreamRegular />
+          </button>
+        )}
         <button
           type="button"
           className="actionChip danger"
@@ -4675,6 +4745,7 @@ export default function App() {
               onEdit={previewTargetFile ? () => openEditFile(previewTargetFile) : undefined}
               onShare={previewTargetFile ? () => openShareDialog(previewTargetFile) : undefined}
               onDownload={() => download({ name: previewName, path: previewPath, clientId: previewClientId, mimeType: previewMime })}
+              onOpenInLivingRoom={previewTargetFile ? () => openInLivingRoom(previewTargetFile) : undefined}
               getClientDisplayName={getClientDisplayName}
               formatBytes={formatBytes}
               formatRelativeTime={formatRelativeTime}

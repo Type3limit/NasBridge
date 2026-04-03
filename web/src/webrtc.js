@@ -1455,7 +1455,10 @@ export class P2PBridge {
       }
 
       const message = JSON.parse(event.data);
-      this.log("channel-message", clientId, channelName, message.type, message.requestId || "-");
+      // Skip noisy high-frequency message types from the channel-message log
+      if (message.type !== "pong" && message.type !== "transcode-status") {
+        this.log("channel-message", clientId, channelName, message.type, message.requestId || "-");
+      }
 
       if (message.type === "pong") {
         this.lastPongTime.set(clientId, Date.now());

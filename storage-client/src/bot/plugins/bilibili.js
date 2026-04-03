@@ -19,7 +19,7 @@ import { launchPlaywrightBrowser, loadPlaywrightChromium } from "../tools/playwr
 import { createBotPlugin } from "./base.js";
 
 const ytDlpPath = process.env.YT_DLP_PATH || "yt-dlp";
-const bilibiliImportDir = process.env.BOT_BILIBILI_IMPORT_DIR || "downloads/bilibili";
+const bilibiliImportDir = process.env.BOT_BILIBILI_IMPORT_DIR ?? "";
 const bilibiliDownloadBackend = String(process.env.BOT_BILIBILI_DOWNLOAD_BACKEND || "playwright").trim().toLowerCase();
 const BILIBILI_AUTH_FILE_NAME = "bilibili-auth.json";
 const BILIBILI_COOKIE_FILE_NAME = "bilibili-cookies.json";
@@ -556,9 +556,11 @@ function parseInlineDownloadOptions(rawText = "") {
   const pageMatch = text.match(/(?:^|\s)(?:p|page|分p)\s*[=:]?\s*(\d{1,3})(?=\s|$)/i)
     || text.match(/(?:^|\s)P(\d{1,3})(?=\s|$)/);
   const qualityMatch = text.match(/(?:^|\s)(?:quality|qn|清晰度)\s*[=:]?\s*([^\s]+)/i);
+  const folderMatch = text.match(/(?:^|\s)(?:folder|dir|保存到|路径)\s*[=:]?\s*([^\s]+)/i);
   return {
     page: clampPositiveInteger(pageMatch?.[1], 0),
-    quality: String(qualityMatch?.[1] || "").trim()
+    quality: String(qualityMatch?.[1] || "").trim(),
+    targetFolder: String(folderMatch?.[1] || "").trim()
   };
 }
 
@@ -569,9 +571,11 @@ function resolveDownloadOptions(context = {}) {
   const inlineOptions = parseInlineDownloadOptions(context?.trigger?.rawText || "");
   const page = clampPositiveInteger(parsedArgs.page || parsedArgs.p || inlineOptions.page, 0);
   const quality = String(parsedArgs.quality || parsedArgs.qn || inlineOptions.quality || "").trim();
+  const targetFolder = String(parsedArgs.targetFolder || inlineOptions.targetFolder || "").trim();
   return {
     page,
     quality,
+    targetFolder,
     hasExplicitPage: page > 0,
     hasExplicitQuality: Boolean(quality)
   };
@@ -1730,7 +1734,7 @@ export function createBilibiliDownloaderPlugin() {
         await api.appendLog(`metadata probe failed: ${error.message || error}`);
       }
 
-      const targetFolder = sanitizeImportFolder(context?.trigger?.parsedArgs?.targetFolder || bilibiliImportDir) || bilibiliImportDir;
+      const targetFolder = sanitizeImportFolder(context?.trigger?.parsedArgs?.targetFolder || downloadOptions.targetFolder || bilibiliImportDir);
       const availableQualities = listAvailableQualities(metadata);
       const user = downloadOptions.hasExplicitQuality ? await resolveBilibiliUserProfile(api) : null;
       const normalizedRequestedQuality = downloadOptions.hasExplicitQuality

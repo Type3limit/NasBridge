@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button, Caption1, Spinner, Text, Title3 } from "@fluentui/react-components";
-import { ArrowDownloadRegular, ArrowLeftRegular } from "@fluentui/react-icons";
+import { ArrowDownloadRegular, ArrowLeftRegular, StreamRegular } from "@fluentui/react-icons";
 import { apiRequest } from "./api";
 import { P2PBridgePool } from "./webrtc";
 
@@ -334,7 +334,7 @@ export default function SharePage() {
       const hlsCapability = isVideoMime(target.mimeType) && !options.forceTranscode && !options.skipHls
         ? await getHlsPlaybackSupport()
         : { supported: false, reason: "当前预览流程未启用 HLS" };
-      const requestedHlsProfile = String(options.hlsProfile || "720p");
+      const requestedHlsProfile = String(options.hlsProfile || "max");
 
       if ((isVideoMime(target.mimeType) || isAudioMime(target.mimeType)) && hlsCapability.supported) {
         try {
@@ -352,7 +352,8 @@ export default function SharePage() {
                 }
               }
             }),
-            300000
+            // 内层超时 480s × 2（单次重试）+ 60s 缓冲
+            480_000 * 2 + 60_000
           );
           setPreviewName(target.name);
           setPreviewMime("video/mp4");
@@ -646,6 +647,24 @@ export default function SharePage() {
 
           <div className="shareStandaloneActions">
             <Button appearance="secondary" icon={<ArrowLeftRegular />} onClick={() => window.location.assign("/")}>返回首页</Button>
+            {(isVideoMime(file.mimeType) || isAudioMime(file.mimeType)) && (
+              <Button
+                appearance="primary"
+                icon={<StreamRegular />}
+                onClick={() => {
+                  try {
+                    sessionStorage.setItem("lr_share_launch", JSON.stringify({
+                      shareToken,
+                      file: { id: file.id, clientId: file.clientId, path: file.path, name: file.name, mimeType: file.mimeType, size: file.size },
+                      shareHref: window.location.href
+                    }));
+                  } catch { }
+                  window.location.assign("/living-room.html");
+                }}
+              >
+                大屏播放
+              </Button>
+            )}
             <Button appearance="secondary" onClick={() => previewShared(file)}>重新打开预览</Button>
             <Button appearance="primary" icon={<ArrowDownloadRegular />} onClick={() => downloadShared(file)}>下载文件</Button>
           </div>
@@ -769,6 +788,16 @@ export default function SharePage() {
               setPreviewDebug((prev) => ({ ...prev, firstFrameAt: prev.firstFrameAt || new Date().toLocaleTimeString() }));
             }}
             onDownload={() => downloadShared(file)}
+            onOpenInLivingRoom={() => {
+              try {
+                sessionStorage.setItem("lr_share_launch", JSON.stringify({
+                  shareToken,
+                  file: { id: file.id, clientId: file.clientId, path: file.path, name: file.name, mimeType: file.mimeType, size: file.size },
+                  shareHref: window.location.href
+                }));
+              } catch {}
+              window.location.assign("/living-room.html");
+            }}
             getClientDisplayName={() => client?.name || file.clientId}
             formatBytes={formatBytes}
             formatRelativeTime={formatDateTime}

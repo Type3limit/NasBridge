@@ -18,7 +18,8 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: path.resolve(__dirname, "index.html"),
-        share: path.resolve(__dirname, "share.html")
+        share: path.resolve(__dirname, "share.html"),
+        livingRoom: path.resolve(__dirname, "living-room.html")
       },
       output: {
         manualChunks(id) {

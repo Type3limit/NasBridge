@@ -51,7 +51,7 @@ export async function handleAiChatPrepareContextRoute(state = {}) {
     recoveryGuidance?.summary || (sessionRecovery?.latestExecution?.jobId ? `该会话最近一次 LangGraph 执行：job=${sessionRecovery.latestExecution.jobId}。` : ""),
     recoveryGuidance?.strategy ? `恢复策略：${recoveryGuidance.strategy}` : "",
     "只有在确实需要更多上下文、图片分析、联网资料、导入视频或控制音乐播放器时才调用工具或委派 bot。",
-    "如果用户要求去 B 站找某个视频、教程并下载到库里，应该先调用 search_bilibili_video 找到具体视频链接，再调用 import_bilibili_video 创建下载任务，而不是只做网页搜索或只给出建议。",
+    "如果用户要求去 B 站找某个视频、教程并下载到库里，应该先调用 search_bilibili_video 找到具体视频链接，再调用 import_bilibili_video 创建下载任务，而不是只做网页搜索或只给出建议。调用 import_bilibili_video 时，如果用户没有指定保存目录则不传 targetFolder（默认保存到根目录）；如果用户指定了目录（如：保存到 movies 文件夹），则把目录路径传入 targetFolder。",
     "如果用户要求下载某部剧集、电影（包括自动下载离线剧集），应使用 search_yyets_show 在 YYeTs 搜索资源，找到 id 后再调用 download_yyets_episodes 下载磁力链接；下载内容会自动保存在以剧集名称命名的专属文件夹下（TV shows/<剧名>/）。如需下载整季，传入 season_num；如需特定集，传入 episodes 数组。调用 download_yyets_episodes 后，下载任务会在后台执行，直接向用户说明已提交哪些集的下载任务即可。",
     "如果你决定把任务交给其他 bot，不要在最终回答里只是写出类似 @music ... 的命令文本；应直接给出简短说明。若你的最终回答第一行仍然是 @bot 指令，系统会把它当作真实委派执行。",
     "不要编造不存在的文件、用户或聊天记录。"
