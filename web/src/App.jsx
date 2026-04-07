@@ -19,6 +19,7 @@ import {
   ArrowDownloadRegular,
   ArrowRightRegular,
   ArrowSwapRegular,
+  ArrowSyncRegular,
   ChatRegular,
   ChevronRightRegular,
   DeleteRegular,
@@ -45,6 +46,7 @@ import MobileBottomTabBar from "./components/mobile/MobileBottomTabBar";
 import MobileMoreSheet from "./components/mobile/MobileMoreSheet";
 import MobileFilterSheet from "./components/mobile/MobileFilterSheet";
 import MiniMusicBar from "./components/mobile/MiniMusicBar";
+import VideoHoverPreview from "./components/VideoHoverPreview";
 
 const PreviewModal = lazy(() => import("./components/PreviewModal"));
 const TVStream = lazy(() => import("./components/TVStream"));
@@ -1755,12 +1757,14 @@ export default function App() {
                     </div>
                   ) : (
                     <div key={entry.key} className="fileRow">
-                      <div className="thumbShell">
-                        <button className="thumbButton" onClick={() => preview(entry.file)}>
-                          {thumbMap[getThumbKey(entry.file)]?.url ? <img src={thumbMap[getThumbKey(entry.file)].url} className="thumbImg" /> : <div className="thumbFallback">{isUploadingFile(entry.file) ? "上传中" : isImageMime(entry.file.mimeType) ? "图片" : isVideoMime(entry.file.mimeType) ? "视频" : "文件"}</div>}
-                        </button>
-                        {renderSelectionToggle(entry.file)}
-                      </div>
+                      <VideoHoverPreview file={entry.file} p2p={p2p} enabled={isVideoMime(entry.file.mimeType)}>
+                        <div className="thumbShell">
+                          <button className="thumbButton" onClick={() => preview(entry.file)}>
+                            {thumbMap[getThumbKey(entry.file)]?.url ? <img src={thumbMap[getThumbKey(entry.file)].url} className="thumbImg" /> : <div className="thumbFallback">{isUploadingFile(entry.file) ? "上传中" : isImageMime(entry.file.mimeType) ? "图片" : isVideoMime(entry.file.mimeType) ? "视频" : "文件"}</div>}
+                          </button>
+                          {renderSelectionToggle(entry.file)}
+                        </div>
+                      </VideoHoverPreview>
                       <div className="fileMeta">
                         <div className="fileName">{entry.file.name}</div>
                         <div className="fileSub">
@@ -1819,12 +1823,12 @@ export default function App() {
                   </div>
                 ) : (
                   <div key={entry.key} className="gridItem">
-                    <div className="fileVisualShell">
+                    <VideoHoverPreview file={entry.file} p2p={p2p} enabled={isVideoMime(entry.file.mimeType)} className="fileVisualShell">
                       <button className="gridThumb" onClick={() => preview(entry.file)}>
                         {thumbMap[getThumbKey(entry.file)]?.url ? <img src={thumbMap[getThumbKey(entry.file)].url} className="thumbImg" /> : <div className="thumbFallback">{isUploadingFile(entry.file) ? "上传中" : isImageMime(entry.file.mimeType) ? "图片" : isVideoMime(entry.file.mimeType) ? "视频" : "文件"}</div>}
                       </button>
                       {renderSelectionToggle(entry.file)}
-                    </div>
+                    </VideoHoverPreview>
                     <div className="gridName" title={entry.file.name}>{entry.file.name}</div>
                     <Caption1 className="gridMetaLine">{getClientDisplayName(entry.file.clientId)} · {formatBytes(entry.file.size)}</Caption1>
                     <Caption1 className="gridMetaLine">{columnMap.get(entry.file.columnId) || "未分类"} · {formatRelativeTime(getFileCreatedAt(entry.file))}</Caption1>
@@ -2886,6 +2890,49 @@ export default function App() {
     }
   }
 
+  async function forceRefreshThumbnail(file) {
+    if (!p2p || isUploadingFile(file)) return;
+    const key = getThumbKey(file);
+    const isOnline = clients.find((c) => c.id === file.clientId)?.status === "online";
+    if (!isOnline) return;
+    // 询问用户是否指定封面帧时间点
+    const raw = window.prompt("输入封面时间点（秒），留空则自动选帧", "");
+    if (raw === null) return; // 取消
+    const parsedSec = raw.trim() === "" ? null : Number(raw.trim());
+    if (parsedSec !== null && !Number.isFinite(parsedSec)) {
+      window.alert("请输入有效数字（秒）"); return;
+    }
+    const thumbnailOptions = { force: true, ...(parsedSec != null ? { seekSeconds: parsedSec } : {}) };
+    // 清理本地缓存，让重新生成的封面能刷新到界面
+    delete thumbnailCache.current[key];
+    thumbnailLoading.current.delete(key);
+    thumbnailRetry.current[key] = 0;
+    setThumbMap((prev) => { const next = { ...prev }; delete next[key]; return next; });
+    saveThumbCache(thumbnailCache.current);
+    thumbnailLoading.current.add(key);
+    try {
+      // force: true 让终端删除旧缓存文件并用 ffmpeg 重新生成
+      const result = await p2p.thumbnailFile(file.clientId, file.path, thumbnailOptions);
+      let thumbUrl = URL.createObjectURL(result.blob);
+      let persisted = false;
+      if (result.blob.size <= THUMB_CACHE_MAX_BLOB_SIZE) {
+        try {
+          const dataUrl = await blobToDataUrl(result.blob);
+          thumbUrl = dataUrl;
+          persisted = true;
+          thumbnailCache.current[key] = { dataUrl, updatedAt: Date.now() };
+          thumbnailCache.current = pruneThumbCache(thumbnailCache.current);
+          saveThumbCache(thumbnailCache.current);
+        } catch { }
+      }
+      if (isImageMime(file.mimeType) || isVideoMime(file.mimeType)) {
+        setThumbMap((prev) => ({ ...prev, [key]: { url: thumbUrl, persisted } }));
+      }
+    } catch { } finally {
+      thumbnailLoading.current.delete(key);
+    }
+  }
+
   async function ensureSignalingReady(role) {
     if (!p2p) {
       return false;
@@ -3810,6 +3857,17 @@ export default function App() {
             onClick={() => openInLivingRoom(file)}
           >
             <StreamRegular />
+          </button>
+        )}
+        {(isVideoMime(file.mimeType) || isImageMime(file.mimeType)) && (
+          <button
+            type="button"
+            className="actionChip"
+            title="重新获取封面"
+            aria-label="重新获取封面"
+            onClick={() => forceRefreshThumbnail(file)}
+          >
+            <ArrowSyncRegular />
           </button>
         )}
         <button
@@ -4979,6 +5037,9 @@ export default function App() {
                 <Text>{user.displayName} · {user.role === "admin" ? "管理员" : "成员"}</Text>
                 <Caption1>{user.email}</Caption1>
               </span>
+            </button>
+            <button type="button" className="iconActionButton topbarIconButton" title="切换到大屏模式" aria-label="切换到大屏模式" onClick={() => { const w = window.open("/living-room.html", "nas_living_room"); w?.focus(); }}>
+              <StreamRegular />
             </button>
             <button type="button" className="iconActionButton topbarIconButton" title="上传文件" aria-label="上传文件" onClick={() => setUploadOpen(true)}>
               <ArrowDownloadRegular className="topbarUploadIcon" />

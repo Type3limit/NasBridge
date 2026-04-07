@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { apiRequest } from "./api.js";
 import { P2PBridgePool } from "./webrtc.js";
 import VideoPlayerControls, { VideoDanmakuComposer } from "./components/VideoPlayerControls";
@@ -14,7 +14,7 @@ import {
 // ────────────────────────────────────────────────────────────
 const TOKEN_KEY = "nas_token";
 const CONTINUE_KEY = "lr_continue_watching_v1";
-const THUMB_KEY = "lr_thumb_cache_v1";
+const THUMB_KEY = "nas_thumb_cache_v1"; // 与 App.jsx 共用同一缓存，保证两页封面展示一致
 const SHARE_LAUNCH_KEY = "lr_share_launch";
 const MAIN_LAUNCH_KEY = "lr_main_launch";
 const MAIN_PREVIEW_KEY = "lr_to_main_preview";
@@ -124,7 +124,7 @@ function pruneThumbCache(cache) {
   return Object.fromEntries(entries.slice(0, THUMB_MAX));
 }
 function thumbKey(file) {
-  return `${file.clientId}|${file.path}|${file.size}`;
+  return `${file.clientId}|${file.path}|${file.size}|${file.mimeType || ""}`;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -203,9 +203,69 @@ function buildShelves(playableFiles, continueList, onlineClientIds) {
 }
 
 // ────────────────────────────────────────────────────────────
+// P2P HLS Loader 工厂（复用于主播放器和 Hero 背景视频）
+// ────────────────────────────────────────────────────────────
+function createP2PHlsLoaderClass(p2pInstance) {
+  const newHlsStats = () => ({
+    aborted: false, loaded: 0, retry: 0, total: 0, chunkCount: 0, bwEstimate: 0,
+    loading: { start: 0, first: 0, end: 0 },
+    parsing: { start: 0, end: 0 }, buffering: { start: 0, first: 0, end: 0 }
+  });
+  return class P2PHlsLoader {
+    constructor() {
+      this.aborted = false;
+      this.stats = newHlsStats();
+    }
+    load(context, _config, callbacks) {
+      this.stats = newHlsStats();
+      this.stats.loading.start = performance.now();
+      const self = this;
+      (async () => {
+        try {
+          if (self.aborted) return;
+          const parsed = parseP2pHlsSegmentUrl(context.url);
+          if (!parsed) {
+            const resp = await fetch(context.url);
+            if (!resp.ok) throw new Error(`fetch failed: ${resp.status}`);
+            const isText = context.type === "manifest" || context.type === "level";
+            const data = isText ? await resp.text() : await resp.arrayBuffer();
+            const now = performance.now();
+            self.stats.loading.first = self.stats.loading.end = now;
+            self.stats.loaded = self.stats.total = isText ? data.length : data.byteLength;
+            self.stats.chunkCount = 1;
+            callbacks.onSuccess({ url: context.url, data }, self.stats, context, null);
+            return;
+          }
+          const response = await p2pInstance.getHlsSegment(
+            parsed.clientId, parsed.hlsId, parsed.segmentName, { timeoutMs: 120_000 }
+          );
+          if (self.aborted) return;
+          const data = await response.blob.arrayBuffer();
+          const now = performance.now();
+          self.stats.loading.first = self.stats.loading.end = now;
+          self.stats.loaded = self.stats.total = data.byteLength;
+          self.stats.chunkCount = 1;
+          callbacks.onSuccess({ url: context.url, data }, self.stats, context, response);
+        } catch (err) {
+          if (self.aborted) return;
+          self.stats.loading.end = performance.now();
+          callbacks.onError({ code: 0, text: err.message || "hls load failed" }, context, null, self.stats);
+        }
+      })();
+    }
+    abort() {
+      this.aborted = true;
+      this.stats.aborted = true;
+      this.stats.loading.end = performance.now();
+    }
+    destroy() { this.aborted = true; }
+  };
+}
+
+// ────────────────────────────────────────────────────────────
 // 子组件：MediaCard
 // ────────────────────────────────────────────────────────────
-function MediaCard({ file, thumbUrl, continueRecord, focused, onClick, onKeyDown, onHover }) {
+function MediaCard({ file, thumbUrl, continueRecord, focused, onClick, onKeyDown, onHover, onRefreshThumb }) {
   const icon = getFileTypeIcon(file);
   const progress = continueRecord && continueRecord.duration > 0
     ? Math.min(100, (continueRecord.currentTime / continueRecord.duration) * 100)
@@ -217,7 +277,6 @@ function MediaCard({ file, thumbUrl, continueRecord, focused, onClick, onKeyDown
       className={`lrCard${focused ? " focused" : ""}`}
       onClick={onClick}
       onKeyDown={onKeyDown}
-      onMouseEnter={() => onHover?.(file.id)}
       onFocus={() => onHover?.(file.id)}
       aria-label={file.name}
       data-file-id={file.id}
@@ -227,6 +286,15 @@ function MediaCard({ file, thumbUrl, continueRecord, focused, onClick, onKeyDown
           ? <img src={thumbUrl} alt="" />
           : <div className="lrCardThumbFallback">{icon}</div>
         }
+        {onRefreshThumb && (
+          <button
+            type="button"
+            className="lrCardRefreshBtn"
+            title="重新获取封面"
+            aria-label="重新获取封面"
+            onClick={(e) => { e.stopPropagation(); onRefreshThumb(file); }}
+          >↺</button>
+        )}
         {file.favorite && <span className="lrCardFavStar">★</span>}
         {isVideoMime(file.mimeType) && (
           <span className="lrCardThumbBadge">
@@ -250,7 +318,7 @@ function MediaCard({ file, thumbUrl, continueRecord, focused, onClick, onKeyDown
 // ────────────────────────────────────────────────────────────
 // 子组件：InfiniteStrip（横向无限滚动列表）
 // ────────────────────────────────────────────────────────────
-function InfiniteStrip({ files, thumbMap: tmap, continueMap, focusedId, onPlay, onFocus }) {
+function InfiniteStrip({ files, thumbMap: tmap, continueMap, focusedId, onPlay, onFocus, onRefreshThumb }) {
   const trackRef = useRef(null);
   const [canPrev, setCanPrev] = useState(false);
   const [canNext, setCanNext] = useState(true);
@@ -269,17 +337,15 @@ function InfiniteStrip({ files, thumbMap: tmap, continueMap, focusedId, onPlay, 
     return () => { el.removeEventListener("scroll", sync); ro.disconnect(); };
   }, [files.length]);
 
-  // 聚焦项自动滚入可视区（悬停时卡片已可见则不滚动；键盘导航时用 instant 跟上）
+  // PS5 风格：选中项切换时始终平滑居中
   useEffect(() => {
     if (!focusedId || !trackRef.current) return;
     const track = trackRef.current;
     const el = track.querySelector(`[data-file-id="${focusedId}"]`);
     if (!el) return;
-    const elRect = el.getBoundingClientRect();
-    const trackRect = track.getBoundingClientRect();
-    // 已完全可见则不滚动（防止 hover 导致不停滚动）
-    if (elRect.left >= trackRect.left + 4 && elRect.right <= trackRect.right - 4) return;
-    el.scrollIntoView({ behavior: "instant", block: "nearest", inline: "nearest" });
+    const elCenter = el.offsetLeft + el.offsetWidth / 2;
+    const targetLeft = elCenter - track.clientWidth / 2;
+    track.scrollTo({ left: Math.max(0, targetLeft), behavior: "smooth" });
   }, [focusedId]);
 
   function scrollPrev() {
@@ -319,6 +385,7 @@ function InfiniteStrip({ files, thumbMap: tmap, continueMap, focusedId, onPlay, 
                   if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPlay(file); }
                 }}
                 onHover={onFocus}
+                onRefreshThumb={onRefreshThumb}
               />
             </div>
           ))}
@@ -337,7 +404,7 @@ function InfiniteStrip({ files, thumbMap: tmap, continueMap, focusedId, onPlay, 
 // ────────────────────────────────────────────────────────────
 // 子组件：InlineGrid（嵌入式网格 + 搜索，↓ 进入，↑首行 退出）
 // ────────────────────────────────────────────────────────────
-function InlineGrid({ files, thumbMap: tmap, continueMap, focusedId, query, onQueryChange, onPlay, onFocus, onClose, searchRef, onColsChange }) {
+function InlineGrid({ files, thumbMap: tmap, continueMap, focusedId, query, onQueryChange, onPlay, onFocus, onClose, searchRef, onColsChange, onRefreshThumb }) {
   const gridRef = useRef(null);
 
   // 挂载时聚焦搜索框
@@ -424,6 +491,7 @@ function InlineGrid({ files, thumbMap: tmap, continueMap, focusedId, query, onQu
                     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPlay(file); }
                   }}
                   onHover={onFocus}
+                  onRefreshThumb={onRefreshThumb}
                 />
               </div>
             ))}
@@ -512,8 +580,14 @@ export default function LivingRoomPage() {
   const hideTimerRef = useRef(null);
   const saveProgressTimerRef = useRef(null);
   const continueSeekPendingRef = useRef(false);
+  const pendingHlsInitRef = useRef(null); // <video> 挂载前 playFile 已就绪时的待处理 attach
   const sessionIdRef = useRef(0);
   const viewportRef = useRef(null);
+
+  // ── Hero 背景视频 ─────────────────────────────────────────
+  const heroBgVideoRef = useRef(null);
+  const heroBgHlsRef = useRef(null);
+  const heroBgTimerRef = useRef(null);
 
   // ── 弹幕 ───────────────────────────────────────────────────
   const [danmakuItems, setDanmakuItems] = useState([]);
@@ -679,6 +753,48 @@ export default function LivingRoomPage() {
     }
   }, [p2p, onlineClientIds, thumbMap]);
 
+  // 强制重新获取缩略图（让终端删除缓存并重新用 ffmpeg 生成）
+  const forceRefreshThumb = useCallback(async (file) => {
+    if (!p2p || !onlineClientIds.has(file.clientId)) return;
+    // 询问用户是否指定封面帧时间点
+    const raw = window.prompt("输入封面时间点（秒），留空则自动选帧", "");
+    if (raw === null) return; // 取消
+    const parsedSec = raw.trim() === "" ? null : Number(raw.trim());
+    if (parsedSec !== null && !Number.isFinite(parsedSec)) {
+      window.alert("请输入有效数字（秒）"); return;
+    }
+    const thumbnailOptions = { force: true, ...(parsedSec != null ? { seekSeconds: parsedSec } : {}) };
+    const k = thumbKey(file);
+    // 清理本地缓存
+    delete thumbCacheRef.current[k];
+    saveThumbCache(thumbCacheRef.current);
+    thumbLoadingRef.current.delete(k);
+    setThumbMap((prev) => { const next = { ...prev }; delete next[k]; return next; });
+    thumbLoadingRef.current.add(k);
+    try {
+      // force: true 让终端删除旧缓存文件并用 ffmpeg 重新生成
+      const result = await p2p.thumbnailFile(file.clientId, file.path, thumbnailOptions);
+      let url = URL.createObjectURL(result.blob);
+      if (result.blob.size <= THUMB_MAX_BLOB) {
+        try {
+          const dataUrl = await new Promise((res, rej) => {
+            const fr = new FileReader();
+            fr.onloadend = () => res(fr.result);
+            fr.onerror = rej;
+            fr.readAsDataURL(result.blob);
+          });
+          url = dataUrl;
+          thumbCacheRef.current[k] = { url: dataUrl, t: Date.now() };
+          thumbCacheRef.current = pruneThumbCache(thumbCacheRef.current);
+          saveThumbCache(thumbCacheRef.current);
+        } catch { /* keep blob url */ }
+      }
+      setThumbMap((prev) => ({ ...prev, [k]: { url } }));
+    } catch { /* silent */ } finally {
+      thumbLoadingRef.current.delete(k);
+    }
+  }, [p2p, onlineClientIds]);
+
   // 批量预取前20张缩略图
   useEffect(() => {
     if (!p2p || !recent.length) return;
@@ -686,6 +802,114 @@ export default function LivingRoomPage() {
       ensureThumb(file);
     }
   }, [p2p, recent, ensureThumb]);
+
+  // ────────────────────────────────────────────────────────────
+  // Hero 背景视频：选中超过1秒后切换为 HLS 片段预览
+  // ────────────────────────────────────────────────────────────
+  useEffect(() => {
+    // 清理函数：取消 timer + 销毁旧 HLS + 暂停视频
+    const cleanup = () => {
+      if (heroBgTimerRef.current) { clearTimeout(heroBgTimerRef.current); heroBgTimerRef.current = null; }
+      if (heroBgHlsRef.current) { heroBgHlsRef.current.destroy(); heroBgHlsRef.current = null; }
+      if (heroBgVideoRef.current) {
+        heroBgVideoRef.current.pause();
+        heroBgVideoRef.current.classList.remove("lrHeroBgVideoActive");
+      }
+    };
+
+    if (!heroDisplayFile || !p2p || !isVideoMime(heroDisplayFile.mimeType) || browseMode !== "strip") {
+      cleanup();
+      return;
+    }
+
+    const file = heroDisplayFile;
+    let stale = false;
+
+    heroBgTimerRef.current = setTimeout(async () => {
+      heroBgTimerRef.current = null;
+      try {
+        const hlsCap = await getHlsPlaybackSupport();
+        if (stale || !hlsCap.supported) return;
+
+        const hlsResult = await p2p.getHlsManifest(file.clientId, file.path, {
+          onProgress: () => {}
+        });
+        if (stale) return;
+
+        const mod = await import("hls.js");
+        const Hls = mod.default;
+        if (!Hls?.isSupported?.() || stale) return;
+
+        const rewrittenManifest = String(hlsResult.manifest || "")
+          .split(/\r?\n/)
+          .map((line) => {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith("#")) return line;
+            return buildP2pHlsSegmentUrl(file.clientId, hlsResult.hlsId, trimmed);
+          })
+          .join("\n");
+        const manifestDataUrl = `data:application/vnd.apple.mpegurl;charset=utf-8,${encodeURIComponent(rewrittenManifest)}`;
+
+        const P2PHlsLoaderClass = createP2PHlsLoaderClass(p2p);
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: false,
+          fLoader: P2PHlsLoaderClass,
+          maxBufferLength: 12,
+          maxMaxBufferLength: 20,
+        });
+        heroBgHlsRef.current = hls;
+
+        hls.on(Hls.Events.ERROR, (_, data) => {
+          if (data.fatal) { hls.destroy(); if (heroBgHlsRef.current === hls) heroBgHlsRef.current = null; }
+        });
+
+        const video = heroBgVideoRef.current;
+        if (!video || stale) { hls.destroy(); heroBgHlsRef.current = null; return; }
+
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MEDIA_ATTACHED, () => { hls.loadSource(manifestDataUrl); });
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          if (stale || !heroBgVideoRef.current) return;
+          const vid = heroBgVideoRef.current;
+          const activate = () => {
+            vid.classList.add("lrHeroBgVideoActive");
+            // 让封面图淡出
+            const bgEl = vid.closest(".lrHero")?.querySelector(".lrHeroBg");
+            if (bgEl) bgEl.classList.add("lrHeroBgFaded");
+          };
+          const doPlay = () => {
+            if (stale || !heroBgVideoRef.current) return;
+            const dur = vid.duration;
+            if (isFinite(dur) && dur > 10) {
+              vid.currentTime = dur * 0.3;
+            }
+            vid.play().catch(() => {});
+            activate();
+          };
+          // MANIFEST_PARSED 阶段 video.duration 可能还是 NaN（尚未收到 segment），
+          // 须等 loadedmetadata 之后才能 seek
+          if (isFinite(vid.duration) && vid.duration > 0) {
+            doPlay();
+          } else {
+            vid.addEventListener("loadedmetadata", doPlay, { once: true });
+          }
+        });
+      } catch (e) {
+        if (!stale) console.debug("[LR BgVideo]", e?.message);
+      }
+    }, 1000);
+
+    return () => {
+      stale = true;
+      cleanup();
+      // 恢复封面图
+      if (heroBgVideoRef.current) {
+        const bgEl = heroBgVideoRef.current.closest?.(".lrHero")?.querySelector(".lrHeroBg");
+        if (bgEl) bgEl.classList.remove("lrHeroBgFaded");
+      }
+    };
+  }, [heroDisplayFile, p2p, browseMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ────────────────────────────────────────────────────────────
   // 播放控制层——隐藏 timer
@@ -903,8 +1127,9 @@ export default function LivingRoomPage() {
               cancelHideTimer();
               setControlsVisible(true);
             });
-            if (videoRef.current) {
-              hls.attachMedia(videoRef.current);
+            const doAttach = (video) => {
+              video.load(); // 重置视频元素，清除上一次 HLS 残留的 MediaSource
+              hls.attachMedia(video);
               hls.on(Hls.Events.MEDIA_ATTACHED, () => {
                 hls.loadSource(manifestDataUrl);
               });
@@ -915,12 +1140,19 @@ export default function LivingRoomPage() {
                 scheduleHide();
                 const seekTarget = seekOverrideRef.current;
                 seekOverrideRef.current = null;
-                if (seekTarget != null && videoRef.current) {
-                  videoRef.current.currentTime = seekTarget;
+                if (seekTarget != null && video) {
+                  video.currentTime = seekTarget;
                 } else {
-                  seekToContinue(file, videoRef.current);
+                  seekToContinue(file, video);
                 }
               });
+            };
+            if (videoRef.current) {
+              doAttach(videoRef.current);
+            } else {
+              // <video> 尚未挂载（从浏览态首次点击时 React 还未完成渲染）
+              // 暂存 doAttach，等 useEffect 监测到视频元素挂载后再调用
+              pendingHlsInitRef.current = { sessionId, doAttach };
             }
             return;
           } catch (hlsErr) {
@@ -938,6 +1170,19 @@ export default function LivingRoomPage() {
       setPlayerState("error");
     }
   }, [p2p, releasePlayer, scheduleHide, cancelHideTimer]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // <video> 挂载后消费待处理的 HLS attach（修复首次播放时 videoRef 尚为 null 的竞态）
+  // 用 useLayoutEffect 而非 useEffect：在 DOM commit 后同步执行，保证 videoRef 已设置
+  useLayoutEffect(() => {
+    if (!playingFile || !videoRef.current) return;
+    const pending = pendingHlsInitRef.current;
+    if (!pending || pending.sessionId !== sessionIdRef.current) {
+      pendingHlsInitRef.current = null;
+      return;
+    }
+    pendingHlsInitRef.current = null;
+    pending.doAttach(videoRef.current);
+  }, [playingFile]);
 
   async function doDirectPlay(file, sessionId) {
     const result = await p2p.downloadFile(file.clientId, file.path);
@@ -1786,6 +2031,11 @@ export default function LivingRoomPage() {
                           placeholder="发个友善的弹幕见证当下"
                           onChange={(e) => setDanmakuDraft(e.target.value)}
                           onKeyDown={(e) => {
+                            if (e.key === " ") {
+                              // 防止空格默认触发播放/暂停键位事件
+                              e.stopPropagation();
+                              return;
+                            }
                             if (e.key === "Enter" && !e.shiftKey) {
                               e.preventDefault();
                               submitDanmaku();
@@ -1816,7 +2066,7 @@ export default function LivingRoomPage() {
                             type="button"
                             role="menuitem"
                             className={`lrQualityItem${p.id === hlsActiveProfile ? " active" : ""}`}
-                            onClick={() => switchQuality(p.id)}
+                            onClick={() => { switchQuality(p.id); setQualityOpen(false); }}
                           >
                             {p.label}
                           </button>
@@ -1839,6 +2089,13 @@ export default function LivingRoomPage() {
           <div className="lrTopBarCenter" />
           <div className="lrTopBarRight">
             <LiveClock />
+            <button
+              type="button"
+              className="lrTopBarBtn"
+              title="切换到主页"
+              aria-label="切换到主页"
+              onClick={() => { const w = window.open("/", "nas_main"); w?.focus(); }}
+            >⊡ 主页</button>
             <div className="lrTopBarSettings">
               <button
                 type="button"
@@ -1867,6 +2124,15 @@ export default function LivingRoomPage() {
                 style={{ backgroundImage: `url(${thumbMap[thumbKey(heroDisplayFile)].url})` }}
               />
             )}
+            {/* 背景视频：选中超过1秒后替代封面图 */}
+            <video
+              ref={heroBgVideoRef}
+              className="lrHeroBgVideo"
+              muted
+              loop
+              playsInline
+              aria-hidden="true"
+            />
             <div className="lrHeroOverlay" />
             {heroDisplayFile && (
               <div className="lrHeroContent">
@@ -1905,6 +2171,7 @@ export default function LivingRoomPage() {
             onClose={() => { setBrowseMode("strip"); setGridQuery(""); }}
             searchRef={gridSearchRef}
             onColsChange={(cols) => { gridColsRef.current = cols; }}
+            onRefreshThumb={forceRefreshThumb}
           />
         ) : (
           <div className="lrShelvesBottom">
@@ -1915,6 +2182,7 @@ export default function LivingRoomPage() {
               focusedId={focusedFileId}
               onPlay={playFile}
               onFocus={setFocusedFileId}
+              onRefreshThumb={forceRefreshThumb}
             />
             {pageState === "browsing" && !allBrowseFiles.length && (
               <div className="lrShelfSection">

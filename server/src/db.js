@@ -654,6 +654,27 @@ export function getFileById(fileId) {
   return readDb().files.find((item) => item.id === fileId) || null;
 }
 
+export function resolveShareAccess(shareId) {
+  const db = readDb();
+  const share = (db.fileShares || []).find((item) => item.id === shareId);
+  if (!share || share.revokedAt || (share.expiresAt && new Date(share.expiresAt) < new Date())) {
+    return null;
+  }
+  const file = db.files.find((item) => item.id === share.fileId);
+  if (!file) {
+    return null;
+  }
+  share.accessCount = (share.accessCount || 0) + 1;
+  writeDb(db);
+  const metaMap = new Map();
+  for (const meta of db.fileMeta || []) {
+    if (meta?.fileId) metaMap.set(meta.fileId, meta);
+  }
+  const meta = metaMap.get(file.id) || {};
+  const client = (db.clients || []).find((item) => item.id === file.clientId) || null;
+  return { share, file, meta, client };
+}
+
 export function listFileComments(fileId) {
   return readDb()
     .comments

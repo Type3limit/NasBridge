@@ -1763,7 +1763,7 @@ export class P2PBridge {
 
         this.currentOp.set(opKey, ctx);
         this.logInfo("op-send", "get-thumbnail", clientId, opChannelName, `ch=${channel.readyState}`, relativePath);
-        channel.send(JSON.stringify(this.buildRequestPayload({ type: "get-thumbnail", path: relativePath, requestId }, options)));
+        channel.send(JSON.stringify(this.buildRequestPayload({ type: "get-thumbnail", path: relativePath, requestId, ...(options.force ? { force: true } : {}), ...(options.seekSeconds != null ? { seekSeconds: Number(options.seekSeconds) } : {}) }, options)));
       });
     }));
   }
@@ -2863,9 +2863,10 @@ export class P2PBridgePool {
     this.token = token;
     this.accessToken = options.accessToken || "";
     this.diagnosticsListener = null;
-    this.roleSnapshots = Object.fromEntries(PEER_ROLE_ORDER.map((role) => [role, createEmptyDiagnostics()]));
+    const activeRoles = Array.isArray(options.roles) && options.roles.length > 0 ? options.roles.filter((r) => PEER_ROLE_CONFIG[r]) : PEER_ROLE_ORDER;
+    this.roleSnapshots = Object.fromEntries(activeRoles.map((role) => [role, createEmptyDiagnostics()]));
     this.bridges = new Map(
-      PEER_ROLE_ORDER.map((role) => {
+      activeRoles.map((role) => {
         const config = PEER_ROLE_CONFIG[role];
         const bridge = new P2PBridge(token, {
           role,

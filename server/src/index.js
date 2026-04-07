@@ -40,6 +40,7 @@ import {
   revokeFileShare,
   deleteFileShare,
   getFileById,
+  resolveShareAccess,
   updateUserProfile,
   listFileComments,
   getFileCommentById,
@@ -758,22 +759,15 @@ app.delete("/api/shares/:shareId", requireAuth, (req, res) => {
 
 app.get("/api/share/:shareId", (req, res) => {
   const { shareId } = req.params;
-  const share = getFileShareById(shareId);
-  if (!share) {
+  const result = resolveShareAccess(shareId);
+  if (!result) {
     return res.status(404).json({ message: "share not found or expired" });
   }
-  const file = getFileById(share.fileId);
-  if (!file) {
-    return res.status(404).json({ message: "file not found" });
-  }
-  const incremented = incrementShareAccessCount(shareId);
-  const metaMap = getFileMetaMap();
-  const meta = metaMap.get(file.id) || {};
+  const { share, file, meta, client } = result;
   const shareToken = signShareToken(share, {
     ...file,
     mimeType: meta.mimeType || file.mimeType
   });
-  const client = listClients().find((item) => item.id === file.clientId) || null;
   const enrichedFile = {
     ...file,
     columnId: meta.columnId || "",
@@ -781,14 +775,14 @@ app.get("/api/share/:shareId", (req, res) => {
     mimeType: meta.mimeType || file.mimeType,
     originalMimeType: file.mimeType
   };
-  serverLog("file-share-access", shareId, file.id, `accessCount=${incremented?.accessCount || 1}`);
+  serverLog("file-share-access", shareId, file.id, `accessCount=${share.accessCount || 1}`);
   return res.json({
     file: enrichedFile,
     share: {
       ...share,
       status: getShareStatus(share),
       shareUrl: `${trimTrailingSlash(resolveShareWebOrigin(req))}/share.html?share=${encodeURIComponent(share.id)}`,
-      accessCount: incremented?.accessCount ?? share.accessCount ?? 0
+      accessCount: share.accessCount ?? 0
     },
     shareToken,
     client: client

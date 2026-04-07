@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button, Caption1, Spinner, Text, Title3 } from "@fluentui/react-components";
 import { ArrowDownloadRegular, ArrowLeftRegular, StreamRegular } from "@fluentui/react-icons";
 import { apiRequest } from "./api";
@@ -73,56 +73,68 @@ function isInlinePreviewMime(mimeType = "") {
   return isImageMime(mimeType) || isVideoMime(mimeType) || isAudioMime(mimeType) || isTextPreviewMime(mimeType) || mimeType === "application/pdf";
 }
 
+const _canPlayCache = new Map();
 function canBrowserPlayVideoMime(mimeType = "") {
   if (!isVideoMime(mimeType)) {
     return false;
   }
+  if (_canPlayCache.has(mimeType)) {
+    return _canPlayCache.get(mimeType);
+  }
   const video = document.createElement("video");
-  const result = video.canPlayType(mimeType);
-  return result === "probably" || result === "maybe";
+  const ok = video.canPlayType(mimeType) === "probably" || video.canPlayType(mimeType) === "maybe";
+  _canPlayCache.set(mimeType, ok);
+  return ok;
 }
 
-function emptyPreviewDebug() {
-  return {
-    mode: "",
-    hlsId: "",
-    hlsProfile: "",
-    codec: "",
-    sourceWidth: 0,
-    sourceHeight: 0,
-    manifestSegments: 0,
-    segmentRequests: 0,
-    segmentCompleted: 0,
-    segmentErrors: 0,
-    segmentBytes: 0,
-    lastSegment: "",
-    lastError: "",
-    hlsState: "idle",
-    lastHlsEvent: "",
-    bufferedAhead: 0,
-    currentTime: 0,
-    duration: 0,
-    firstFrameAt: ""
-  };
-}
+const EMPTY_PREVIEW_DEBUG = Object.freeze({
+  mode: "",
+  hlsId: "",
+  hlsProfile: "",
+  codec: "",
+  sourceWidth: 0,
+  sourceHeight: 0,
+  manifestSegments: 0,
+  segmentRequests: 0,
+  segmentCompleted: 0,
+  segmentErrors: 0,
+  segmentBytes: 0,
+  lastSegment: "",
+  lastError: "",
+  hlsState: "idle",
+  lastHlsEvent: "",
+  bufferedAhead: 0,
+  currentTime: 0,
+  duration: 0,
+  firstFrameAt: ""
+});
 
+let _hlsSupportCache = null;
 async function getHlsPlaybackSupport() {
+  if (_hlsSupportCache) {
+    return _hlsSupportCache;
+  }
   try {
     const mod = await import("hls.js");
     const Hls = mod?.default;
     if (!Hls) {
-      return { supported: false, reason: "hls.js 未正确加载" };
+      _hlsSupportCache = { supported: false, reason: "hls.js 未正确加载" };
+      return _hlsSupportCache;
     }
     if (typeof Hls.isSupported === "function" && Hls.isSupported()) {
-      return { supported: true, reason: "hls.js supported" };
+      _hlsSupportCache = { supported: true, reason: "hls.js supported" };
+      return _hlsSupportCache;
     }
     const hasMse = typeof window !== "undefined" && !!(window.MediaSource || window.ManagedMediaSource || window.WebKitMediaSource);
     if (hasMse) {
-      return { supported: true, reason: "MediaSource 可用，尝试 HLS" };
+      _hlsSupportCache = { supported: true, reason: "MediaSource 可用，尝试 HLS" };
+      return _hlsSupportCache;
     }
-    return { supported: false, reason: "当前浏览器缺少 MediaSource 支持" };
+    _hlsSupportCache = { supported: false, reason: "当前浏览器缺少 MediaSource 支持" };
+    return _hlsSupportCache;
   } catch (error) {
-    return { supported: false, reason: error?.message || "hls.js 动态加载失败" };
+    _hlsSupportCache = { supported: false, reason: error?.message || "hls.js 动态加载失败" };
+    return _hlsSupportCache;
   }
 }
 
@@ -146,7 +158,7 @@ function triggerBrowserDownload(blob, fileName) {
   window.setTimeout(() => {
     link.remove();
     URL.revokeObjectURL(url);
-  }, 60_000);
+  }, 5_000);
 }
 
 function isMobileBrowser() {
@@ -196,7 +208,7 @@ export default function SharePage() {
   const [previewStatusText, setPreviewStatusText] = useState("");
   const [previewProgress, setPreviewProgress] = useState(null);
   const [previewHlsSource, setPreviewHlsSource] = useState(null);
-  const [previewDebug, setPreviewDebug] = useState(emptyPreviewDebug());
+  const [previewDebug, setPreviewDebug] = useState(EMPTY_PREVIEW_DEBUG);
   const [previewStage, setPreviewStage] = useState("");
   const [message, setMessage] = useState("");
   const previewReleaseRef = useRef(null);
@@ -207,7 +219,7 @@ export default function SharePage() {
     if (!shareToken) {
       return null;
     }
-    return new P2PBridgePool(shareToken, { accessToken: shareToken });
+    return new P2PBridgePool(shareToken, { accessToken: shareToken, roles: ["preview", "download"] });
   }, [shareToken]);
 
   useEffect(() => {
@@ -271,7 +283,7 @@ export default function SharePage() {
     setPreviewStatusText("");
     setPreviewProgress(null);
     setPreviewHlsSource(null);
-    setPreviewDebug(emptyPreviewDebug());
+    setPreviewDebug(EMPTY_PREVIEW_DEBUG);
     setPreviewStage("");
     previewModeRef.current = "";
     previewFirstFrameRef.current = false;
@@ -502,6 +514,29 @@ export default function SharePage() {
     }
   }
 
+  const handleFirstFrame = useCallback(() => {
+    previewFirstFrameRef.current = true;
+    setPreviewStatusText("");
+    setPreviewDebug((prev) => ({ ...prev, firstFrameAt: prev.firstFrameAt || new Date().toLocaleTimeString() }));
+  }, []);
+
+  const handleDownload = useCallback(() => {
+    if (file) downloadShared(file);
+  }, [file, shareToken, p2p]);
+
+  const handleOpenInLivingRoom = useCallback(() => {
+    try {
+      sessionStorage.setItem("lr_share_launch", JSON.stringify({
+        shareToken,
+        file: file ? { id: file.id, clientId: file.clientId, path: file.path, name: file.name, mimeType: file.mimeType, size: file.size } : null,
+        shareHref: window.location.href
+      }));
+    } catch {}
+    window.location.assign("/living-room.html");
+  }, [shareToken, file]);
+
+  const getClientDisplayName = useCallback(() => client?.name || file?.clientId, [client, file]);
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const shareId = params.get("share");
@@ -529,34 +564,31 @@ export default function SharePage() {
     if (!file || !shareToken || !p2p) {
       return;
     }
-    previewShared(file).catch(() => {});
-  }, [file, shareToken, p2p]);
-
-  useEffect(() => {
-    if (!file || !shareToken || !p2p || !(isImageMime(file.mimeType) || isVideoMime(file.mimeType))) {
-      return;
-    }
     let disposed = false;
-    setThumbLoading(true);
-    p2p.thumbnailFile(file.clientId, file.path, { accessToken: shareToken })
-      .then((result) => {
-        if (disposed || !result?.blob) {
-          return;
-        }
-        const objectUrl = URL.createObjectURL(result.blob);
-        setThumbUrl((prev) => {
-          if (prev) {
-            URL.revokeObjectURL(prev);
+
+    (async () => {
+      // Phase 1: thumbnail (lightweight, seconds)
+      if (isImageMime(file.mimeType) || isVideoMime(file.mimeType)) {
+        setThumbLoading(true);
+        try {
+          const result = await p2p.thumbnailFile(file.clientId, file.path, { accessToken: shareToken });
+          if (!disposed && result?.blob) {
+            const objectUrl = URL.createObjectURL(result.blob);
+            setThumbUrl((prev) => {
+              if (prev) URL.revokeObjectURL(prev);
+              return objectUrl;
+            });
           }
-          return objectUrl;
-        });
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (!disposed) {
-          setThumbLoading(false);
-        }
-      });
+        } catch { }
+        if (!disposed) setThumbLoading(false);
+      }
+
+      // Phase 2: preview (may trigger HLS encoding, heavyweight)
+      if (!disposed) {
+        await previewShared(file).catch(() => {});
+      }
+    })();
+
     return () => {
       disposed = true;
     };
@@ -782,23 +814,10 @@ export default function SharePage() {
             setMessage={setMessage}
             setPreviewStatusText={setPreviewStatusText}
             onClose={stopActivePreviewSession}
-            onFirstFrame={() => {
-              previewFirstFrameRef.current = true;
-              setPreviewStatusText("");
-              setPreviewDebug((prev) => ({ ...prev, firstFrameAt: prev.firstFrameAt || new Date().toLocaleTimeString() }));
-            }}
-            onDownload={() => downloadShared(file)}
-            onOpenInLivingRoom={() => {
-              try {
-                sessionStorage.setItem("lr_share_launch", JSON.stringify({
-                  shareToken,
-                  file: { id: file.id, clientId: file.clientId, path: file.path, name: file.name, mimeType: file.mimeType, size: file.size },
-                  shareHref: window.location.href
-                }));
-              } catch {}
-              window.location.assign("/living-room.html");
-            }}
-            getClientDisplayName={() => client?.name || file.clientId}
+            onFirstFrame={handleFirstFrame}
+            onDownload={handleDownload}
+            onOpenInLivingRoom={handleOpenInLivingRoom}
+            getClientDisplayName={getClientDisplayName}
             formatBytes={formatBytes}
             formatRelativeTime={formatDateTime}
             isInlinePreviewMime={isInlinePreviewMime}

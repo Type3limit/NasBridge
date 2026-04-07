@@ -2357,9 +2357,25 @@ function scheduleHlsWarmup(absolutePath) {
   if (!String(sourceMime).startsWith("video/")) {
     return;
   }
-  ensureHlsVariant(absolutePath, "720p")
-    .then(({ hlsId }) => log("hls-warmup-done", hlsId))
-    .catch((error) => logWarn("hls-warmup-failed", error.message || error));
+  // 后台依次生成该视频所有可用的 HLS 分辨率档位
+  (async () => {
+    let videoInfo;
+    try {
+      videoInfo = await probeVideoStream(absolutePath);
+    } catch (e) {
+      logWarn("hls-warmup-probe-failed", e?.message || e);
+      return;
+    }
+    const profiles = buildAvailableHlsProfiles(videoInfo);
+    for (const profile of profiles) {
+      try {
+        const { hlsId } = await ensureHlsVariant(absolutePath, profile.id);
+        log("hls-warmup-done", profile.id, hlsId);
+      } catch (error) {
+        logWarn("hls-warmup-failed", profile.id, error?.message || error);
+      }
+    }
+  })();
 }
 
 async function generateAudioSegmentedHls(inputFile, outputDir, onProgress) {
@@ -2570,7 +2586,7 @@ function scheduleAudioStreamWarmup(absolutePath) {
     .catch((error) => logWarn("audio-hls-warmup-failed", error.message || error));
 }
 
-async function ensureThumbnailVariant(inputFile) {
+async function ensureThumbnailVariant(inputFile, { force = false, seekSeconds = null } = {}) {
   const stat = await fs.promises.stat(inputFile);
   const sourceMime = mime.lookup(inputFile) || "application/octet-stream";
   const isVideoSource = String(sourceMime).startsWith("video/");
@@ -2581,10 +2597,20 @@ async function ensureThumbnailVariant(inputFile) {
   const legacyOutputFile = path.join(legacyCacheDir, `${key}.jpg`);
   await fs.promises.mkdir(preferredCacheDir, { recursive: true });
 
-  if (await isUsableThumbnailFile(outputFile)) {
+  // seekSeconds が指定されていれば強制的に force 扱い
+  const effectiveForce = force || (seekSeconds != null);
+  if (effectiveForce) {
+    // 强制重新生成：删除已有缓存文件（两个位置）
+    await fs.promises.rm(outputFile, { force: true }).catch(() => {});
+    if (legacyOutputFile !== outputFile) {
+      await fs.promises.rm(legacyOutputFile, { force: true }).catch(() => {});
+    }
+  }
+
+  if (!effectiveForce && await isUsableThumbnailFile(outputFile)) {
     return outputFile;
   }
-  if (legacyOutputFile !== outputFile && await isUsableThumbnailFile(legacyOutputFile)) {
+  if (!effectiveForce && legacyOutputFile !== outputFile && await isUsableThumbnailFile(legacyOutputFile)) {
     try {
       await fs.promises.copyFile(legacyOutputFile, outputFile);
       return outputFile;
@@ -2596,7 +2622,7 @@ async function ensureThumbnailVariant(inputFile) {
   const tempFile = `${outputFile}.tmp-${Date.now()}-${Math.random().toString(16).slice(2, 8)}.jpg`;
   try {
     const generated = isVideoSource
-      ? await generateVideoThumbnail(inputFile)
+      ? await generateVideoThumbnail(inputFile, { seekSeconds })
       : await generateImageThumbnail(inputFile);
     await fs.promises.copyFile(generated, tempFile);
     await fs.promises.rename(tempFile, outputFile);
@@ -2623,10 +2649,13 @@ async function isUsableThumbnailFile(filePath) {
 function buildVideoThumbnailSeekCandidates(durationSeconds) {
   const duration = Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : 0;
   const cap = duration > 0 ? Math.max(0, duration - 0.05) : 3;
-  const candidates = [0, 0.15, 0.35, 1, 2];
+  const candidates = [];
   if (duration > 0) {
-    candidates.push(duration * 0.05, duration * 0.15, duration * 0.33, duration * 0.5, duration - 0.2);
+    // 优先百分比位置（跳过片头黑帧/logo），0 作为最后 fallback
+    candidates.push(duration * 0.15, duration * 0.33, duration * 0.1, duration * 0.5, duration * 0.25);
   }
+  // 对短视频兜底的绝对秒数，0 作为最终保底
+  candidates.push(1, 2, 0.35, 0.15, 0);
   return [...new Set(candidates
     .map((value) => Math.max(0, Math.min(cap, Number(value || 0))))
     .filter((value) => Number.isFinite(value))
@@ -2717,18 +2746,23 @@ function scheduleThumbnailBackfill(reason = "startup") {
   }, 0);
 }
 
-async function generateVideoThumbnail(inputFile) {
+async function generateVideoThumbnail(inputFile, { seekSeconds = null } = {}) {
   const tempDir = path.join(os.tmpdir(), "nas-bridge-transcode");
   await fs.promises.mkdir(tempDir, { recursive: true });
   const outputFile = path.join(tempDir, `${Date.now()}-${Math.random().toString(16).slice(2, 8)}.jpg`);
   let lastError = null;
   const durationSeconds = await getMediaDurationSeconds(inputFile, "thumbnail-duration");
-  for (const seekSeconds of buildVideoThumbnailSeekCandidates(durationSeconds)) {
+  // 若指定了 seekSeconds，严格使用该时间点（但不超过总时长）
+  const cap = durationSeconds > 0 ? Math.max(0, durationSeconds - 0.05) : 999999;
+  const candidates = (seekSeconds != null && Number.isFinite(Number(seekSeconds)))
+    ? [Math.min(Math.max(0, Number(seekSeconds)), cap)]
+    : buildVideoThumbnailSeekCandidates(durationSeconds);
+  for (const candidateSeek of candidates) {
     try {
       await runThumbnailGeneration([
         "-y",
         "-ss",
-        String(seekSeconds),
+        String(candidateSeek),
         "-i",
         inputFile,
         "-frames:v",
@@ -2738,7 +2772,7 @@ async function generateVideoThumbnail(inputFile) {
         "-q:v",
         "4",
         outputFile
-      ], inputFile, outputFile, `video-thumbnail@${seekSeconds}`);
+      ], inputFile, outputFile, `video-thumbnail@${candidateSeek}`);
       return outputFile;
     } catch (error) {
       lastError = error;
@@ -3603,16 +3637,20 @@ function wireDataChannel(channel, remotePeerId = "unknown-peer") {
 
         if (message.type === "get-thumbnail") {
           observeVariant = "thumbnail";
+          const forceRegen = message.force === true;
+          const reqSeekSeconds = message.seekSeconds != null && Number.isFinite(Number(message.seekSeconds))
+            ? Number(message.seekSeconds)
+            : null;
           if (String(sourceMime).startsWith("video/")) {
             if (!enableTranscode) {
               throw new Error("thumbnail for video requires ffmpeg (ENABLE_TRANSCODE!=0)");
             }
-            cleanupPath = await ensureThumbnailVariant(absolute);
+            cleanupPath = await ensureThumbnailVariant(absolute, { force: forceRegen, seekSeconds: reqSeekSeconds });
             streamPath = cleanupPath;
             streamMime = "image/jpeg";
           } else if (String(sourceMime).startsWith("image/")) {
             if (enableTranscode) {
-              cleanupPath = await ensureThumbnailVariant(absolute);
+              cleanupPath = await ensureThumbnailVariant(absolute, { force: forceRegen, seekSeconds: reqSeekSeconds });
               streamPath = cleanupPath;
               streamMime = "image/jpeg";
             } else {
