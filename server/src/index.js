@@ -1032,16 +1032,42 @@ app.post("/api/dev/upload-relay", requireAuth, upload.single("file"), (req, res)
 // Tries multiple 苹果CMS v10 anime sites, returns {sources:[{site,ep,url,playUrl}]}
 // Verified 苹果CMS v10 compatible sites (all expose /api.php/provide/vod/)
 const CMS_ANIME_SITES = [
-  { name: "落攻动漫", base: "https://www.fengchedonman.com" },
-  { name: "酱紫社",   base: "http://www.jzsdm1.com" },
-  { name: "七色番",   base: "https://www.7sefun.top" },
-  { name: "第一动漫", base: "https://1anime2025.me" },
-  { name: "新动漫网", base: "https://www.xdmdy.cc" },
-  { name: "咕咕番",   base: "https://www.gugu3.com" },
-  { name: "去看吧",   base: "https://11kt.net" },
-  { name: "热播之家", base: "https://www.rebozj.pro" },
-  { name: "新优酷",   base: "https://www.youknow.tv" },
-  { name: "omofun",   base: "https://enlienli.link" },
+  // ── from animeko-prime.json ──────────────────────────────────────────
+  { name: "七色番",     base: "https://www.7sefun.top" },
+  { name: "LIBVIO",    base: "https://www.libvio.site" },
+  { name: "喵物次元",  base: "https://www.mwcy.net" },
+  { name: "高清点播",  base: "https://hqvod.com" },
+  { name: "omofun",    base: "https://enlienli.link" },
+  { name: "去看吧",    base: "https://11kt.net" },
+  { name: "风铃动漫",  base: "https://www.aafun.cc" },
+  { name: "咕咕番",    base: "https://www.gugu3.com" },
+  { name: "酱紫社",    base: "http://www.jzsdm1.com" },
+  { name: "热播之家",  base: "https://www.rebozj.pro" },
+  { name: "第一动漫",  base: "https://1anime2026.me" },
+  { name: "柯南影视",  base: "https://www.knvod.com" },
+  // ── from ani-yuan.json ───────────────────────────────────────────────
+  { name: "落攻动漫",  base: "https://www.fengchedonman.com" },
+  { name: "嘀哩嘀哩",  base: "https://dilidili.online" },
+  { name: "新动漫网",  base: "https://www.xdmdy.cc" },
+  { name: "秋之动漫",  base: "https://www.akianime.cc" },
+  { name: "AGE动漫",   base: "https://www.agedm.org" },
+  { name: "新优酷",    base: "https://www.youknow.tv" },
+  { name: "萌番动漫",  base: "https://www.moefan.cc" },
+  { name: "E-ACG",     base: "https://www.eacg1.com" },
+  { name: "叽哔动漫",  base: "https://www.jibi.cc" },
+  { name: "佩可爱动漫",base: "https://acg.pekolove.net" },
+  { name: "火狼动漫",  base: "https://huolangdm2.net" },
+  { name: "风车动漫",  base: "https://dmfengche.cc" },
+  { name: "影视大全",  base: "https://cctv5566.cc" },
+  { name: "风车动漫2", base: "https://yhdmya.com" },
+  { name: "蜜桃动漫",  base: "https://www.mitaodm.com" },
+  { name: "趣动漫",    base: "https://www.qdm66.com" },
+  { name: "九兔动漫",  base: "https://www.jtdm.cc" },
+  { name: "girigiri",  base: "https://bgm.girigirilove.com" },
+  { name: "黑猫动漫",  base: "https://m.baimaodm.com" },
+  { name: "海星动漫",  base: "https://www.haixingdmx.com" },
+  { name: "追剧影院",  base: "https://pzlyw.com" },
+  { name: "影视森林",  base: "http://www.hc34567.com" },
 ];
 
 const CMS_HEADERS = {
@@ -1111,8 +1137,8 @@ app.get("/api/anime/find-stream", requireAuth, async (req, res) => {
     } catch { /* ignore per-site errors */ } finally { clearTimeout(timer); }
   }
 
-  // Hard cap: respond within 8 seconds no matter what
-  const hardTimeout = new Promise((resolve) => setTimeout(resolve, 8_000));
+  // Hard cap: respond within 10 seconds no matter what
+  const hardTimeout = new Promise((resolve) => setTimeout(resolve, 10_000));
   const searchAll = Promise.allSettled(
     CMS_ANIME_SITES.flatMap((site) => {
       const tasks = [querySite(site, name)];
