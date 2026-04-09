@@ -67,6 +67,7 @@ export function sanitizeMessageCard(rawCard) {
     mediaAttachmentId: String(card.mediaAttachmentId || "").slice(0, 160),
     sourceLabel: String(card.sourceLabel || "").slice(0, 300),
     sourceUrl: String(card.sourceUrl || "").slice(0, 500),
+    graphState: card.graphState && typeof card.graphState === "object" ? card.graphState : null,
     actions
   };
   if (!next.title && !next.body && !next.mediaAttachmentId && !next.imageUrl) {

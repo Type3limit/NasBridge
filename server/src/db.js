@@ -375,9 +375,7 @@ export function upsertFileMeta(fileId, patch) {
   }
   const entity = {
     fileId,
-    columnId: patch?.columnId || "",
-    folderPath: patch?.folderPath || "",
-    mimeType: patch?.mimeType || "",
+    ...patch,
     createdAt: now,
     updatedAt: now
   };

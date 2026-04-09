@@ -29,9 +29,18 @@ export async function streamFinalAnswer({ planningMessages, api, replyMessageId,
     actions: [{ type: "cancel-bot-job", label: "停止生成" }]
   };
 
+  // 如果对话中包含工具调用结果，追加合成指令以确保模型基于实际结果作答
+  const hasToolResults = planningMessages.some(m => m.role === "tool");
+  const messagesForAnswer = hasToolResults
+    ? [
+        ...planningMessages.filter(m => !(m.role === "assistant" && !m.tool_calls?.length && m.content)),
+        { role: "user", content: "基于上方工具返回的结果，直接给出最终回答。要求：只输出一段完整回答，包含关键事实/标题/数据/来源链接；不要重复、不要分两段、不要描述搜索过程。" }
+      ]
+    : planningMessages;
+
   const streamResult = await invokeTextModelStream({
     model: modelOverride || defaultTextModel || undefined,
-    messages: planningMessages,
+    messages: messagesForAnswer,
     signal: api.signal,
     maxTokens: 1200,
     temperature: 0.35

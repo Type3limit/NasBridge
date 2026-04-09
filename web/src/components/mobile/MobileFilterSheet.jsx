@@ -17,7 +17,7 @@ const SORT_OPTIONS = [
   { value: "type",      label: "按类型" },
 ];
 
-const DEFAULTS = { keyword: "", columnFilter: "all", typeFilter: "all", sortBy: "createdAt" };
+const DEFAULTS = { keyword: "", columnFilter: "all", typeFilter: "all", tagFilter: [], sortBy: "createdAt" };
 
 export default function MobileFilterSheet({
   open,
@@ -25,16 +25,18 @@ export default function MobileFilterSheet({
   keyword,
   columnFilter,
   typeFilter,
+  tagFilter = [],
+  availableTags = [],
   sortBy,
   columns = [],
   onApply,
   onReset,
 }) {
-  const [draft, setDraft] = useState({ keyword, columnFilter, typeFilter, sortBy });
+  const [draft, setDraft] = useState({ keyword, columnFilter, typeFilter, tagFilter, sortBy });
 
   // Sync draft when sheet opens
   useEffect(() => {
-    if (open) setDraft({ keyword, columnFilter, typeFilter, sortBy });
+    if (open) setDraft({ keyword, columnFilter, typeFilter, tagFilter, sortBy });
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Escape key
@@ -65,7 +67,7 @@ export default function MobileFilterSheet({
   if (!open) return null;
 
   const set = (key) => (value) => setDraft((d) => ({ ...d, [key]: value }));
-  const isDirty = draft.keyword !== DEFAULTS.keyword || draft.columnFilter !== DEFAULTS.columnFilter || draft.typeFilter !== DEFAULTS.typeFilter || draft.sortBy !== DEFAULTS.sortBy;
+  const isDirty = draft.keyword !== DEFAULTS.keyword || draft.columnFilter !== DEFAULTS.columnFilter || draft.typeFilter !== DEFAULTS.typeFilter || (draft.tagFilter || []).length > 0 || draft.sortBy !== DEFAULTS.sortBy;
 
   const columnOptions = [
     { value: "all", label: "全部栏目" },
@@ -132,6 +134,27 @@ export default function MobileFilterSheet({
               </button>
             ))}
           </div>
+
+          {/* Tags */}
+          {availableTags.length > 0 && (
+            <>
+              <label className="mobileFilterLabel">标签</label>
+              <div className="mobileFilterChips">
+                {availableTags.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    className={`mobileFilterChip tagChip${(draft.tagFilter || []).includes(tag) ? " active" : ""}`}
+                    onClick={() => set("tagFilter")((draft.tagFilter || []).includes(tag)
+                      ? (draft.tagFilter || []).filter((t) => t !== tag)
+                      : [...(draft.tagFilter || []), tag])}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
 
           {/* Sort */}
           <label className="mobileFilterLabel">排序方式</label>

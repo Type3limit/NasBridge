@@ -572,12 +572,19 @@ function resolveDownloadOptions(context = {}) {
   const page = clampPositiveInteger(parsedArgs.page || parsedArgs.p || inlineOptions.page, 0);
   const quality = String(parsedArgs.quality || parsedArgs.qn || inlineOptions.quality || "").trim();
   const targetFolder = String(parsedArgs.targetFolder || inlineOptions.targetFolder || "").trim();
+  // nonInteractive: skip all selection cards and login prompts, auto-pick defaults.
+  // Used when bilibili.downloader is invoked programmatically (e.g. from video.analyze).
+  const nonInteractive = Boolean(parsedArgs.nonInteractive);
+  // allPages: download every page of a multi-page video sequentially.
+  const allPages = Boolean(parsedArgs.allPages);
   return {
     page,
     quality,
     targetFolder,
-    hasExplicitPage: page > 0,
-    hasExplicitQuality: Boolean(quality)
+    hasExplicitPage: page > 0 || allPages,
+    hasExplicitQuality: Boolean(quality),
+    nonInteractive,
+    allPages
   };
 }
 
@@ -611,7 +618,7 @@ function hasSpecificSelection(downloadOptions = {}) {
   return downloadOptions?.hasExplicitPage === true || downloadOptions?.hasExplicitQuality === true;
 }
 
-function buildBilibiliInvokeAction(label = "", { source = "", sourceUrl = "", targetFolder = "", page = 0, quality = "", pageWindowStart = 0 } = {}) {
+function buildBilibiliInvokeAction(label = "", { source = "", sourceUrl = "", targetFolder = "", page = 0, quality = "", pageWindowStart = 0, allPages = false } = {}) {
   const resolvedSource = String(source || sourceUrl || "").trim();
   const parsedArgs = {
     __chatReplyMode: "replace-chat-message",
@@ -620,7 +627,8 @@ function buildBilibiliInvokeAction(label = "", { source = "", sourceUrl = "", ta
     targetFolder: String(targetFolder || "").trim(),
     page: clampPositiveInteger(page, 0) || undefined,
     quality: String(quality || "").trim() || undefined,
-    pageWindowStart: clampPositiveInteger(pageWindowStart, 0) || undefined
+    pageWindowStart: clampPositiveInteger(pageWindowStart, 0) || undefined,
+    allPages: allPages || undefined
   };
   return {
     type: "invoke-bot",
@@ -687,6 +695,13 @@ function buildBilibiliSelectionCard({ stage = "page", source = "", metadata = {}
     bodyLines.push("");
     bodyLines.push("当前页分P：");
     bodyLines.push(...summarizePages(visiblePages));
+    // "Download all pages" shortcuts at the top
+    actions.push(buildBilibiliInvokeAction("全部分P（最高画质）", {
+      source: actionSource, targetFolder, quality: "best", allPages: true
+    }));
+    actions.push(buildBilibiliInvokeAction("全部分P（默认画质）", {
+      source: actionSource, targetFolder, allPages: true
+    }));
     for (const page of visiblePages) {
       actions.push(buildBilibiliInvokeAction(`P${page.page}`, {
         source: actionSource,
@@ -760,6 +775,52 @@ function buildBilibiliSelectionCard({ stage = "page", source = "", metadata = {}
     mediaAttachmentId: "",
     sourceLabel: String(metadata?.webpage_url || actionSource || "").trim(),
     sourceUrl: String(metadata?.webpage_url || actionSource || "").trim(),
+    actions
+  };
+}
+
+function buildBilibiliBatchAction(label, sources = [], targetFolder = "", quality = "") {
+  const rawText = sources.join(" ");
+  return {
+    type: "invoke-bot",
+    label: String(label || "").trim(),
+    botId: "bilibili.downloader",
+    rawText,
+    parsedArgs: {
+      __chatReplyMode: "replace-chat-message",
+      __batchConfirmed: true,
+      targetFolder: String(targetFolder || "").trim() || undefined,
+      quality: String(quality || "").trim() || undefined
+    }
+  };
+}
+
+function buildBilibiliBatchSelectionCard({ sources = [], allMetadata = [], targetFolder = "" } = {}) {
+  const videoLines = sources.map((src, i) => {
+    const meta = allMetadata[i] || {};
+    const title = String(meta?.title || src).trim().slice(0, 50);
+    const duration = formatDurationLabel(meta?.duration || 0);
+    const multiPage = Array.isArray(meta?.pages) && meta.pages.length > 1 ? ` · ${meta.pages.length}P` : "";
+    return `${i + 1}. ${title}${duration ? ` · ${duration}` : ""}${multiPage}`;
+  });
+  const actions = [
+    buildBilibiliBatchAction("最高画质下载全部", sources, targetFolder, "best"),
+    buildBilibiliBatchAction("1080p 下载全部", sources, targetFolder, "1080p"),
+    buildBilibiliBatchAction("720p 下载全部", sources, targetFolder, "720p"),
+    buildBilibiliBatchAction("默认画质下载全部", sources, targetFolder, "")
+  ];
+  return {
+    type: "media-result",
+    status: "info",
+    title: `批量下载 ${sources.length} 个视频`,
+    subtitle: "请选择统一的下载画质",
+    body: `已识别以下 ${sources.length} 个视频，多P视频将自动选择 P1。请选择下载画质后开始批量下载：\n\n${videoLines.join("\n")}`,
+    progress: null,
+    imageUrl: "",
+    imageAlt: "",
+    mediaAttachmentId: "",
+    sourceLabel: "",
+    sourceUrl: "",
     actions
   };
 }
@@ -1065,6 +1126,65 @@ async function extractSourceFromContext(context, api) {
   return resolveSourceFromChatMessage(context, api);
 }
 
+function extractAllBilibiliSources(rawText = "") {
+  const text = String(rawText || "");
+  const sources = [];
+  const seen = new Set(); // normalized source strings
+  const seenBvIds = new Set(); // BV IDs seen inside URLs, to avoid URL+BV double-counting
+  // Extract all URLs first, also track which BV IDs they contain
+  for (const m of text.matchAll(/https?:\/\/\S+/gi)) {
+    const src = normalizeBilibiliSource(m[0]);
+    if (src && isSupportedBilibiliSource(src) && !seen.has(src)) {
+      seen.add(src);
+      const bvId = extractBilibiliVideoId(src);
+      if (bvId) seenBvIds.add(bvId.toUpperCase());
+      sources.push(src);
+    }
+  }
+  // Extract standalone BV numbers not already captured inside a URL
+  for (const m of text.matchAll(/\bBV[0-9A-Za-z]+\b/gi)) {
+    if (seenBvIds.has(m[0].toUpperCase())) continue; // already covered by a URL above
+    const src = normalizeBilibiliSource(m[0]);
+    if (src && !seen.has(src)) {
+      seen.add(src);
+      sources.push(src);
+    }
+  }
+  return sources;
+}
+
+// Downloads one Bilibili source silently (nonInteractive). Returns { metadata, imported, reusable, error }.
+async function downloadOneBilibiliSource(source, context, api, opts = {}) {
+  const { targetFolder = "", downloadOptions = {} } = opts;
+  const hasExplicitQuality = Boolean(downloadOptions.quality) || downloadOptions.hasExplicitQuality || false;
+  const mergedOpts = { ...downloadOptions, nonInteractive: true, hasExplicitPage: downloadOptions.hasExplicitPage || false, hasExplicitQuality };
+  const tempDir = path.join(api.appDataRoot, "temp", `${context.jobId}-${String(source).replace(/[^a-zA-Z0-9]/g, "_").slice(-20)}-${Date.now()}`);
+  await fs.promises.mkdir(tempDir, { recursive: true });
+  try {
+    let metadata = {};
+    try {
+      metadata = await readMetadata(source, tempDir, api, mergedOpts);
+    } catch (error) {
+      await api.appendLog(`[batch] metadata failed for ${source}: ${error.message}`);
+    }
+    const reusable = await findReusableImport({ appDataRoot: api.appDataRoot, storageRoot: api.storageRoot, targetFolder, source, metadata, downloadOptions: mergedOpts });
+    if (reusable) {
+      await api.appendLog(`[batch] reuse: ${reusable.relativePath}`);
+      return { metadata, imported: reusable, reusable: true, error: null };
+    }
+    const downloadedPath = await downloadMedia(source, tempDir, api, metadata, mergedOpts);
+    const imported = await importFileIntoLibrary({ sourcePath: downloadedPath, storageRoot: api.storageRoot, targetFolder, fileName: path.basename(downloadedPath) });
+    await api.appendLog(`[batch] imported: ${imported.relativePath}`);
+    await rememberImportedResult({ appDataRoot: api.appDataRoot, source, metadata, imported, downloadOptions: mergedOpts });
+    return { metadata, imported, reusable: false, error: null };
+  } catch (error) {
+    await api.appendLog(`[batch] failed ${source}: ${error.message}`);
+    return { metadata: {}, imported: null, reusable: false, error };
+  } finally {
+    fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 function buildBilibiliCard({ metadata, imported, source, attachmentId, status = "succeeded", reusable = false }) {
   const title = String(metadata?.title || imported?.fileName || "Bilibili download").trim();
   const uploader = String(metadata?.owner?.name || metadata?.uploader || metadata?.channel || "").trim();
@@ -1087,8 +1207,8 @@ function buildBilibiliCard({ metadata, imported, source, attachmentId, status = 
     subtitle,
     body: reusable ? "已复用已入库资源" : `已入库到 ${imported?.relativePath || imported?.fileName || "资源库"}`,
     progress: null,
-    imageUrl,
-    imageAlt: title,
+    imageUrl: "",
+    imageAlt: "",
     mediaAttachmentId: attachmentId || "",
     sourceLabel,
     sourceUrl: sourceLabel,
@@ -1708,7 +1828,78 @@ export function createBilibiliDownloaderPlugin() {
       const inferredDownloadOptions = !hasTriggerPayload
         ? await resolveDownloadOptionsFromChatMessage(context, api)
         : null;
-      const source = await extractSourceFromContext(context, api);
+
+      // Batch mode: multiple BV/URL sources in one message
+      const rawText = String(context?.trigger?.rawText || "");
+      const allSources = hasTriggerPayload ? extractAllBilibiliSources(rawText) : [];
+      if (allSources.length > 1) {
+        const targetFolder = sanitizeImportFolder(context?.trigger?.parsedArgs?.targetFolder || bilibiliImportDir);
+        const downloadOptions = inferredDownloadOptions || resolveDownloadOptions(context);
+        const messageId = getBilibiliReplyMessageId(context);
+        const batchConfirmed = Boolean(context?.trigger?.parsedArgs?.__batchConfirmed);
+
+        if (!batchConfirmed) {
+          // Show selection card: fetch metadata for all sources in parallel (best-effort, 15s timeout each).
+          await api.emitProgress({ phase: "parse-input", label: "正在解析视频信息…", percent: 10 });
+          const allMetadata = await Promise.all(allSources.map(async (src) => {
+            const metaTempDir = path.join(api.appDataRoot, "temp", `${context.jobId}-meta-${src.replace(/[^a-zA-Z0-9]/g, "_").slice(-20)}`);
+            await fs.promises.mkdir(metaTempDir, { recursive: true });
+            try {
+              return await Promise.race([
+                readMetadata(src, metaTempDir, api, downloadOptions),
+                new Promise((resolve) => setTimeout(() => resolve({}), 15000))
+              ]);
+            } catch {
+              return {};
+            } finally {
+              fs.promises.rm(metaTempDir, { recursive: true, force: true }).catch(() => {});
+            }
+          }));
+          const card = buildBilibiliBatchSelectionCard({ sources: allSources, allMetadata, targetFolder });
+          const chatReply = await api.publishChatReply({
+            id: messageId,
+            createdAt: context.createdAt,
+            text: "",
+            attachments: [],
+            card
+          });
+          return { chatReply, importedFiles: [], artifacts: [] };
+        }
+
+        // Confirmed: run all downloads sequentially.
+        const results = [];
+        for (let i = 0; i < allSources.length; i++) {
+          api.throwIfCancelled?.();
+          const batchSource = allSources[i];
+          const percent = Math.round(5 + (i / allSources.length) * 88);
+          await api.emitProgress({ phase: "batch-download", label: `下载 ${i + 1}/${allSources.length}: ${batchSource}`, percent });
+          const result = await downloadOneBilibiliSource(batchSource, context, api, { targetFolder, downloadOptions });
+          results.push({ source: batchSource, ...result });
+        }
+        await triggerLibraryRescan({ syncFiles: api.dependencies?.syncFiles });
+        await api.emitProgress({ phase: "done", label: "批量下载完成", percent: 100 });
+        const succeeded = results.filter((r) => !r.error);
+        const failed = results.filter((r) => r.error);
+        const lines = [`## Bilibili 批量下载完成\n`];
+        lines.push(`✅ 成功 ${succeeded.length} 个，❌ 失败 ${failed.length} 个\n`);
+        for (const r of succeeded) {
+          const title = String(r.metadata?.title || r.imported?.fileName || r.source).slice(0, 60);
+          lines.push(`- ✅ ${title}${r.reusable ? " (已复用)" : ""}`);
+        }
+        for (const r of failed) {
+          lines.push(`- ❌ ${r.source}: ${r.error?.message || "未知错误"}`);
+        }
+        const chatReply = await api.publishChatReply({
+          id: messageId,
+          createdAt: context.createdAt,
+          text: lines.join("\n"),
+          attachments: [],
+          card: null
+        });
+        return { chatReply, importedFiles: succeeded.map((r) => r.imported).filter(Boolean), artifacts: [] };
+      }
+
+      const source = allSources[0] || await extractSourceFromContext(context, api);
       if (!source) {
         throw new Error("bilibili source is required: provide a BV id or Bilibili URL");
       }
@@ -1767,41 +1958,96 @@ export function createBilibiliDownloaderPlugin() {
       const requiresPageSelection = downloadOptions.hasExplicitPage !== true && Array.isArray(metadata?.pages) && metadata.pages.length > 1;
       const requiresQualitySelection = downloadOptions.hasExplicitQuality !== true && availableQualities.length > 1;
 
-      if (shouldPromptLoginForQuality) {
-        const card = buildBilibiliLoginGuideCard({
-          source,
-          metadata,
-          targetFolder,
-          downloadOptions,
-          maxAvailableQuality
-        });
+      // allPages: download every page of a multi-page video sequentially.
+      if (downloadOptions.allPages && Array.isArray(metadata?.pages) && metadata.pages.length > 0) {
+        const pages = metadata.pages;
+        await api.appendLog(`all-pages mode: ${pages.length} pages, source: ${source}`);
+        const results = [];
+        for (let i = 0; i < pages.length; i++) {
+          api.throwIfCancelled?.();
+          const pageNum = pages[i]?.page || (i + 1);
+          const percent = Math.round(5 + (i / pages.length) * 88);
+          await api.emitProgress({ phase: "batch-download", label: `下载 P${pageNum}（${i + 1}/${pages.length}）`, percent });
+          const result = await downloadOneBilibiliSource(source, context, api, {
+            targetFolder,
+            downloadOptions: { ...downloadOptions, page: pageNum, hasExplicitPage: true, allPages: false }
+          });
+          results.push({ pageNum, ...result });
+        }
+        await triggerLibraryRescan({ syncFiles: api.dependencies?.syncFiles });
+        await api.emitProgress({ phase: "done", label: "全部分P下载完成", percent: 100 });
+        const succeeded = results.filter((r) => !r.error);
+        const failed = results.filter((r) => r.error);
+        const lines = [`## 全部分P下载完成（共 ${pages.length} 个分P）\n`];
+        lines.push(`✅ 成功 ${succeeded.length} 个，❌ 失败 ${failed.length} 个\n`);
+        for (const r of succeeded) {
+          const title = String(r.metadata?.title || r.imported?.fileName || `P${r.pageNum}`).slice(0, 60);
+          lines.push(`- ✅ P${r.pageNum} ${title}${r.reusable ? " (已复用)" : ""}`);
+        }
+        for (const r of failed) {
+          lines.push(`- ❌ P${r.pageNum}: ${r.error?.message || "未知错误"}`);
+        }
         const chatReply = await api.publishChatReply({
           id: getBilibiliReplyMessageId(context),
           createdAt: context.createdAt,
-          text: "",
+          text: lines.join("\n"),
           attachments: [],
-          card
+          card: null
         });
-        return { chatReply, importedFiles: [], artifacts: [] };
+        return { chatReply, importedFiles: succeeded.map((r) => r.imported).filter(Boolean), artifacts: [] };
+      }
+
+      if (shouldPromptLoginForQuality) {
+        if (downloadOptions.nonInteractive) {
+          // Proceed without login; yt-dlp/playwright will use the best quality available anonymously.
+          await api.appendLog(`non-interactive: login would be needed for requested quality — proceeding without login`);
+        } else {
+          const card = buildBilibiliLoginGuideCard({
+            source,
+            metadata,
+            targetFolder,
+            downloadOptions,
+            maxAvailableQuality
+          });
+          const chatReply = await api.publishChatReply({
+            id: getBilibiliReplyMessageId(context),
+            createdAt: context.createdAt,
+            text: "",
+            attachments: [],
+            card
+          });
+          return { chatReply, importedFiles: [], artifacts: [] };
+        }
       }
 
       if (requiresPageSelection || requiresQualitySelection) {
-        const card = buildBilibiliSelectionCard({
-          stage: requiresPageSelection ? "page" : "quality",
-          source,
-          metadata,
-          targetFolder,
-          downloadOptions,
-          viewOptions
-        });
-        const chatReply = await api.publishChatReply({
-          id: getBilibiliReplyMessageId(context),
-          createdAt: context.createdAt,
-          text: "",
-          attachments: [],
-          card
-        });
-        return { chatReply, importedFiles: [], artifacts: [] };
+        if (downloadOptions.nonInteractive) {
+          // Auto-select defaults: page 1 for multi-page, default quality for quality selection.
+          if (requiresPageSelection) {
+            downloadOptions = { ...downloadOptions, page: 1, hasExplicitPage: true };
+            await api.appendLog(`non-interactive: auto-selecting page 1 for multi-page video`);
+          }
+          if (requiresQualitySelection) {
+            await api.appendLog(`non-interactive: proceeding with default quality (no explicit selection)`);
+          }
+        } else {
+          const card = buildBilibiliSelectionCard({
+            stage: requiresPageSelection ? "page" : "quality",
+            source,
+            metadata,
+            targetFolder,
+            downloadOptions,
+            viewOptions
+          });
+          const chatReply = await api.publishChatReply({
+            id: getBilibiliReplyMessageId(context),
+            createdAt: context.createdAt,
+            text: "",
+            attachments: [],
+            card
+          });
+          return { chatReply, importedFiles: [], artifacts: [] };
+        }
       }
 
       const reusable = await findReusableImport({ appDataRoot: api.appDataRoot, storageRoot: api.storageRoot, targetFolder, source, metadata, downloadOptions });

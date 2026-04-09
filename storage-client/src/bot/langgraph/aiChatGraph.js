@@ -2,6 +2,107 @@ import { END, START, StateGraph } from "@langchain/langgraph";
 import { AiChatGraphState } from "./state.js";
 
 const ROUTE_NAMES = new Set(["command", "delegate", "vision", "text", "textTools", "recovery"]);
+
+const ROUTE_LABELS = {
+  text: "文本回复",
+  textTools: "工具调用",
+  vision: "视觉分析",
+  delegate: "委派 Bot",
+  command: "命令处理",
+  recovery: "会话恢复"
+};
+
+function buildNodeExitDetails(nodeName, state, update) {
+  const prepared = (update?.prepared && typeof update.prepared === "object" ? update.prepared : null)
+    || (state?.prepared && typeof state.prepared === "object" ? state.prepared : {});
+  const details = { type: "ai-chat-graph" };
+  const route = (update?.route ?? state?.route) || "text";
+  const routeLabel = ROUTE_LABELS[route];
+  if (routeLabel) details.route = `${routeLabel} (${route})`;
+
+  switch (nodeName) {
+    case "prepareInput": {
+      const prompt = prepared.effectivePrompt || "";
+      if (prompt) details.intent = prompt.length > 80 ? `${prompt.slice(0, 80)}…` : prompt;
+      if (prepared.modelOverride) details.model = prepared.modelOverride;
+      const delegated = prepared.delegatedInvocation?.invocation?.target;
+      if (delegated) details.delegated = delegated.displayName || delegated.botId || "未知";
+      const session = prepared.activeSession;
+      if (session) details.session = session.name || `#${session.id}`;
+      break;
+    }
+    case "prepareContext": {
+      const historyCount = Array.isArray(prepared.combinedHistoryMessages)
+        ? prepared.combinedHistoryMessages.length : 0;
+      details.historyCount = historyCount;
+      const systemPromptLen = typeof prepared.systemPrompt === "string"
+        ? prepared.systemPrompt.length : 0;
+      details.systemPromptLen = systemPromptLen;
+      const intent = prepared.effectivePrompt || "";
+      if (intent) details.intent = intent.length > 80 ? `${intent.slice(0, 80)}…` : intent;
+      break;
+    }
+    case "textPlan": {
+      const pendingToolCalls = Array.isArray(update?.pendingToolCalls) ? update.pendingToolCalls
+        : Array.isArray(state?.pendingToolCalls) ? state.pendingToolCalls : [];
+      const modelResult = update?.modelResult || state?.modelResult;
+      if (modelResult?.model) details.model = modelResult.model;
+      if (pendingToolCalls.length) {
+        details.tools = pendingToolCalls.map((tc) => tc.name || tc.type || "tool");
+        details.toolRound = Number.isInteger(update?.toolRound) ? update.toolRound
+          : Number.isInteger(state?.toolRound) ? state.toolRound : 1;
+      } else {
+        details.directReply = true;
+      }
+      const intent2 = prepared.effectivePrompt || "";
+      if (intent2 && !details.intent) details.intent = intent2.length > 80 ? `${intent2.slice(0, 80)}…` : intent2;
+      break;
+    }
+    case "textTools": {
+      const prevPending = Array.isArray(state?.pendingToolCalls) ? state.pendingToolCalls : [];
+      if (prevPending.length) {
+        details.executedTools = prevPending.map((tc) => tc.name || tc.type || "tool");
+      }
+      break;
+    }
+    case "textAnswer": {
+      details.directReply = true;
+      const intent3 = prepared.effectivePrompt || "";
+      if (intent3) details.intent = intent3.length > 80 ? `${intent3.slice(0, 80)}…` : intent3;
+      break;
+    }
+    case "delegateResolve": {
+      const invocation = ((update?.prepared || prepared)?.delegatedInvocation?.invocation);
+      const target = invocation?.target;
+      if (target) details.delegated = target.displayName || target.botId || "未知";
+      const intent4 = prepared.effectivePrompt || "";
+      if (intent4) details.intent = intent4.length > 80 ? `${intent4.slice(0, 80)}…` : intent4;
+      break;
+    }
+    case "delegateExecute": {
+      const invocation2 = prepared?.delegatedInvocation?.invocation;
+      const target2 = invocation2?.target;
+      if (target2) details.delegated = target2.displayName || target2.botId || "未知";
+      details.intent = `已委派至 ${details.delegated || "Bot"}`;
+      break;
+    }
+    case "visionCollect":
+    case "visionBuild":
+      details.intent = "收集与处理视觉输入";
+      break;
+    case "visionAnswer":
+      details.intent = "视觉内容分析与回复";
+      break;
+    default:
+      break;
+  }
+  return details;
+}
+
+// 这些节点内部会调用 publishChatReply 作为最终动作，
+// 节点退出后不应再发 bot-status graphState 更新，否则会覆盖已发出的 ai-answer 卡片
+const ANSWER_NODE_NAMES = new Set(["textAnswer", "visionAnswer", "recovery", "command", "delegateExecute"]);
+
 const TEXT_CONTINUATION_NAMES = new Set(["textTools", "textAnswer"]);
 
 function createTraceEntry(state, node, status = "completed") {
@@ -50,17 +151,33 @@ function createTrackedNode(nodeName, handlerName) {
       status: "running"
     });
     try {
+      await api?.emitProgress?.({
+        phase: String(state?.phase || "running"),
+        label: String(state?.progress?.label || nodeName),
+        percent: Number.isFinite(state?.progress?.percent) ? state.progress.percent : undefined,
+        graphState: {
+          activeNode: nodeName,
+          route: String(state?.route || "text").trim(),
+          nodeHistory: Array.isArray(state?.trace) ? state.trace : [],
+          toolRound: Number.isInteger(state?.toolRound) ? state.toolRound : 0
+        }
+      });
+    } catch {
+      // emitProgress 失败不中断节点执行
+    }
+    try {
       const update = await handler(state);
+      const nextRoute = update?.route ?? state?.route;
       const nextTrace = (Array.isArray(state?.trace) ? state.trace : []).concat(createTraceEntry({ ...state, ...(update && typeof update === "object" ? update : {}) }, nodeName));
       await api?.appendLog?.(`langgraph node exit: ${nodeName}`);
       await hooks?.recordNodeEvent?.({
         node: nodeName,
         event: "exit",
-        route: update?.route ?? state?.route,
+        route: nextRoute,
         status: "completed"
       });
       await hooks?.captureState?.({
-        route: update?.route ?? state?.route,
+        route: nextRoute,
         prepared: update?.prepared ?? state?.prepared,
         trace: nextTrace,
         planningMessages: Array.isArray(update?.planningMessages) ? update.planningMessages : Array.isArray(state?.planningMessages) ? state.planningMessages : [],
@@ -68,6 +185,27 @@ function createTrackedNode(nodeName, handlerName) {
         modelResult: update?.modelResult ?? state?.modelResult ?? null,
         toolRound: Number.isInteger(update?.toolRound) ? update.toolRound : Number.isInteger(state?.toolRound) ? state.toolRound : 0
       });
+      // Emit exit-time progress with richer node-specific details so the card can display them.
+      // Skip for answer nodes: they already called publishChatReply, and a subsequent bot-status
+      // graphState update to the same messageId would overwrite the ai-answer card with the star map.
+      if (!ANSWER_NODE_NAMES.has(nodeName)) {
+        try {
+          await api?.emitProgress?.({
+            phase: nodeName,
+            label: String(state?.progress?.label || nodeName),
+            percent: Number.isFinite(state?.progress?.percent) ? state.progress.percent : undefined,
+            graphState: {
+              activeNode: nodeName,
+              route: String(nextRoute || "text").trim(),
+              nodeHistory: nextTrace,
+              toolRound: Number.isInteger(update?.toolRound) ? update.toolRound : Number.isInteger(state?.toolRound) ? state.toolRound : 0
+            },
+            details: buildNodeExitDetails(nodeName, state, update)
+          });
+        } catch {
+          // non-critical
+        }
+      }
       return {
         ...(update && typeof update === "object" ? update : {}),
         trace: createTraceEntry({ ...state, ...(update && typeof update === "object" ? update : {}) }, nodeName)

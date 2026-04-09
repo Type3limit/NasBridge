@@ -9,11 +9,13 @@ export function findNestedBotInvocation(prompt = "", catalog = []) {
     return null;
   }
   const remainingPrompt = String(prompt || "").trim().replace(/^@[a-z0-9._-]+\b\s*/i, "").trim();
-  const bilibiliSourceMatch = remainingPrompt.match(/https?:\/\/\S+|\bBV[0-9A-Za-z]+\b/i);
+  // Extract all Bilibili sources from rawText; for single source set parsedArgs.source, for multiple leave parsedArgs empty so bilibili bot uses batch mode.
+  const allSourceMatches = [...remainingPrompt.matchAll(/https?:\/\/\S+|\bBV[0-9A-Za-z]+\b/gi)].map((m) => m[0]);
+  const uniqueSources = [...new Set(allSourceMatches)];
   return {
     target,
     rawText: remainingPrompt,
-    parsedArgs: bilibiliSourceMatch?.[0] ? { source: bilibiliSourceMatch[0] } : {}
+    parsedArgs: uniqueSources.length === 1 ? { source: uniqueSources[0] } : {}
   };
 }
 

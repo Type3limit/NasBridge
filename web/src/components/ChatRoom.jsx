@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Badge, Button, Caption1, Spinner, Subtitle1, Text } from "@fluentui/react-components";
-import { ArrowClockwiseRegular, ArrowUploadRegular, CopyRegular, DismissRegular, ImageRegular, SendRegular, VideoRegular } from "@fluentui/react-icons";
+import { ArrowClockwiseRegular, ArrowUploadRegular, CopyRegular, DismissRegular, DocumentRegular, FolderOpenRegular, ImageRegular, MusicNote2Regular, SendRegular, VideoRegular } from "@fluentui/react-icons";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AvatarFace from "./AvatarFace";
+import { AiStarMapCard } from "./AiStarMapCard";
 import { useResolvedP2PAssetUrl } from "./p2pAsset";
 import { InlineVideoPlayer } from "./VideoViewportSurface";
 import { apiRequest, toWsUrl } from "../api";
@@ -68,7 +69,7 @@ function parseChatBotInvocation(text = "") {
       }
     };
   }
-  const commandToken = String(afterMention.split(/\s+/)[0] || "").trim().toLowerCase();
+  const commandToken = String(afterMention.split(/\s+/)[0] || "").trim().replace(/^\//, "").toLowerCase();
   const action = new Map([
     ["login", "login"],
     ["登录", "login"],
@@ -509,6 +510,9 @@ function normalizeMessage(message) {
           mediaAttachmentId: String(message.card.mediaAttachmentId || ""),
           sourceLabel: String(message.card.sourceLabel || ""),
           sourceUrl: String(message.card.sourceUrl || ""),
+          graphState: message.card.graphState && typeof message.card.graphState === "object"
+            ? message.card.graphState
+            : null,
           actions: Array.isArray(message.card.actions)
             ? message.card.actions.map((action) => ({
                 type: String(action?.type || ""),
@@ -691,6 +695,14 @@ function useAttachmentThumbnail({ attachment, p2p, enabled = true }) {
   return thumbnailUrl;
 }
 
+function FilePickerItemThumb({ file, p2p }) {
+  const mime = String(file?.mimeType || "");
+  const isMedia = mime.startsWith("video/") || mime.startsWith("image/");
+  const thumbnailUrl = useAttachmentThumbnail({ attachment: isMedia ? file : null, p2p, enabled: isMedia });
+  if (!thumbnailUrl) return null;
+  return <img src={thumbnailUrl} alt="" className="chatFilePickerItemThumb" />;
+}
+
 function ChatImageAttachmentPreview({ attachment, p2p, onOpenImage, onResolvedPreview }) {
   const largeAsset = isLargeChatMediaAttachment(attachment);
   const resolvedUrl = useResolvedP2PAssetUrl({
@@ -798,6 +810,7 @@ export default function ChatRoom({
   currentUser,
   clients,
   p2p,
+  nasFiles,
   setMessage,
   getClientDisplayName,
   openMediaPreview,
@@ -857,6 +870,9 @@ export default function ChatRoom({
   const [activeBotMentionIndex, setActiveBotMentionIndex] = useState(0);
   const [dismissedBotMentionKey, setDismissedBotMentionKey] = useState("");
   const [statusClock, setStatusClock] = useState(() => Date.now());
+  const [filePickerOpen, setFilePickerOpen] = useState(false);
+  const [filePickerQuery, setFilePickerQuery] = useState("");
+  const [filePickerStyle, setFilePickerStyle] = useState({});
   const fileInputRef = useRef(null);
   const customEmojiInputRef = useRef(null);
   const composerInputRef = useRef(null);
@@ -868,6 +884,8 @@ export default function ChatRoom({
   const botMentionRef = useRef(null);
   const botTooltipCloseTimerRef = useRef(null);
   const contextMenuRef = useRef(null);
+  const filePickerTriggerRef = useRef(null);
+  const filePickerRef = useRef(null);
   const listRef = useRef(null);
   const botLogCacheRef = useRef(new Map());
   const queuedFilesRef = useRef([]);
@@ -875,6 +893,18 @@ export default function ChatRoom({
   const pendingScrollModeRef = useRef("");
   const loadedDaySetRef = useRef(new Set());
   const chatSocketRef = useRef(null);
+
+  // Listen for anime page fill-chat events (torrent bot integration)
+  useEffect(() => {
+    function handleFillChat(e) {
+      const text = String(e?.detail?.text || "").trim();
+      if (!text) return;
+      setDraft(text);
+      requestAnimationFrame(() => composerInputRef.current?.focus());
+    }
+    window.addEventListener("anime:fill-chat", handleFillChat);
+    return () => window.removeEventListener("anime:fill-chat", handleFillChat);
+  }, []);
 
   const todayMessageCount = useMemo(
     () => messages.filter((item) => item.dayKey === todayKey).length,
@@ -907,6 +937,14 @@ export default function ChatRoom({
     () => messages.some((message) => message?.card?.type === "bot-status" && ["queued", "running", "info"].includes(String(message?.card?.status || ""))),
     [messages]
   );
+  const filePickerResults = useMemo(() => {
+    if (!filePickerOpen || !nasFiles?.length) return [];
+    const query = filePickerQuery.trim().toLowerCase();
+    const source = query
+      ? nasFiles.filter((f) => String(f.name || "").toLowerCase().includes(query))
+      : nasFiles;
+    return source.slice(0, 50);
+  }, [filePickerOpen, nasFiles, filePickerQuery]);
 
   useEffect(() => {
     queuedFilesRef.current = queuedFiles;
@@ -986,6 +1024,38 @@ export default function ChatRoom({
       window.removeEventListener("scroll", updatePosition, true);
     };
   }, [emojiPanelOpen, activeEmojiCategory, customEmojis.length, recentEmojis.length]);
+
+  useLayoutEffect(() => {
+    if (!filePickerOpen || !filePickerTriggerRef.current || !filePickerRef.current || typeof window === "undefined") return;
+    const updatePosition = () => {
+      const rect = filePickerTriggerRef.current?.getBoundingClientRect();
+      const popupRect = filePickerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const popupWidth = Math.min(Math.max(300, Math.round(popupRect?.width || 360)), window.innerWidth - 24);
+      const popupHeight = Math.min(Math.round(popupRect?.height || 380), Math.min(Math.round(window.innerHeight * 0.5), 420));
+      const left = Math.max(12, Math.min(rect.left, window.innerWidth - popupWidth - 12));
+      const preferredTop = rect.bottom + 8;
+      const fallbackTop = rect.top - popupHeight - 8;
+      const top = preferredTop + popupHeight <= window.innerHeight - 12
+        ? preferredTop
+        : Math.max(12, fallbackTop);
+      setFilePickerStyle({
+        position: "fixed",
+        left: `${left}px`,
+        top: `${top}px`,
+        width: `${popupWidth}px`,
+        maxHeight: `${popupHeight}px`
+      });
+    };
+    requestAnimationFrame(updatePosition);
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [filePickerOpen, filePickerResults.length]);
 
   useLayoutEffect(() => {
     if (!botTooltipOpen || !botTriggerRef.current || !botTooltipRef.current || typeof window === "undefined") {
@@ -1424,6 +1494,42 @@ export default function ChatRoom({
     });
   }
 
+  function addFileReference(nasFile) {
+    if (!nasFile?.id || !nasFile?.clientId || !nasFile?.path) return;
+    setQueuedFiles((prev) => {
+      if (prev.length >= CHAT_MAX_QUEUED_ATTACHMENTS) {
+        setComposerError(`最多只能暂存 ${CHAT_MAX_QUEUED_ATTACHMENTS} 个附件`);
+        return prev;
+      }
+      if (prev.some((item) => item.uploadedAttachment?.id === nasFile.id)) return prev;
+      const mime = String(nasFile.mimeType || "");
+      const kind = mime.startsWith("video/") ? "video" : mime.startsWith("image/") ? "image" : mime.startsWith("audio/") ? "audio" : "file";
+      return [...prev, {
+        id: `ref-${nasFile.id}-${Math.random().toString(36).slice(2, 8)}`,
+        file: null,
+        nasFile,
+        previewUrl: "",
+        kind: "file-ref",
+        status: "ready",
+        progress: 100,
+        error: "",
+        uploadedAttachment: {
+          id: nasFile.id,
+          name: nasFile.name,
+          mimeType: nasFile.mimeType || "application/octet-stream",
+          size: nasFile.size || 0,
+          path: nasFile.path,
+          clientId: nasFile.clientId,
+          kind: "file-ref"
+        }
+      }];
+    });
+    setFilePickerOpen(false);
+    setFilePickerQuery("");
+    setQueueExpanded(true);
+    composerInputRef.current?.focus();
+  }
+
   function patchQueuedFile(assetId, updater) {
     setQueuedFiles((prev) => prev.map((item) => {
       if (item.id !== assetId) {
@@ -1744,6 +1850,10 @@ export default function ChatRoom({
     if (!text) {
       return false;
     }
+    // ai-answer / image-analysis cards always display message.text inside the card body area
+    if (["ai-answer", "image-analysis"].includes(message?.card?.type)) {
+      return false;
+    }
     const cardBody = String(message?.card?.body || "").trim();
     return !cardBody || cardBody !== text;
   }
@@ -1778,11 +1888,17 @@ export default function ChatRoom({
     const showProgress = typeof message.card.progress === "number"
       && !isAiChatStatusCard
       && !["succeeded", "failed", "cancelled"].includes(cardStatus);
-    const cardBody = isAiChatStatusCard ? getAiChatStatusBody(message, cardStatus) : String(message.card.body || "").trim();
+    const cardBody = isAiChatStatusCard
+      ? getAiChatStatusBody(message, cardStatus)
+      : String(message.card.body || "").trim() || (["ai-answer", "image-analysis"].includes(message.card.type) ? String(message.text || "").trim() : "");
     const cardActions = Array.isArray(message.card.actions) ? [...message.card.actions] : [];
     if (isAiChatStatusCard && String(message?.bot?.jobId || "").trim() && !cardActions.some((action) => action?.type === "open-bot-log")) {
       cardActions.push({ type: "open-bot-log", label: "查看日志" });
     }
+    const showStarMap = isAiChatStatusCard
+      && message.card.graphState
+      && typeof message.card.graphState === "object"
+      && ["queued", "running"].includes(cardStatus);
     return (
       <div className={`chatDynamicCard status-${cardStatus || "info"}`}>
         {message.card.imageUrl ? <img className={`chatDynamicCardCover fit-${String(message.card.imageFit || "cover")}`} src={message.card.imageUrl} alt={message.card.imageAlt || message.card.title || "封面"} referrerPolicy="no-referrer" /> : null}
@@ -1793,10 +1909,12 @@ export default function ChatRoom({
               <Text>{message.card.title || message.author.displayName}</Text>
             </div>
             {message.card.subtitle ? <Caption1>{message.card.subtitle}</Caption1> : null}
-            {cardBody ? <MarkdownBlock className="chatMarkdownBlock chatDynamicMarkdown" text={cardBody} /> : null}
+            {showStarMap
+              ? <AiStarMapCard graphState={message.card.graphState} elapsedText={elapsedText} subtitle={message.card.subtitle} detailBody={cardBody} />
+              : cardBody ? <MarkdownBlock className="chatMarkdownBlock chatDynamicMarkdown" text={cardBody} /> : null}
           </div>
         </div>
-        {isActiveBotStatusCard ? (
+        {isActiveBotStatusCard && !showStarMap ? (
           <div className="chatDynamicMetaRow">
             <Caption1>{elapsedText}</Caption1>
             {typeof message.card.progress === "number" && !isAiChatStatusCard ? <Caption1>{Math.round(message.card.progress)}%</Caption1> : null}
@@ -2108,6 +2226,10 @@ export default function ChatRoom({
       const attachments = [];
       let failedUploads = 0;
       for (const [index, asset] of currentQueue.entries()) {
+        if (asset.kind === "file-ref" && asset.uploadedAttachment?.path) {
+          attachments.push(asset.uploadedAttachment);
+          continue;
+        }
         const file = asset.file;
         if (asset.uploadedAttachment?.path && asset.uploadedAttachment.clientId === hostClientId) {
           attachments.push(asset.uploadedAttachment);
@@ -2189,12 +2311,17 @@ export default function ChatRoom({
           setMessage?.("当前没有在线的存储终端，暂时无法调用 bot", "warning");
         } else {
         try {
+          const fileRefAttachment = attachments.find((a) => a.kind === "file-ref");
+          const enrichedParsedArgs = {
+            ...(botInvocation.parsedArgs || {}),
+            ...(fileRefAttachment && !(botInvocation.parsedArgs || {}).fileId ? { fileId: fileRefAttachment.id } : {})
+          };
           const invoked = await p2p.invokeBot(hostClientId, {
             botId: botInvocation.botId,
             trigger: {
               type: "chat-mention",
               rawText: botInvocation.rawText,
-              parsedArgs: botInvocation.parsedArgs || {}
+              parsedArgs: enrichedParsedArgs
             },
             requester: {
               userId: currentUser.id,
@@ -2312,6 +2439,26 @@ export default function ChatRoom({
       };
     }
     if (target.botId === "bilibili.downloader") {
+      const commandToken = String(afterMention.split(/\s+/)[0] || "").trim().replace(/^\//, "").toLowerCase();
+      const action = new Map([
+        ["login", "login"],
+        ["登录", "login"],
+        ["status", "status"],
+        ["状态", "status"],
+        ["logout", "logout"],
+        ["退出", "logout"],
+        ["relogin", "relogin"],
+        ["重新登录", "relogin"]
+      ]).get(commandToken);
+      if (action) {
+        return {
+          botId: target.botId,
+          mention: mentionMatch[0].trim(),
+          rawText: raw,
+          supported: true,
+          parsedArgs: { action }
+        };
+      }
       const sourceMatch = afterMention.match(/https?:\/\/\S+|\bBV[0-9A-Za-z]+\b/i);
       const source = String(sourceMatch?.[0] || "").trim();
       const supported = !source
@@ -2590,6 +2737,7 @@ export default function ChatRoom({
     <section className="workspacePage chatWorkspacePage" onClick={() => {
       setContextMenuState(null);
       setEmojiPanelOpen(false);
+      setFilePickerOpen(false);
     }}>
       <div className="chatRoomShell">
         <div className="chatRoomHeader compact">
@@ -2776,6 +2924,22 @@ export default function ChatRoom({
                     <span className="chatComposerBotButtonCount">{loadingBotCatalog ? "..." : botCatalog.length || 0}</span>
                   </Button>
                 </div>
+                <div ref={filePickerTriggerRef}>
+                  <Button
+                    className="chatComposerIconButton"
+                    appearance={filePickerOpen ? "primary" : "secondary"}
+                    size="small"
+                    icon={<FolderOpenRegular />}
+                    aria-label="引用 NAS 文件"
+                    title="引用 NAS 文件"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setFilePickerOpen((prev) => !prev);
+                      setFilePickerQuery("");
+                    }}
+                    disabled={!nasFiles?.length || sending}
+                  />
+                </div>
                 <Button className="chatComposerIconButton" appearance="secondary" size="small" icon={<ArrowUploadRegular />} aria-label="添加媒体" title="添加媒体" onClick={() => fileInputRef.current?.click()} disabled={!hostClientId || sending} />
                 <Button className="chatComposerIconButton send" appearance="primary" size="small" icon={<SendRegular />} aria-label={sending ? "发送中" : "发送消息"} title={sending ? "发送中" : "发送消息"} onClick={handleSend} disabled={!authToken || sending} />
               </div>
@@ -2814,32 +2978,45 @@ export default function ChatRoom({
                     {queueExpanded ? (
                       <div className="chatQueuedFilesGrid docked">
                         {queuedFiles.map((asset) => (
-                          <div key={asset.id} className={`chatQueuedCard ${asset.status}`}>
-                            <div className="chatQueuedVisual">
-                              <ChatQueuedPreview asset={asset} />
+                          <div key={asset.id} className={`chatQueuedCard ${asset.kind === "file-ref" ? "ready" : asset.status}`}>
+                            <div className={`chatQueuedVisual${asset.kind === "file-ref" ? " fileRef" : ""}`}>
+                              {asset.kind === "file-ref" ? (
+                                <div className="chatQueuedRefIcon">
+                                  {String(asset.uploadedAttachment?.mimeType || "").startsWith("video/") ? <VideoRegular /> : String(asset.uploadedAttachment?.mimeType || "").startsWith("image/") ? <ImageRegular /> : String(asset.uploadedAttachment?.mimeType || "").startsWith("audio/") ? <MusicNote2Regular /> : <DocumentRegular />}
+                                </div>
+                              ) : (
+                                <ChatQueuedPreview asset={asset} />
+                              )}
                               <button type="button" className="iconActionButton chatQueuedRemove" aria-label="移除附件" onClick={() => removeQueuedFile(asset.id)} disabled={asset.status === "uploading" || sending}>
                                 <DismissRegular />
                               </button>
-                              <div className={`chatQueuedStatusPill ${asset.status}`}>
-                                {asset.status === "uploading" ? `上传中 ${asset.progress}%` : null}
-                                {asset.status === "uploaded" ? "已上传" : null}
-                                {asset.status === "failed" ? "上传失败" : null}
-                                {asset.status === "queued" ? "待发送" : null}
+                              <div className={`chatQueuedStatusPill ${asset.kind === "file-ref" ? "ready" : asset.status}`}>
+                                {asset.kind === "file-ref" ? "NAS 引用" : null}
+                                {asset.kind !== "file-ref" && asset.status === "uploading" ? `上传中 ${asset.progress}%` : null}
+                                {asset.kind !== "file-ref" && asset.status === "uploaded" ? "已上传" : null}
+                                {asset.kind !== "file-ref" && asset.status === "failed" ? "上传失败" : null}
+                                {asset.kind !== "file-ref" && asset.status === "queued" ? "待发送" : null}
                               </div>
                             </div>
                             <div className="chatQueuedMeta">
                               <div className="chatQueuedMetaMain">
-                                <Text>{asset.file.name}</Text>
-                                <Caption1>{formatBytes(asset.file.size)}</Caption1>
+                                <Text>{asset.kind === "file-ref" ? (asset.nasFile?.name || asset.uploadedAttachment?.name || "文件引用") : asset.file.name}</Text>
+                                <Caption1>{formatBytes(asset.kind === "file-ref" ? (asset.uploadedAttachment?.size || 0) : asset.file.size)}</Caption1>
                               </div>
                               <div className="chatQueuedMetaActions">
-                                {asset.status === "failed" ? <Button appearance="subtle" size="small" icon={<ArrowClockwiseRegular />} onClick={() => retryQueuedFile(asset.id)} disabled={sending}>重试</Button> : null}
-                                <Badge appearance="outline" color={asset.kind === "video" ? "informative" : "success"}>{asset.kind === "video" ? "视频" : "图片"}</Badge>
+                                {asset.kind !== "file-ref" && asset.status === "failed" ? <Button appearance="subtle" size="small" icon={<ArrowClockwiseRegular />} onClick={() => retryQueuedFile(asset.id)} disabled={sending}>重试</Button> : null}
+                                {asset.kind === "file-ref" ? (
+                                  <Badge appearance="outline" color="brand">引用</Badge>
+                                ) : (
+                                  <Badge appearance="outline" color={asset.kind === "video" ? "informative" : "success"}>{asset.kind === "video" ? "视频" : "图片"}</Badge>
+                                )}
                               </div>
                             </div>
-                            <div className="chatQueuedProgressTrack" aria-hidden="true">
-                              <span className={`chatQueuedProgressBar ${asset.status}`} style={{ width: `${asset.status === "uploaded" ? 100 : asset.status === "uploading" ? asset.progress : asset.status === "failed" ? 100 : 0}%` }} />
-                            </div>
+                            {asset.kind !== "file-ref" ? (
+                              <div className="chatQueuedProgressTrack" aria-hidden="true">
+                                <span className={`chatQueuedProgressBar ${asset.status}`} style={{ width: `${asset.status === "uploaded" ? 100 : asset.status === "uploading" ? asset.progress : asset.status === "failed" ? 100 : 0}%` }} />
+                              </div>
+                            ) : null}
                             {asset.error ? <Caption1 className="chatQueuedErrorText">{asset.error}</Caption1> : null}
                           </div>
                         ))}
@@ -3004,6 +3181,42 @@ export default function ChatRoom({
                 <Caption1>{hostClientId ? "当前终端尚未返回 bot catalog，或 bot 运行时尚未初始化。" : "文字聊天已可用；待存储终端上线后再读取 bot catalog。"}</Caption1>
               </div>
             )}
+          </div>,
+          document.body
+        ) : null}
+        {filePickerOpen && typeof document !== "undefined" ? createPortal(
+          <div ref={filePickerRef} className="chatFilePickerPopup" style={filePickerStyle} onClick={(event) => event.stopPropagation()}>
+            <div className="chatFilePickerHeader">
+              <input
+                type="text"
+                className="chatFilePickerSearch"
+                placeholder="搜索文件名..."
+                value={filePickerQuery}
+                onChange={(event) => setFilePickerQuery(event.target.value)}
+                autoFocus
+              />
+            </div>
+            <div className="chatFilePickerList">
+              {filePickerResults.length ? filePickerResults.map((file) => {
+                const mime = String(file.mimeType || "");
+                return (
+                  <button key={file.id} type="button" className="chatFilePickerItem" onClick={() => addFileReference(file)}>
+                    <div className="chatFilePickerItemIcon">
+                      {mime.startsWith("video/") ? <VideoRegular /> : mime.startsWith("image/") ? <ImageRegular /> : mime.startsWith("audio/") ? <MusicNote2Regular /> : <DocumentRegular />}
+                    </div>
+                    <FilePickerItemThumb file={file} p2p={p2p} />
+                    <div className="chatFilePickerItemMeta">
+                      <Text className="chatFilePickerItemName" title={file.name}>{file.name}</Text>
+                      <Caption1>{formatBytes(file.size)}{file.path ? ` · ${file.path}` : ""}</Caption1>
+                    </div>
+                  </button>
+                );
+              }) : (
+                <div className="chatFilePickerEmpty">
+                  <Caption1>{filePickerQuery ? "未找到匹配文件" : nasFiles?.length ? "输入关键字搜索文件" : "暂无文件"}</Caption1>
+                </div>
+              )}
+            </div>
           </div>,
           document.body
         ) : null}

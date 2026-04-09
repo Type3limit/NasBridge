@@ -11,11 +11,14 @@
   "dependencies": {
     "@fluentui/react-components": "^9.62.0",
     "@fluentui/react-icons": "^2.0.286",
+    "@react-three/drei": "^9.122.0",
+    "@react-three/fiber": "^8.18.0",
     "hls.js": "^1.6.15",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "three": "^0.183.2"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",

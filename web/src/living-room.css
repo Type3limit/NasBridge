@@ -455,6 +455,74 @@ html, body, #root {
   font-size: 0.72rem;
   color: var(--lr-text-muted);
 }
+.lrCardTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.lrCardTag {
+  font-size: 0.68rem;
+  color: var(--lr-text-muted);
+  background: rgba(255,255,255,0.08);
+  border-radius: 4px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+/* ── 大屏 tag 筛选栏 ──────────────────────────────── */
+.lrTagFilterBar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 32px;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.2) transparent;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  background: rgba(5,5,5,0.95);
+}
+.lrTagSearchBox {
+  flex-shrink: 0;
+  position: relative;
+}
+.lrTagSearchInput {
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 999px;
+  color: var(--lr-text);
+  font-size: 0.78rem;
+  padding: 3px 12px;
+  outline: none;
+  width: 110px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.lrTagSearchInput:focus {
+  border-color: var(--lr-accent);
+  background: rgba(255,255,255,0.11);
+}
+.lrTagSearchInput::placeholder { color: var(--lr-text-muted); }
+.lrTagFilterBarGrid {
+  border-top: none;
+  border-bottom: 1px solid var(--lr-border);
+  background: var(--lr-bg);
+}
+.lrTagPill {
+  flex-shrink: 0;
+  border: 1px solid var(--lr-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--lr-text-muted);
+  font-size: 0.78rem;
+  padding: 3px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+.lrTagPill:hover { background: rgba(255,255,255,0.08); color: var(--lr-text); }
+.lrTagPill.active { background: var(--lr-accent); border-color: var(--lr-accent); color: #fff; }
 
 /* 收藏星标 */
 .lrCardFavStar {

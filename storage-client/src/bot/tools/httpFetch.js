@@ -38,7 +38,7 @@ function normalizeSearchProvider(value = "") {
 
 function normalizeSearchApiBackend(value = "") {
   const normalized = String(value || WEB_SEARCH_API_BACKEND || "").trim().toLowerCase();
-  if (["brave"].includes(normalized)) {
+  if (["brave", "serpapi"].includes(normalized)) {
     return normalized;
   }
   return "";
@@ -168,6 +168,13 @@ function getSearchApiConfig() {
       backend,
       apiKey: WEB_SEARCH_API_KEY,
       baseUrl: WEB_SEARCH_API_BASE_URL || "https://api.search.brave.com"
+    };
+  }
+  if (backend === "serpapi") {
+    return {
+      backend,
+      apiKey: WEB_SEARCH_API_KEY,
+      baseUrl: WEB_SEARCH_API_BASE_URL || "https://serpapi.com"
     };
   }
   return null;
@@ -452,6 +459,54 @@ async function searchWebWithApi(query, options = {}) {
       url: endpoint.origin,
       provider: config.backend
     };
+  }
+
+  if (config.backend === "serpapi") {
+    const endpoint = new URL("/search.json", config.baseUrl);
+    endpoint.searchParams.set("q", query);
+    endpoint.searchParams.set("api_key", config.apiKey);
+    endpoint.searchParams.set("engine", "google");
+    endpoint.searchParams.set("hl", "zh-cn");
+    endpoint.searchParams.set("gl", String(options.country || "cn"));
+    endpoint.searchParams.set("num", String(limit));
+    if (normalizeSourcePreference(options.preferredSource) === "news") {
+      endpoint.searchParams.set("tbm", "nws");
+    }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS);
+    if (options.signal) {
+      options.signal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
+    try {
+      const response = await fetch(endpoint.toString(), {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const apiError = normalizeWhitespace(payload?.error || "");
+        throw new Error(`serpapi failed: ${response.status} ${response.statusText}${apiError ? ` - ${apiError}` : ""}`);
+      }
+      const organic = Array.isArray(payload?.organic_results) ? payload.organic_results : [];
+      const newsResults = Array.isArray(payload?.news_results) ? payload.news_results : [];
+      const rawResults = (organic.length ? organic : newsResults).map(r => ({
+        title: r.title || "",
+        url: r.link || "",
+        snippet: r.snippet || r.description || ""
+      }));
+      const results = normalizeSearchResultShape(rawResults, limit);
+      return {
+        results,
+        backend: "api",
+        url: endpoint.origin,
+        provider: "serpapi"
+      };
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
   }
 
   throw new Error(`unsupported search api backend: ${config.backend}`);
@@ -1121,7 +1176,7 @@ export async function searchWeb(query, options = {}) {
     let endpointUsed = "";
     let lastError = null;
 
-    if (providerMode === "metaso") {
+    if (!batchResults.length && providerMode === "metaso") {
       attemptedEndpoints.push("metaso-playwright");
       try {
         const metasoResult = await searchWebWithMetaso(variant, {

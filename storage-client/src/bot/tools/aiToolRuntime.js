@@ -365,12 +365,12 @@ export function getAiToolDefinitions() {
     },
     {
       name: "import_bilibili_video",
-      description: "把 bilibili 链接或 BV 号交给 bilibili.downloader 处理并入库；支持可选分P与清晰度参数。通常应先用 search_bilibili_video 找到具体视频链接，再调用这个工具。",
+      description: "把一个或多个 bilibili 链接/BV 号交给 bilibili.downloader 批量下载并入库。需要同时下载多个视频时，把所有 source 放入 sources 数组一次调用，不要多次单独调用。通常应先用 search_bilibili_video 找到具体视频链接，再调用这个工具。",
       inputSchema: {
         type: "object",
-        required: ["source"],
         properties: {
-          source: { type: "string" },
+          source: { type: "string", description: "单个 bilibili 链接或 BV 号（与 sources 二选一）" },
+          sources: { type: "array", items: { type: "string" }, description: "多个 bilibili 链接或 BV 号列表（批量下载时使用，与 source 二选一）" },
           targetFolder: { type: "string", description: "保存目录（相对于存储根目录）。不传则保存到根目录。示例：'movies'、'bilibili/教程'。" },
           page: { type: "integer", minimum: 1 },
           quality: { type: "string" }
@@ -503,21 +503,28 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
 
   if (name === "import_bilibili_video") {
     await api.emitProgress({ phase: "tool-import-bilibili-video", label: "创建 B 站下载任务", percent: 46 });
-    const source = String(input.source || "").trim();
-    if (!source) {
-      throw new Error("source is required");
+    const sourcesInput = Array.isArray(input.sources) && input.sources.length
+      ? input.sources.map((s) => String(s || "").trim()).filter(Boolean)
+      : [String(input.source || "").trim()].filter(Boolean);
+    if (!sourcesInput.length) {
+      throw new Error("source or sources is required");
     }
+    // Put all sources in rawText so bilibili.downloader batch-mode picks them all up.
+    const rawText = sourcesInput.join(" ");
+    const isBatch = sourcesInput.length > 1;
     const delegatedJob = await api.invokeBot({
       botId: "bilibili.downloader",
       trigger: {
         type: "tool-call",
-        rawText: source,
-        parsedArgs: {
-          source,
-          targetFolder: String(input.targetFolder || "").trim(),
-          page: Number.isInteger(input.page) ? input.page : undefined,
-          quality: String(input.quality || "").trim()
-        }
+        rawText,
+        parsedArgs: isBatch
+          ? { targetFolder: String(input.targetFolder || "").trim() }
+          : {
+            source: sourcesInput[0],
+            targetFolder: String(input.targetFolder || "").trim(),
+            page: Number.isInteger(input.page) ? input.page : undefined,
+            quality: String(input.quality || "").trim()
+          }
       },
       options: {
         delegatedBy: api.botId,
@@ -530,7 +537,8 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
       botId: "bilibili.downloader",
       jobId: delegatedJob.jobId || "",
       status: delegatedJob.status || "queued",
-      source
+      sources: sourcesInput,
+      batch: isBatch
     });
   }
 

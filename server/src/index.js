@@ -566,8 +566,12 @@ app.get("/api/tv/stream", requireAuth, async (req, res) => {
     res.setHeader("Cache-Control", "no-cache");
     if (isM3u8) {
       const text = await upstream.text();
-      // If the response looks like HTML (VIP player wrapper), reject it
+      // If the response looks like HTML (VIP player wrapper), try to extract real video URL
       if (/^\s*<!DOCTYPE|^\s*<html/i.test(text)) {
+        const realUrl = extractVideoUrlFromHtml(text, raw);
+        if (realUrl && realUrl !== raw) {
+          return res.redirect(302, `/api/tv/stream?url=${encodeURIComponent(realUrl)}`);
+        }
         return res.status(422).json({ error: "not an m3u8 stream (got HTML player page)" });
       }
       // If it doesn't look like an m3u8 manifest, pass it through raw as octet-stream
@@ -1031,6 +1035,63 @@ app.post("/api/dev/upload-relay", requireAuth, upload.single("file"), (req, res)
 // GET /api/anime/find-stream?name=NAME&ep=N
 // Tries multiple 苹果CMS v10 anime sites, returns {sources:[{site,ep,url,playUrl}]}
 // Verified 苹果CMS v10 compatible sites (all expose /api.php/provide/vod/)
+// Try to extract a direct video URL from a VIP player HTML page.
+// Many Chinese VIP players embed the stream URL as a JS variable or JSON field.
+function extractVideoUrlFromHtml(html, sourceUrl) {
+  // Pattern 1: URL encoded in query param of the source URL itself
+  // e.g., https://jx.some-player.com/?url=https://cdn.example.com/video.m3u8
+  try {
+    const u = new URL(sourceUrl);
+    for (const p of ["url", "v", "src", "video", "link", "play"]) {
+      const val = u.searchParams.get(p);
+      if (!val) continue;
+      let decoded = val;
+      try { decoded = decodeURIComponent(val); } catch {}
+      if (/^https?:\/\//i.test(decoded) && /\.(m3u8|mp4|flv|ts)(\?|$)/i.test(decoded)) {
+        return decoded;
+      }
+    }
+  } catch {}
+  // Pattern 2: URL in JS variable or JSON, e.g.: url: "https://...m3u8"
+  const patterns = [
+    /['"](https?:\/\/[^'"]{15,}\.m3u8(?:\?[^'"]{0,200})?)['"]/i,
+    /['"](https?:\/\/[^'"]{15,}\.mp4(?:\?[^'"]{0,200})?)['"]/i,
+    /"url"\s*:\s*"(https?:\/\/[^"]{15,})"/i,
+    /url\s*[:=]\s*["'](https?:\/\/[^"']{15,}(?:\.m3u8|\.mp4)[^"']{0,200})["']/i,
+    /src\s*[:=]\s*["'](https?:\/\/[^"']{15,}(?:\.m3u8|\.mp4)[^"']{0,200})["']/i,
+  ];
+  for (const p of patterns) {
+    const m = html.match(p);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+// If a URL looks like a VIP player wrapper that embeds the real URL as a query param,
+// extract that inner URL. Otherwise return the original.
+function tryResolveEpisodeUrl(url) {
+  try {
+    const u = new URL(url);
+    const path = u.pathname.toLowerCase();
+    // If the path itself is a direct video file, return as-is
+    if (/\.(m3u8|mp4|flv|ts|mkv)(\/|$)/i.test(path)) return url;
+    // Check if it looks like a player/VIP wrapper URL
+    const looksLikePlayer = /\/(jx|player|vip|play)\b/i.test(path)
+      || /^(jx|vip)\./i.test(u.hostname)
+      || u.search.includes("url=")
+      || u.search.includes("&v=") || u.search.startsWith("?v=");
+    if (!looksLikePlayer) return url;
+    for (const p of ["url", "v", "src", "video", "link", "play"]) {
+      const val = u.searchParams.get(p);
+      if (!val) continue;
+      let decoded = val;
+      try { decoded = decodeURIComponent(val); } catch {}
+      if (/^https?:\/\//i.test(decoded)) return decoded;
+    }
+  } catch {}
+  return url;
+}
+
 const CMS_ANIME_SITES = [
   // ── from animeko-prime.json ──────────────────────────────────────────
   { name: "七色番",     base: "https://www.7sefun.top" },
@@ -1147,12 +1208,13 @@ function parseAllRoutes(vodPlayUrl, vodPlayFrom) {
     eps.forEach((epEntry, ei) => {
       if (!epEntry.trim()) return;
       const parts = epEntry.split("$");
-      const url = parts[parts.length - 1]?.trim();
-      if (url && /^https?:\/\//i.test(url)) {
-        const type = /\.(mp4|flv|mkv)(\?|$)/i.test(url) ? "mp4" : "hls";
-        const playUrl = `/api/tv/stream?url=${encodeURIComponent(url)}`;
-        episodes.push({ ep: ei + 1, url, playUrl, type });
-      }
+      let url = parts[parts.length - 1]?.trim();
+      if (!url || !/^https?:\/\//i.test(url)) return;
+      // If URL looks like a VIP player wrapper, try to extract the actual stream URL
+      url = tryResolveEpisodeUrl(url);
+      const type = /\.(mp4|flv|mkv)(\?|$)/i.test(url) ? "mp4" : "hls";
+      const playUrl = `/api/tv/stream?url=${encodeURIComponent(url)}`;
+      episodes.push({ ep: ei + 1, url, playUrl, type });
     });
     if (episodes.length > 0) routes.push({ route: routeName, episodes });
   });
@@ -1188,22 +1250,37 @@ app.get("/api/anime/find-stream", requireAuth, (req, res) => {
 
   async function querySite(site, fullName) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5_000);
+    const timer = setTimeout(() => controller.abort(), 10_000); // 10s per site
     try {
       const searchKw = stripSeason(fullName) || fullName;
       const hits = await cmsSearchAll(site.base, searchKw, controller.signal);
-      if (!hits.length) return;
+      if (!hits.length) {
+        console.log(`[anime] ${site.name}: 0 results for "${searchKw}"`);
+        return;
+      }
       const hit = pickBestHit(hits, fullName);
-      if (!hit?.vod_id) return;
+      if (!hit?.vod_id) {
+        console.log(`[anime] ${site.name}: ${hits.length} hits but none match "${fullName}"`);
+        return;
+      }
       const detail = await cmsDetail(site.base, hit.vod_id, controller.signal);
-      if (!detail?.vod_play_url) return;
+      if (!detail?.vod_play_url) {
+        console.log(`[anime] ${site.name}: matched "${hit.vod_name}" but no play URL`);
+        return;
+      }
       const vodName = detail.vod_name || hit.vod_name || fullName;
       const allRoutes = parseAllRoutes(detail.vod_play_url, detail.vod_play_from);
+      if (!allRoutes.length) {
+        console.log(`[anime] ${site.name}: "${vodName}" — no valid episode URLs in play data`);
+        return;
+      }
       console.log(`[anime] ${site.name}: "${vodName}" — ${allRoutes.map((r) => `${r.route}(${r.episodes.length}ep)`).join(", ")}`);
       for (const { route, episodes } of allRoutes) {
         sendSource({ site: site.name, route, vodName, episodes });
       }
-    } catch { /* ignore */ } finally { clearTimeout(timer); }
+    } catch (e) {
+      console.log(`[anime] ${site.name}: ${e.message?.slice(0, 80) ?? e}`);
+    } finally { clearTimeout(timer); }
   }
 
   const tasks = CMS_ANIME_SITES.flatMap((site) => {
@@ -1212,8 +1289,37 @@ app.get("/api/anime/find-stream", requireAuth, (req, res) => {
     return t;
   });
 
-  const hardTimer = setTimeout(done, 15_000);
+  const hardTimer = setTimeout(done, 25_000); // 25s: 10s per-site + buffer
   Promise.allSettled(tasks).then(() => { clearTimeout(hardTimer); done(); });
+});
+
+// ─── Anime CMS Site Diagnostics ───────────────────────────────────────────────
+// GET /api/anime/test-sites?name=keyword — checks which CMS sites respond to the API
+app.get("/api/anime/test-sites", requireAuth, async (req, res) => {
+  const name = String(req.query.name || "葬送的芙莉蓮").trim();
+  const results = await Promise.allSettled(
+    CMS_ANIME_SITES.map(async (site) => {
+      const start = Date.now();
+      try {
+        const kw = stripSeason(name);
+        const url = `${site.base}/api.php/provide/vod/?ac=videolist&wd=${encodeURIComponent(kw)}`;
+        const r = await fetch(url, {
+          signal: AbortSignal.timeout(6_000),
+          headers: { ...CMS_HEADERS, Referer: site.base },
+        });
+        const ms = Date.now() - start;
+        if (!r.ok) return { site: site.name, status: `HTTP ${r.status}`, ms };
+        const data = await r.json();
+        const hits = Array.isArray(data?.list) ? data.list : [];
+        return { site: site.name, status: "ok", hits: hits.length, ms,
+          names: hits.slice(0, 3).map((h) => h.vod_name) };
+      } catch (e) {
+        return { site: site.name, status: "err", error: e.message?.slice(0, 60), ms: Date.now() - start };
+      }
+    })
+  );
+  const rows = results.map((r) => r.value || r.reason);
+  res.json({ name, sites: rows });
 });
 
 // ─── Mikan anime torrent search proxy ─────────────────────────────────────────

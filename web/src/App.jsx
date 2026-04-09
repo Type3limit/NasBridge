@@ -31,9 +31,12 @@ import {
   FilterRegular,
   FolderOpenRegular,
   ShareRegular,
+  SparkleRegular,
   StarFilled,
   StarRegular,
-  StreamRegular
+  StreamRegular,
+  TagRegular,
+  VideoRegular,
 } from "@fluentui/react-icons";
 import { apiRequest } from "./api";
 import { P2PBridgePool } from "./webrtc";
@@ -47,12 +50,14 @@ import MobileMoreSheet from "./components/mobile/MobileMoreSheet";
 import MobileFilterSheet from "./components/mobile/MobileFilterSheet";
 import MiniMusicBar from "./components/mobile/MiniMusicBar";
 import VideoHoverPreview from "./components/VideoHoverPreview";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 const PreviewModal = lazy(() => import("./components/PreviewModal"));
 const TVStream = lazy(() => import("./components/TVStream"));
+const AnimePage = lazy(() => import("./components/AnimePage"));
 
 const THUMB_CACHE_STORAGE_KEY = "nas_thumb_cache_v1";
-const THUMB_CACHE_MAX_ITEMS = 120;
 const THUMB_CACHE_MAX_BLOB_SIZE = 450 * 1024;
 const DESKTOP_STREAM_SAVE_THRESHOLD_BYTES = 512 * 1024 * 1024;
 const PREVIEW_FORCE_BLOB_MAX_SIZE = 120 * 1024 * 1024;
@@ -121,15 +126,7 @@ function saveThumbCache(cache) {
   }
 }
 
-function pruneThumbCache(cache) {
-  const entries = Object.entries(cache);
-  if (entries.length <= THUMB_CACHE_MAX_ITEMS) {
-    return cache;
-  }
-  entries.sort((a, b) => (b[1]?.updatedAt || 0) - (a[1]?.updatedAt || 0));
-  const kept = entries.slice(0, THUMB_CACHE_MAX_ITEMS);
-  return Object.fromEntries(kept);
-}
+
 
 function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
@@ -617,6 +614,8 @@ export default function App() {
 
   const [previewing, setPreviewing] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [aiSummaryViewFile, setAiSummaryViewFile] = useState(null);
+  const [botPendingFileIds, setBotPendingFileIds] = useState(new Set());
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const [shareTarget, setShareTarget] = useState(null);
   const [shareExpiryDays, setShareExpiryDays] = useState("7");
@@ -659,6 +658,8 @@ export default function App() {
   const [keyword, setKeyword] = useState("");
   const [columnFilter, setColumnFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
+  const [tagFilter, setTagFilter] = useState([]);
+  const [tagSearch, setTagSearch] = useState("");
   const [sortBy, setSortBy] = useState("createdAt");
   const [currentExplorerPath, setCurrentExplorerPath] = useState("");
 
@@ -855,6 +856,16 @@ export default function App() {
     return new Map(columns.map((item) => [item.id, item.name]));
   }, [columns]);
 
+  const availableTags = useMemo(() => {
+    const tagSet = new Set();
+    for (const file of files) {
+      for (const tag of (file.tags || [])) {
+        if (tag) tagSet.add(tag);
+      }
+    }
+    return [...tagSet].sort((a, b) => a.localeCompare(b, "zh-CN"));
+  }, [files]);
+
   const filteredOnlineFiles = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
     const filtered = onlineFiles.filter((file) => {
@@ -867,6 +878,9 @@ export default function App() {
       if (typeFilter !== "all" && getFileTypeGroup(file.mimeType) !== typeFilter) {
         return false;
       }
+      if (tagFilter.length > 0 && !tagFilter.some((t) => (file.tags || []).includes(t))) {
+        return false;
+      }
       if (kw) {
         const hay = `${file.name} ${file.path}`.toLowerCase();
         if (!hay.includes(kw)) {
@@ -876,7 +890,7 @@ export default function App() {
       return true;
     });
     return sortFiles(filtered, sortBy);
-  }, [onlineFiles, columnFilter, typeFilter, keyword, sortBy]);
+  }, [onlineFiles, columnFilter, typeFilter, tagFilter, keyword, sortBy]);
 
   const filteredOnlineDirectories = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
@@ -909,11 +923,16 @@ export default function App() {
     [onlineDirectories, currentExplorerPath]
   );
   const currentExplorerEntries = useMemo(
-    () => [
-      ...explorerFolderEntries.map((folder) => ({ kind: "folder", key: folder.id, folder })),
-      ...currentFolderFiles.map((file) => ({ kind: "file", key: file.id, file }))
-    ],
-    [explorerFolderEntries, currentFolderFiles]
+    () => {
+      if (tagFilter.length > 0) {
+        return filteredOnlineFiles.map((file) => ({ kind: "file", key: file.id, file }));
+      }
+      return [
+        ...explorerFolderEntries.map((folder) => ({ kind: "folder", key: folder.id, folder })),
+        ...currentFolderFiles.map((file) => ({ kind: "file", key: file.id, file }))
+      ];
+    },
+    [tagFilter, filteredOnlineFiles, explorerFolderEntries, currentFolderFiles]
   );
   const explorerBreadcrumbs = useMemo(() => {
     const segments = getPathSegments(currentExplorerPath);
@@ -999,9 +1018,10 @@ export default function App() {
     if (keyword.trim()) count += 1;
     if (columnFilter !== "all") count += 1;
     if (typeFilter !== "all") count += 1;
+    if (tagFilter.length > 0) count += 1;
     if (sortBy !== "createdAt") count += 1;
     return count;
-  }, [keyword, columnFilter, typeFilter, sortBy]);
+  }, [keyword, columnFilter, typeFilter, tagFilter, sortBy]);
   const uploadTargetPreview = useMemo(() => {
     const folderPath = normalizeFolderPath(uploadFolderPath);
     const columnName = columnMap.get(uploadColumnId) || "";
@@ -1086,7 +1106,7 @@ export default function App() {
   );
 
   useEffect(() => {
-    const allowedTabs = new Set(["explorer", "chat", "overview", "terminals", "transfers", "shares", "tv"]);
+    const allowedTabs = new Set(["explorer", "chat", "overview", "terminals", "transfers", "shares", "tv", "anime"]);
     if (user?.role === "admin") {
       allowedTabs.add("admin-users");
       allowedTabs.add("admin-clients");
@@ -1669,11 +1689,33 @@ export default function App() {
                     className="iconActionButton filterClearButton"
                     title="清空筛选与排序"
                     aria-label="清空筛选与排序"
-                    onClick={() => { setKeyword(""); setColumnFilter("all"); setTypeFilter("all"); setSortBy("createdAt"); }}
+                    onClick={() => { setKeyword(""); setColumnFilter("all"); setTypeFilter("all"); setTagFilter([]); setSortBy("createdAt"); }}
                   >
                     <DismissRegular />
                   </button>
                   <Caption1>{activeFilterCount ? `已启用 ${activeFilterCount} 项筛选或排序` : "正在查看全部文件"}</Caption1>
+                  <button
+                    type="button"
+                    className="iconActionButton batchTagButton"
+                    title="AI 批量为视频文件生成标签（≤1小时的视频）"
+                    aria-label="AI 批量打标签"
+                    onClick={async () => {
+                      const onlineClients = clients.filter((c) => c.status === "online");
+                      if (!onlineClients.length) { setMessage("没有在线的存储终端"); return; }
+                      try {
+                        const clientId = onlineClients[0].id;
+                        await p2p.invokeBot(clientId, {
+                          botId: "video.tag",
+                          trigger: { type: "card-action", rawText: "", parsedArgs: { batch: true } }
+                        });
+                        setMessage("AI 批量打标签任务已提交，请在聊天室查看进度");
+                      } catch (err) {
+                        setMessage(`提交失败: ${err.message}`);
+                      }
+                    }}
+                  >
+                    <SparkleRegular />
+                  </button>
                 </div>
               </div>
             </div>
@@ -1682,15 +1724,49 @@ export default function App() {
           {selectedVisibleFiles.length > 0 && (
             <div className="bulkToolbar">
               <div className="bulkToolbarInfo">
-                <Text>已选中 {selectedVisibleFiles.length} 项</Text>
-                <Caption1>{allVisibleSelected ? "当前结果已全选" : "批量收藏、下载、删除"}</Caption1>
+                <span className="bulkCountBadge">{selectedVisibleFiles.length}</span>
+                <Text>已选中</Text>
               </div>
               <div className="bulkToolbarActions">
-                <Button size="small" onClick={toggleSelectAllVisible}>{allVisibleSelected ? "取消全选" : "全选当前结果"}</Button>
-                <Button size="small" onClick={() => setSelectedFileIds([])}>清空选择</Button>
-                <Button size="small" onClick={batchToggleFavorite}>{selectedVisibleAllFavorite ? "批量取消收藏" : "批量切换收藏"}</Button>
-                <Button size="small" onClick={batchDownload}>批量下载</Button>
-                <Button size="small" appearance="primary" onClick={requestBatchDelete}>批量删除</Button>
+                <button type="button" className="bulkActionPill" onClick={toggleSelectAllVisible}>{allVisibleSelected ? "取消全选" : "全选当前结果"}</button>
+                <button type="button" className="bulkActionPill" onClick={() => setSelectedFileIds([])}>清空选择</button>
+                <button type="button" className="bulkActionPill" onClick={batchToggleFavorite}>{selectedVisibleAllFavorite ? "批量取消收藏" : "批量切换收藏"}</button>
+                <button type="button" className="bulkActionPill" onClick={batchDownload}>批量下载</button>
+                <button type="button" className="bulkActionPill danger" onClick={requestBatchDelete}>批量删除</button>
+              </div>
+            </div>
+          )}
+
+          {availableTags.length > 0 && !isMobile && (
+            <div className="tagFilterBar">
+              <div className="tagFilterSearch">
+                <input
+                  className="tagFilterInput"
+                  type="text"
+                  placeholder="搜索标签…"
+                  value={tagSearch}
+                  onChange={(e) => setTagSearch(e.target.value)}
+                />
+                {tagSearch && (
+                  <button type="button" className="tagFilterClear" onClick={() => setTagSearch("")}>✕</button>
+                )}
+              </div>
+              <div className="tagFilterPills">
+                <button
+                  type="button"
+                  className={`tagFilterBarPill${tagFilter.length === 0 ? " active" : ""}`}
+                  onClick={() => { setTagFilter([]); setTagSearch(""); }}
+                >全部</button>
+                {availableTags
+                  .filter((tag) => !tagSearch || tag.toLowerCase().includes(tagSearch.toLowerCase()))
+                  .map((tag) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      className={`tagFilterBarPill${tagFilter.includes(tag) ? " active" : ""}`}
+                      onClick={() => setTagFilter((prev) => prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag])}
+                    >{tag}</button>
+                  ))}
               </div>
             </div>
           )}
@@ -1763,6 +1839,13 @@ export default function App() {
                             {thumbMap[getThumbKey(entry.file)]?.url ? <img src={thumbMap[getThumbKey(entry.file)].url} className="thumbImg" /> : <div className="thumbFallback">{isUploadingFile(entry.file) ? "上传中" : isImageMime(entry.file.mimeType) ? "图片" : isVideoMime(entry.file.mimeType) ? "视频" : "文件"}</div>}
                           </button>
                           {renderSelectionToggle(entry.file)}
+                          {(entry.file.tags || []).length > 0 && (
+                            <div className="thumbTagOverlay">
+                              {(entry.file.tags || []).slice(0, 4).map((tag) => (
+                                <button key={tag} type="button" className="tagPill thumbTagPill" onClick={(e) => { e.stopPropagation(); setTagFilter([tag]); }} title={`筛选: ${tag}`}>{tag}</button>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </VideoHoverPreview>
                       <div className="fileMeta">
@@ -1828,6 +1911,13 @@ export default function App() {
                         {thumbMap[getThumbKey(entry.file)]?.url ? <img src={thumbMap[getThumbKey(entry.file)].url} className="thumbImg" /> : <div className="thumbFallback">{isUploadingFile(entry.file) ? "上传中" : isImageMime(entry.file.mimeType) ? "图片" : isVideoMime(entry.file.mimeType) ? "视频" : "文件"}</div>}
                       </button>
                       {renderSelectionToggle(entry.file)}
+                      {(entry.file.tags || []).length > 0 && (
+                        <div className="thumbTagOverlay">
+                          {(entry.file.tags || []).slice(0, 4).map((tag) => (
+                            <button key={tag} type="button" className="tagPill thumbTagPill" onClick={(e) => { e.stopPropagation(); setTagFilter([tag]); }} title={`筛选: ${tag}`}>{tag}</button>
+                          ))}
+                        </div>
+                      )}
                     </VideoHoverPreview>
                     <div className="gridName" title={entry.file.name}>{entry.file.name}</div>
                     <Caption1 className="gridMetaLine">{getClientDisplayName(entry.file.clientId)} · {formatBytes(entry.file.size)}</Caption1>
@@ -1857,6 +1947,7 @@ export default function App() {
     { id: "transfers", label: "传输队列", icon: <ArrowSwapRegular />, meta: `${visibleUploadJobs.length + downloadingCount}` },
     { id: "shares", label: "分享管理", icon: <ShareRegular />, meta: `${shares.length}` },
     { id: "tv", label: "TV直播", icon: <StreamRegular />, meta: "live" },
+    { id: "anime", label: "番剧", icon: <VideoRegular />, meta: "bgm" },
     ...(user?.role === "admin"
       ? [
           { id: "admin-users", label: "用户管理", icon: <EditRegular />, meta: `${users.length}` },
@@ -1882,6 +1973,7 @@ export default function App() {
           currentUser={user}
           clients={clients}
           p2p={p2p}
+          nasFiles={files}
           setMessage={setMessage}
           getClientDisplayName={getClientDisplayName}
           openMediaPreview={preview}
@@ -1911,6 +2003,13 @@ export default function App() {
       return (
         <Suspense fallback={<Spinner size="large" />}>
           <TVStream authToken={token} setMessage={setMessage} />
+        </Suspense>
+      );
+    }
+    if (activeWorkspaceTab === "anime") {
+      return (
+        <Suspense fallback={<Spinner size="large" />}>
+          <AnimePage authToken={token} />
         </Suspense>
       );
     }
@@ -2662,22 +2761,19 @@ export default function App() {
     if (!p2p) return;
     if (!clients.length) return;
     if (previewing) return;
-    const mediaFiles = files
+    const batch = files
       .filter((file) => {
-        if (isUploadingFile(file)) {
-          return false;
-        }
+        if (isUploadingFile(file)) return false;
         return isImageMime(file.mimeType) || isVideoMime(file.mimeType);
       })
       .filter((file) => clients.find((item) => item.id === file.clientId)?.status === "online")
+      .filter((file) => {
+        const key = getThumbKey(file);
+        return !thumbMap[key] && !thumbnailLoading.current.has(key);
+      })
       .slice(0, 12);
 
-    mediaFiles.forEach((file) => {
-      const thumbKey = getThumbKey(file);
-      if (!thumbMap[thumbKey] && !thumbnailLoading.current.has(thumbKey)) {
-        ensureThumbnail(file);
-      }
-    });
+    batch.forEach((file) => ensureThumbnail(file));
   }, [files, clients, p2p, previewing, thumbMap, uploadingFileKeys]);
 
   useEffect(() => {
@@ -2869,7 +2965,6 @@ export default function App() {
             dataUrl,
             updatedAt: Date.now()
           };
-          thumbnailCache.current = pruneThumbCache(thumbnailCache.current);
           saveThumbCache(thumbnailCache.current);
         } catch {
         }
@@ -2921,7 +3016,6 @@ export default function App() {
           thumbUrl = dataUrl;
           persisted = true;
           thumbnailCache.current[key] = { dataUrl, updatedAt: Date.now() };
-          thumbnailCache.current = pruneThumbCache(thumbnailCache.current);
           saveThumbCache(thumbnailCache.current);
         } catch { }
       }
@@ -3622,6 +3716,44 @@ export default function App() {
     setSelectedFileIds((prev) => (prev.includes(fileId) ? prev.filter((id) => id !== fileId) : [...prev, fileId]));
   }
 
+  async function handleQuickTag(file) {
+    if (!file?.clientId || !p2p) { setMessage("没有在线的存储终端"); return; }
+    if (botPendingFileIds.has(file.id)) return;
+    setBotPendingFileIds((prev) => new Set([...prev, file.id]));
+    try {
+      await p2p.invokeBot(file.clientId, {
+        botId: "video.tag",
+        trigger: { type: "card-action", rawText: "", parsedArgs: { fileId: file.id, aiSummary: file.aiSummary || "" } }
+      });
+      setMessage("AI 标签任务已提交，稍后自动刷新");
+    } catch (err) {
+      setMessage(`标签任务提交失败: ${err.message}`);
+    } finally {
+      setTimeout(() => setBotPendingFileIds((prev) => { const next = new Set(prev); next.delete(file.id); return next; }), 30000);
+    }
+  }
+
+  async function handleQuickSummary(file) {
+    if (file.aiSummary) {
+      setAiSummaryViewFile(file);
+      return;
+    }
+    if (!file?.clientId || !p2p) { setMessage("没有在线的存储终端"); return; }
+    if (botPendingFileIds.has(file.id)) return;
+    setBotPendingFileIds((prev) => new Set([...prev, file.id]));
+    try {
+      await p2p.invokeBot(file.clientId, {
+        botId: "video.analyze",
+        trigger: { type: "card-action", rawText: "", parsedArgs: { fileId: file.id } }
+      });
+      setMessage("AI 总结任务已提交，稍后自动刷新");
+    } catch (err) {
+      setMessage(`总结任务提交失败: ${err.message}`);
+    } finally {
+      setTimeout(() => setBotPendingFileIds((prev) => { const next = new Set(prev); next.delete(file.id); return next; }), 30000);
+    }
+  }
+
   function toggleSelectAllVisible() {
     setSelectedFileIds((prev) => {
       const visibleIds = currentFolderFiles.map((file) => file.id);
@@ -3858,6 +3990,30 @@ export default function App() {
           >
             <StreamRegular />
           </button>
+        )}
+        {isVideoMime(file.mimeType) && (
+          <>
+            <button
+              type="button"
+              className={`actionChip${botPendingFileIds.has(file.id) ? " pending" : ""}`}
+              title={botPendingFileIds.has(file.id) ? "正在处理中..." : "AI 生成标签"}
+              aria-label="AI 生成标签"
+              disabled={botPendingFileIds.has(file.id)}
+              onClick={() => handleQuickTag(file)}
+            >
+              <TagRegular />
+            </button>
+            <button
+              type="button"
+              className={`actionChip${botPendingFileIds.has(file.id) ? " pending" : (file.aiSummary ? " active" : "")}`}
+              title={botPendingFileIds.has(file.id) ? "正在处理中..." : file.aiSummary ? "查看 AI 总结" : "AI 生成总结"}
+              aria-label={file.aiSummary ? "查看 AI 总结" : "AI 生成总结"}
+              disabled={botPendingFileIds.has(file.id)}
+              onClick={() => handleQuickSummary(file)}
+            >
+              <SparkleRegular />
+            </button>
+          </>
         )}
         {(isVideoMime(file.mimeType) || isImageMime(file.mimeType)) && (
           <button
@@ -4209,6 +4365,39 @@ export default function App() {
   function renderDialogs() {
     return (
       <>
+        {aiSummaryViewFile && (
+          <div className="overlay drawerOverlay dialogOverlayRaised" onClick={() => setAiSummaryViewFile(null)}>
+            <div className="modalWindow drawerSheet dialogModal aiSummaryViewModal" onClick={(event) => event.stopPropagation()}>
+              <div className="drawerHandle" />
+              <div className="modalHeader">
+                <div>
+                  <Subtitle1>AI 总结</Subtitle1>
+                  <Caption1>{aiSummaryViewFile.name}</Caption1>
+                </div>
+                <Button size="small" className="dialogActionButton dialogIconOnlyButton" icon={<DismissRegular />} aria-label="关闭" title="关闭" onClick={() => setAiSummaryViewFile(null)} />
+              </div>
+              <div className="drawerSection aiSummaryViewBody">
+                <div className="aiSummaryViewText">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{aiSummaryViewFile.aiSummary}</ReactMarkdown>
+                </div>
+              </div>
+              <div className="drawerFooter dialogFooterInline">
+                <div />
+                <div className="row">
+                  <Button className="dialogActionButton" onClick={() => {
+                    if (!aiSummaryViewFile?.clientId || !p2p) { setMessage("没有在线的存储终端"); return; }
+                    setAiSummaryViewFile(null);
+                    p2p.invokeBot(aiSummaryViewFile.clientId, {
+                      botId: "video.analyze",
+                      trigger: { type: "card-action", rawText: "", parsedArgs: { fileId: aiSummaryViewFile.id } }
+                    }).then(() => setMessage("AI 总结任务已提交，请稍后刷新查看")).catch((err) => setMessage(`提交失败: ${err.message}`));
+                  }}>重新生成</Button>
+                  <Button className="dialogActionButton dialogPrimaryButton" appearance="primary" onClick={() => setAiSummaryViewFile(null)}>关闭</Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         {shareDialogOpen && shareTarget && (
           <div className="overlay drawerOverlay dialogOverlayRaised">
             <div className="modalWindow shareModal drawerSheet dialogModal" onClick={(event) => event.stopPropagation()}>
@@ -4813,6 +5002,10 @@ export default function App() {
               previewFileId={previewTargetFile?.id || ""}
               favorite={Boolean(previewTargetFile?.favorite)}
               commentsEnabled
+              aiSummary={previewTargetFile?.aiSummary || null}
+              onRefreshFiles={refreshAll}
+              tags={previewTargetFile?.tags || []}
+              onTagsUpdated={refreshAll}
             />
           </Suspense>
         )}
@@ -4840,6 +5033,7 @@ export default function App() {
           currentUser={user}
           clients={clients}
           p2p={p2p}
+          nasFiles={files}
           setMessage={setMessage}
           getClientDisplayName={getClientDisplayName}
           openMediaPreview={preview}
@@ -4973,12 +5167,15 @@ export default function App() {
           keyword={keyword}
           columnFilter={columnFilter}
           typeFilter={typeFilter}
+          tagFilter={tagFilter}
+          availableTags={availableTags}
           sortBy={sortBy}
           columns={columns}
-          onApply={({ keyword: k, columnFilter: c, typeFilter: t, sortBy: s }) => {
+          onApply={({ keyword: k, columnFilter: c, typeFilter: t, tagFilter: tf, sortBy: s }) => {
             setKeyword(k);
             setColumnFilter(c);
             setTypeFilter(t);
+            setTagFilter(tf);
             setSortBy(s);
             setFilterSheetOpen(false);
           }}
@@ -4986,6 +5183,7 @@ export default function App() {
             setKeyword("");
             setColumnFilter("all");
             setTypeFilter("all");
+            setTagFilter([]);
             setSortBy("createdAt");
             setFilterSheetOpen(false);
           }}

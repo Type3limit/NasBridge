@@ -406,9 +406,35 @@ function parseVerificationRequiredError(errorMessage = "") {
   }
 }
 
+function formatAiChatGraphNodeDetails(details, label) {
+  const lines = [];
+  if (label) lines.push(`当前阶段：${label}`);
+  if (details.route) lines.push(`路由决策：${details.route}`);
+  if (details.intent) lines.push(`Intent：${details.intent}`);
+  if (details.model) lines.push(`模型：${details.model}`);
+  if (details.delegated) lines.push(`委托目标：${details.delegated}`);
+  if (details.session) lines.push(`会话：${details.session}`);
+  if (typeof details.historyCount === "number") lines.push(`历史消息：${details.historyCount} 条`);
+  if (typeof details.systemPromptLen === "number") lines.push(`系统提示：${details.systemPromptLen} 字符`);
+  if (Array.isArray(details.tools) && details.tools.length) {
+    lines.push(`Intent：工具调用 · ${details.tools.join(", ")} (第 ${details.toolRound || 1} 轮)`);
+  }
+  if (Array.isArray(details.executedTools) && details.executedTools.length) {
+    lines.push(`Intent：已执行 · ${details.executedTools.join(", ")}`);
+  }
+  if (details.directReply) lines.push("Intent：直接生成最终回复");
+  return lines.filter(Boolean).join("\n");
+}
+
 function formatBotProgressDetails(job) {
   const details = job?.progress?.details;
-  if (!details || typeof details !== "object" || details.type !== "web-search") {
+  if (!details || typeof details !== "object") {
+    return String(job?.progress?.label || job?.phase || "处理中").trim();
+  }
+  if (details.type === "ai-chat-graph") {
+    return formatAiChatGraphNodeDetails(details, String(job?.progress?.label || "").trim());
+  }
+  if (details.type !== "web-search") {
     return String(job?.progress?.label || job?.phase || "处理中").trim();
   }
 
@@ -520,6 +546,9 @@ function buildBotJobCard(job, botDisplayName) {
     title: botDisplayName,
     subtitle: String(job?.progress?.label || job?.phase || "处理中").trim(),
     body: formatBotProgressDetails(job),
+    graphState: (job?.progress?.graphState && typeof job.progress.graphState === "object")
+      ? job.progress.graphState
+      : null,
     progress: percent,
     actions: ["queued", "running"].includes(String(job?.status || ""))
       ? [{ type: "cancel-bot-job", label: "停止生成" }]
@@ -543,7 +572,8 @@ function getBotJobStatusSignature(job) {
         return "";
       }
     })(),
-    String(job?.error?.message || "")
+    String(job?.error?.message || ""),
+    String(job?.progress?.graphState?.activeNode || "")
   ].join("|");
 }
 
@@ -621,9 +651,29 @@ async function ensureBotRuntime() {
     dependencies: {
       syncFiles,
       ffmpegPath,
+      ffprobePath,
       getMusicPlayer: ensureGlobalMusicPlayer,
       appendChatMessage: appendChatHistoryEntry,
-      publishChatMessage: publishRealtimeChatMessage
+      publishChatMessage: publishRealtimeChatMessage,
+      upsertFileMeta: async (fileId, patch) => {
+        await api("/api/client/files-meta", {
+          method: "POST",
+          body: JSON.stringify({ fileId, patch })
+        });
+      },
+      resolveFileById: (fileId) => {
+        const clientId = state.clientId;
+        if (!clientId) {
+          return null;
+        }
+        const prefix = `${clientId}:`;
+        if (!String(fileId || "").startsWith(prefix)) {
+          return null;
+        }
+        const relativePath = String(fileId).slice(prefix.length);
+        const absolutePath = path.join(storageRoot, relativePath.split("/").join(path.sep));
+        return { absolutePath, relativePath };
+      }
     }
   });
   await botRuntime.init();
@@ -3891,6 +3941,11 @@ function wireDataChannel(channel, remotePeerId = "unknown-peer") {
           throw new Error("file is uploading");
         }
         await fs.promises.rm(absolute, { force: true });
+        // Delete .srt sidecar if it exists alongside the video file
+        const srtSidecar = absolute.replace(/\.[^.]+$/, ".srt");
+        if (srtSidecar !== absolute) {
+          await fs.promises.rm(srtSidecar, { force: true });
+        }
         await syncFiles();
         safeSend(JSON.stringify({ type: "delete-file-result", requestId: message.requestId, ok: true }), "delete-file-ok");
       } catch (error) {

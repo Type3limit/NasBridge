@@ -73,6 +73,8 @@ function shouldForceReplaceChatMessage(context, plugin) {
     && String(context?.chat?.messageId || "").trim() !== "";
 }
 
+const WHISPER_BOT_IDS = new Set(["video.analyze", "video.tag"]);
+
 export class BotRuntime {
   constructor(options = {}) {
     this.clientId = options.clientId || "";
@@ -80,6 +82,8 @@ export class BotRuntime {
     this.appDataRoot = path.resolve(options.appDataRoot || path.join(this.storageRoot, process.env.BOT_APP_DATA_DIR_NAME || ".nas-bot"));
     this.registry = options.registry || new BotRegistry().registerDefaults();
     this.queue = options.queue || new BotJobQueue({ concurrency: options.concurrency || 2 });
+    // Whisper-based bots share a dedicated serial queue (ffmpeg + whisper.cpp are CPU-heavy)
+    this.whisperQueue = options.whisperQueue || new BotJobQueue({ concurrency: 1 });
     this.store = options.store || new BotJobStore({ rootDir: this.appDataRoot });
     this.events = options.events || createBotEventBus();
     this.dependencies = options.dependencies || {};
@@ -166,7 +170,8 @@ export class BotRuntime {
     this.events.emit("job", baseJob);
     this.store.appendLog(baseJob.jobId, `accepted by ${plugin.botId}`).catch(() => {});
 
-    void this.queue.enqueue(async () => {
+    const jobQueue = WHISPER_BOT_IDS.has(plugin.botId) ? this.whisperQueue : this.queue;
+    void jobQueue.enqueue(async () => {
       await this.runJob(plugin, context, baseJob, permissionCheck);
     }, { jobId: baseJob.jobId, botId: plugin.botId }).catch(async (error) => {
       await this.failJob(baseJob.jobId, error);
@@ -310,7 +315,10 @@ export class BotRuntime {
             percent: Number.isFinite(patch.percent) ? Math.max(0, Math.min(100, Number(patch.percent))) : Number(current.progress?.percent || 0),
             details: Object.prototype.hasOwnProperty.call(patch, "details")
               ? (patch.details && typeof patch.details === "object" ? patch.details : null)
-              : (current.progress?.details ?? null)
+              : (current.progress?.details ?? null),
+            graphState: Object.prototype.hasOwnProperty.call(patch, "graphState")
+              ? (patch.graphState && typeof patch.graphState === "object" ? patch.graphState : null)
+              : (current.progress?.graphState ?? null)
           }
         });
         this.activeJobs.set(job.jobId, next);

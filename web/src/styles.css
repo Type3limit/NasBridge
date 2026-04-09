@@ -4294,6 +4294,15 @@ button.chatAttachmentTile:disabled {
   gap: 1px;
 }
 
+.chatFilePickerItemThumb {
+  flex-shrink: 0;
+  width: 48px;
+  height: 32px;
+  object-fit: cover;
+  border-radius: 6px;
+  background: rgba(148, 163, 184, 0.1);
+}
+
 .chatFilePickerItemName {
   white-space: nowrap;
   overflow: hidden;

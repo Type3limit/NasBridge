@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Badge, Button, Caption1, Dropdown, Input, Option, Spinner, Subtitle1, Text } from "@fluentui/react-components";
-import { ArrowDownloadRegular, ArrowDownRegular, ArrowReplyRegular, ArrowUpRegular, BugRegular, ChevronDownRegular, ChevronUpRegular, DismissRegular, EditRegular, EyeRegular, SendRegular, SettingsRegular, ShareRegular, StarFilled, StarRegular, StreamRegular } from "@fluentui/react-icons";
+import { ArrowDownloadRegular, ArrowDownRegular, ArrowReplyRegular, ArrowUpRegular, BugRegular, ChevronDownRegular, ChevronUpRegular, DismissRegular, EditRegular, EyeRegular, SendRegular, SettingsRegular, ShareRegular, SparkleRegular, StarFilled, StarRegular, StreamRegular, TagRegular } from "@fluentui/react-icons";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { apiRequest } from "../api";
@@ -312,7 +312,11 @@ export default function PreviewModal({
   currentUser,
   previewFileId,
   favorite = false,
-  commentsEnabled = false
+  commentsEnabled = false,
+  aiSummary = null,
+  onRefreshFiles,
+  tags = [],
+  onTagsUpdated
 }) {
   const previewModalRef = useRef(null);
   const previewViewportRef = useRef(null);
@@ -360,15 +364,143 @@ export default function PreviewModal({
   const activeDanmakuIdsRef = useRef(new Set());
   const lastVideoTimeRef = useRef(0);
   const danmakuSubmitRef = useRef({ pending: false, lastFingerprint: "", lastSubmittedAt: 0 });
+  const [summaryGenerating, setSummaryGenerating] = useState(false);
+  const [summaryError, setSummaryError] = useState("");
+  const [summaryPopupOpen, setSummaryPopupOpen] = useState(false);
+  const [localTags, setLocalTags] = useState(tags);
+  const [tagInput, setTagInput] = useState("");
+  const [tagSaving, setTagSaving] = useState(false);
+  const [tagError, setTagError] = useState("");
+  const [tagGenLoading, setTagGenLoading] = useState(false);
+  const [tagsPopupOpen, setTagsPopupOpen] = useState(false);
+  // Sync localTags when the tags prop changes (parent refreshed)
+  useEffect(() => { setLocalTags(tags); }, [JSON.stringify(tags)]); // eslint-disable-line react-hooks/exhaustive-deps
   const formatCommentTime = typeof formatRelativeTime === "function" ? formatRelativeTime : fallbackRelativeTime;
   const markdownPreview = isMarkdownPreview({ mimeType: previewMime, previewName, previewPath });
   const canUseComments = Boolean(commentsEnabled && authToken && previewFileId);
+  const isVideoFile = String(previewMime || "").startsWith("video/");
+  const canGenerateSummary = Boolean(isVideoFile && authToken && previewClientId && previewFileId && p2p && !summaryGenerating);
   const availableHlsProfiles = Array.isArray(previewHlsSource?.availableProfiles) ? previewHlsSource.availableProfiles : [];
   const activeHlsProfile = String(previewHlsSource?.profile || previewDebug?.hlsProfile || "");
   const activeHlsProfileLabel = availableHlsProfiles.find((profile) => String(profile?.id || "") === activeHlsProfile)?.label || activeHlsProfile || "分辨率";
   const canUsePictureInPicture = previewMime.startsWith("video/")
     && typeof document !== "undefined"
     && Boolean(document.pictureInPictureEnabled);
+
+  async function handleGenerateSummary() {
+    if (!canGenerateSummary) {
+      return;
+    }
+    setSummaryGenerating(true);
+    setSummaryError("");
+    try {
+      const { job } = await p2p.invokeBot(previewClientId, {
+        botId: "video.analyze",
+        trigger: {
+          type: "card-action",
+          rawText: "",
+          parsedArgs: { fileId: previewFileId }
+        }
+      });
+      const jobId = job?.jobId;
+      if (!jobId) {
+        throw new Error("未能获取任务 ID，请重试");
+      }
+      const deadline = Date.now() + 90 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        const { job: latestJob } = await p2p.getBotJob(previewClientId, jobId);
+        if (!latestJob) {
+          break;
+        }
+        if (latestJob.status === "succeeded") {
+          if (typeof onRefreshFiles === "function") {
+            onRefreshFiles();
+          }
+          break;
+        }
+        if (latestJob.status === "failed") {
+          throw new Error(latestJob.error?.message || "视频分析任务失败");
+        }
+        if (latestJob.status === "cancelled") {
+          throw new Error("视频分析任务已取消");
+        }
+      }
+    } catch (error) {
+      setSummaryError(String(error?.message || "生成总结时出错，请重试"));
+    } finally {
+      setSummaryGenerating(false);
+    }
+  }
+
+  function handleAddTag() {
+    const t = tagInput.trim();
+    if (!t || localTags.includes(t)) {
+      setTagInput("");
+      return;
+    }
+    setLocalTags((prev) => [...prev, t]);
+    setTagInput("");
+  }
+
+  function handleRemoveTag(tag) {
+    setLocalTags((prev) => prev.filter((t) => t !== tag));
+  }
+
+  async function handleSaveTags() {
+    if (!authToken || !previewFileId) return;
+    setTagSaving(true);
+    setTagError("");
+    try {
+      await apiRequest("/api/files/tags", {
+        token: authToken,
+        method: "POST",
+        body: JSON.stringify({ fileId: previewFileId, tags: localTags })
+      });
+      if (typeof onTagsUpdated === "function") {
+        onTagsUpdated();
+      }
+    } catch (err) {
+      setTagError(String(err?.message || "保存标签失败"));
+    } finally {
+      setTagSaving(false);
+    }
+  }
+
+  async function handleGenerateTags() {
+    if (!previewClientId || !previewFileId || !p2p || tagGenLoading) return;
+    setTagGenLoading(true);
+    setTagError("");
+    try {
+      const { job } = await p2p.invokeBot(previewClientId, {
+        botId: "video.tag",
+        trigger: {
+          type: "card-action",
+          rawText: "",
+          parsedArgs: { fileId: previewFileId, aiSummary: aiSummary || "" }
+        }
+      });
+      const jobId = job?.jobId;
+      if (!jobId) throw new Error("未能获取任务 ID，请重试");
+      const deadline = Date.now() + 90 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 4000));
+        const { job: latestJob } = await p2p.getBotJob(previewClientId, jobId);
+        if (!latestJob) break;
+        if (latestJob.status === "succeeded") {
+          if (typeof onTagsUpdated === "function") onTagsUpdated();
+          break;
+        }
+        if (latestJob.status === "failed") throw new Error(latestJob.error?.message || "标签生成失败");
+        if (latestJob.status === "cancelled") throw new Error("标签生成任务已取消");
+      }
+    } catch (err) {
+      const msg = String(err?.message || "");
+      setTagError(msg === "bot not found" ? "video.tag bot 未找到，请重启 storage-client 后重试" : (msg || "AI 生成标签失败，请重试"));
+    } finally {
+      setTagGenLoading(false);
+    }
+  }
 
   useEffect(() => {
     const settings = loadDanmakuSettings(currentUser);
@@ -1564,6 +1696,131 @@ export default function PreviewModal({
                 })}
               </Dropdown>
             ) : null}
+            {isVideoFile && (
+              <div className="previewToolbarPopupWrap">
+                <button
+                  type="button"
+                  className={`iconActionButton previewToolbarButton${tagsPopupOpen ? " active" : ""}${localTags.length > 0 ? " has-data" : ""}`}
+                  title={`视频标签${localTags.length ? ` (${localTags.length})` : ""}`}
+                  aria-label="视频标签"
+                  onClick={() => { setTagsPopupOpen((v) => !v); setSummaryPopupOpen(false); }}
+                >
+                  <TagRegular />
+                  {localTags.length > 0 && <span className="toolbarBadge">{localTags.length}</span>}
+                </button>
+                {tagsPopupOpen && (
+                  <div className="previewTagsPopup" role="dialog" aria-label="视频标签">
+                    <div className="popupPanelHeader">
+                      <span className="popupPanelTitle"><TagRegular style={{ verticalAlign: "middle", marginRight: 6 }} />视频标签</span>
+                      {tagGenLoading ? (
+                        <Spinner size="tiny" />
+                      ) : (
+                        <button
+                          type="button"
+                          className="popupActionLink"
+                          onClick={handleGenerateTags}
+                          disabled={!previewClientId || !p2p || tagGenLoading}
+                        >
+                          <SparkleRegular style={{ verticalAlign: "middle", marginRight: 3 }} />AI 生成
+                        </button>
+                      )}
+                    </div>
+                    {tagError && (
+                      <div className="debugNotice danger compactNotice" style={{ marginBottom: 8 }}>
+                        <Text>{tagError}</Text>
+                      </div>
+                    )}
+                    <div className="fileTagsList" style={{ marginBottom: 8 }}>
+                      {localTags.map((tag) => (
+                        <span key={tag} className="tagPill tagPillEditable">
+                          {tag}
+                          {authToken && (
+                            <button type="button" className="tagPillRemove" onClick={() => handleRemoveTag(tag)} title="删除标签">×</button>
+                          )}
+                        </span>
+                      ))}
+                      {!localTags.length && !tagGenLoading && (
+                        <Caption1 style={{ color: "var(--text-faint, #64748b)", fontSize: 13 }}>
+                          {previewClientId && p2p ? "暂无标签，点击「AI 生成」自动分类。" : "暂无标签。"}
+                        </Caption1>
+                      )}
+                    </div>
+                    {authToken && (
+                      <div className="fileTagsInputRow">
+                        <Input
+                          size="small"
+                          className="fileTagsInput"
+                          placeholder="添加标签"
+                          value={tagInput}
+                          onChange={(_, data) => setTagInput(data.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddTag(); } }}
+                        />
+                        <Button size="small" appearance="subtle" onClick={handleAddTag} disabled={!tagInput.trim()}>添加</Button>
+                        <Button
+                          size="small"
+                          appearance={JSON.stringify(localTags) !== JSON.stringify(tags) ? "primary" : "subtle"}
+                          onClick={handleSaveTags}
+                          disabled={tagSaving || JSON.stringify(localTags) === JSON.stringify(tags)}
+                        >
+                          {tagSaving ? <Spinner size="tiny" /> : "保存"}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+            {isVideoFile && (
+              <div className="previewToolbarPopupWrap">
+                <button
+                  type="button"
+                  className={`iconActionButton previewToolbarButton${summaryPopupOpen ? " active" : ""}${aiSummary ? " has-data" : ""}`}
+                  title="AI 视频总结"
+                  aria-label="AI 视频总结"
+                  onClick={() => { setSummaryPopupOpen((v) => !v); setTagsPopupOpen(false); }}
+                >
+                  <SparkleRegular />
+                </button>
+                {summaryPopupOpen && (
+                  <div className="previewSummaryPopup" role="dialog" aria-label="AI 视频总结">
+                    <div className="popupPanelHeader">
+                      <span className="popupPanelTitle"><SparkleRegular style={{ verticalAlign: "middle", marginRight: 6 }} />AI 视频总结</span>
+                      {canGenerateSummary && (
+                        <button
+                          type="button"
+                          className="popupActionLink"
+                          onClick={handleGenerateSummary}
+                          disabled={summaryGenerating}
+                        >
+                          {aiSummary ? "重新生成" : "生成总结"}
+                        </button>
+                      )}
+                    </div>
+                    {summaryGenerating && <Spinner size="small" label="AI 分析中，请稍候..." style={{ margin: "12px 0" }} />}
+                    {summaryError && !summaryGenerating && (
+                      <div className="debugNotice danger compactNotice" style={{ marginBottom: 8 }}>
+                        <Text>{summaryError}</Text>
+                      </div>
+                    )}
+                    {aiSummary && !summaryGenerating && (
+                      <div className="aiSummaryContent">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{ a: ({ node, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" /> }}
+                        >
+                          {aiSummary}
+                        </ReactMarkdown>
+                      </div>
+                    )}
+                    {!aiSummary && !summaryGenerating && !summaryError && (
+                      <Caption1 style={{ color: "var(--text-faint, #64748b)", fontSize: 13 }}>
+                        {canGenerateSummary ? "暂无 AI 总结，点击「生成总结」开始分析。" : "暂无 AI 总结。"}
+                      </Caption1>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             {onFavorite ? (
               <button
                 type="button"
