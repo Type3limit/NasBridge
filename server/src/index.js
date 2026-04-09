@@ -1144,12 +1144,13 @@ function parseAllEpisodeUrls(vodPlayUrl, vodPlayFrom, epIndex) {
   urlRoutes.forEach((route, ri) => {
     const routeName = fromRoutes[ri]?.trim() || `线路${ri + 1}`;
     const eps = route.split("|");
-    const epEntry = eps[epIndex - 1] || (epIndex <= eps.length ? eps[epIndex - 1] : null);
+    // epIndex is 1-based; if out of range, fall back to last episode
+    const epEntry = eps[epIndex - 1] ?? eps[eps.length - 1];
     if (!epEntry) return;
     const parts = epEntry.split("$");
     const url = parts[parts.length - 1]?.trim();
     if (url && /^https?:\/\//i.test(url)) {
-      results.push({ route: routeName, url });
+      results.push({ route: routeName, url, totalEps: eps.length });
     }
   });
   return results;
@@ -1195,7 +1196,13 @@ app.get("/api/anime/find-stream", requireAuth, (req, res) => {
       const detail = await cmsDetail(site.base, hit.vod_id, controller.signal);
       if (!detail?.vod_play_url) return;
       const vodName = detail.vod_name || hit.vod_name || fullName;
+      // Log what was found to help with debugging
+      console.log(`[anime] ${site.name}: found "${vodName}" (ep ${ep} of ${parseAllEpisodeUrls(detail.vod_play_url, detail.vod_play_from, 1).length || "?"} total)`);
       const routeUrls = parseAllEpisodeUrls(detail.vod_play_url, detail.vod_play_from, ep);
+      if (!routeUrls.length) {
+        console.log(`[anime] ${site.name}: ep ${ep} out of range in "${vodName}"`);
+        return;
+      }
       for (const { route, url } of routeUrls) {
         const playUrl = `/api/tv/stream?url=${encodeURIComponent(url)}`;
         const type = /\.(mp4|flv|mkv)(\?|$)/i.test(url) ? "mp4" : "hls";

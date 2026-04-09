@@ -299,7 +299,14 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
 
     (async () => {
       try {
-        const params = new URLSearchParams({ name: animeName, ep: String(currentEp) });
+        // Map Bangumi's continuous sort number to within-season episode index.
+        // e.g. Season 2 episodes [29..38] → CMS EP 1..10
+        const epMin = episodes && episodes.length > 0
+          ? Math.min(...episodes.map((e) => e.sort))
+          : 1;
+        const cmsEp = currentEp - epMin + 1;
+
+        const params = new URLSearchParams({ name: animeName, ep: String(cmsEp) });
         if (animeNameJa && animeNameJa !== animeName) params.set("nameFallback", animeNameJa);
         const r = await fetch(`/api/anime/find-stream?${params}`, {
           headers: { Authorization: `Bearer ${authToken}` },
