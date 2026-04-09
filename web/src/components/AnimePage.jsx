@@ -20,6 +20,21 @@ const ANIME_TYPE = 2;
 
 const WEEKDAY_LABELS = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 
+// ─── Source cache (module-level, survives component re-mounts) ─────────────────
+// Key: animeName, Value: { routes: [...], time: timestamp }
+const SOURCE_CACHE = new Map();
+const CACHE_TTL_MS = 20 * 60 * 1000; // 20 minutes
+
+function getCachedRoutes(animeName) {
+  const entry = SOURCE_CACHE.get(animeName);
+  if (!entry) return null;
+  if (Date.now() - entry.time > CACHE_TTL_MS) { SOURCE_CACHE.delete(animeName); return null; }
+  return entry.routes;
+}
+function setCachedRoutes(animeName, routes) {
+  if (routes.length > 0) SOURCE_CACHE.set(animeName, { routes, time: Date.now() });
+}
+
 // ─── API helpers ──────────────────────────────────────────────────────────────
 
 async function fetchCalendar() {
@@ -284,8 +299,15 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
   const [currentEp, setCurrentEp] = useState(null); // CMS episode number (1-based)
   const [searchLoading, setSearchLoading] = useState(true);
   const [playerError, setPlayerError] = useState(null);
+  const [searchKey, setSearchKey] = useState(0); // increment to force re-search
   const videoRef = useRef(null);
   const hlsRef = useRef(null);
+  const routesAccumRef = useRef([]); // accumulates routes during SSE for caching
+
+  function handleRefreshSources() {
+    SOURCE_CACHE.delete(animeName);
+    setSearchKey((k) => k + 1);
+  }
 
   const currentRoute = routes[currentRouteIdx] ?? null;
   const cmsEpisodes = currentRoute?.episodes ?? [];
@@ -293,7 +315,7 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
     || cmsEpisodes[0]
     || null;
 
-  // Fetch all routes + their episode lists from CMS (runs once on mount)
+  // Fetch all routes + their episode lists from CMS. Runs on mount; re-runs when searchKey changes.
   useEffect(() => {
     let cancelled = false;
     setRoutes([]);
@@ -301,6 +323,18 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
     setCurrentEp(null);
     setPlayerError(null);
     setSearchLoading(true);
+    routesAccumRef.current = [];
+
+    // Check cache first — skip SSE if we already have results
+    const cached = getCachedRoutes(animeName);
+    if (cached && cached.length > 0) {
+      setRoutes(cached);
+      setSearchLoading(false);
+      const eps = cached[0].episodes || [];
+      const found = hintEp != null && eps.find((e) => e.ep === hintEp);
+      setCurrentEp(found ? hintEp : (eps[0]?.ep ?? 1));
+      return;
+    }
 
     const controller = new AbortController();
     const hardTimer = setTimeout(() => controller.abort(), 20_000);
@@ -333,6 +367,7 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
             try { msg = JSON.parse(line.slice(6)); } catch { continue; }
             if (msg.type === "source") {
               if (!cancelled) {
+                routesAccumRef.current = [...routesAccumRef.current, msg.source];
                 setRoutes((prev) => [...prev, msg.source]);
                 if (firstRoute) {
                   firstRoute = false;
@@ -346,21 +381,24 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
               if (!cancelled) {
                 if (firstRoute) setPlayerError("未找到可用播放源");
                 setSearchLoading(false);
+                setCachedRoutes(animeName, routesAccumRef.current);
               }
             }
           }
         }
         if (!cancelled && firstRoute) { setPlayerError("未找到可用播放源"); setSearchLoading(false); }
+        if (!cancelled) setCachedRoutes(animeName, routesAccumRef.current);
       } catch (e) {
         if (!cancelled) {
           setPlayerError(e.name === "AbortError" ? "搜索超时" : (e.message || "加载失败"));
           setSearchLoading(false);
+          setCachedRoutes(animeName, routesAccumRef.current);
         }
       } finally { clearTimeout(hardTimer); }
     })();
 
     return () => { cancelled = true; controller.abort(); clearTimeout(hardTimer); };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [searchKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load video whenever the active episode changes
   useEffect(() => {
@@ -452,6 +490,20 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
                 {r.site} {r.route}
               </button>
             ))}
+            {!searchLoading && (
+              <button type="button" className="animeSourceBtn animeSourceRefreshBtn"
+                title="重新搜索播放源" onClick={handleRefreshSources}>
+                ↻ 刷新源
+              </button>
+            )}
+          </div>
+        )}
+        {!searchLoading && routes.length === 0 && !playerError && (
+          <div className="animeSourceBar">
+            <button type="button" className="animeSourceBtn animeSourceRefreshBtn"
+              onClick={handleRefreshSources}>
+              ↻ 重新搜索
+            </button>
           </div>
         )}
 

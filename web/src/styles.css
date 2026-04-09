@@ -8812,6 +8812,13 @@ button.chatAttachmentTile:disabled {
   color: #fff;
   border-color: var(--brand, #2563eb);
 }
+
+.animeSourceRefreshBtn {
+  margin-left: auto;
+  opacity: 0.7;
+  font-size: 11px;
+}
+.animeSourceRefreshBtn:hover { opacity: 1; }
 /* ─── Full-screen player modal ── */
 /* ─── Full-page player ── */
 .animePlayerPage {
@@ -8869,14 +8876,7 @@ button.chatAttachmentTile:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.animePlayerPageVideoEl {
-  height: 100%;
-  width: auto;
-  max-width: 100%;
-  display: block;
-  background: #000;
+  overflow: hidden;
 }
 
 /* Source bar + episodes scroll freely below the fixed video */
@@ -8941,7 +8941,7 @@ button.chatAttachmentTile:disabled {
 
 .animePlayerError {
   width: 100%;
-  aspect-ratio: 16/9;
+  height: 100%;
   background: #0d0d0d;
   display: flex;
   flex-direction: column;
@@ -8949,8 +8949,17 @@ button.chatAttachmentTile:disabled {
   justify-content: center;
   gap: 14px;
   padding: 24px;
+  box-sizing: border-box;
 }
 
+.animePlayerPageVideoEl {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  background: #000;
+}
+
 .animePlayerErrorMsg {
   color: #f87171;
   font-size: 13px;
@@ -8958,7 +8967,7 @@ button.chatAttachmentTile:disabled {
   line-height: 1.5;
 }
 
-/* Action buttons row */
+
 .animeDetailActions {
   display: flex;
   gap: 8px;
