@@ -273,22 +273,58 @@ function SearchView({ onSelectAnime }) {
 }
 
 // ─── Full-page Player ─────────────────────────────────────────────────────────
-// playerState = { sources, episodes, animeName, animeNameJa, currentEp }
-function AnimePlayerPage({ playerState, authToken, onBack, onChangeEp }) {
+// playerState = { episodes, animeName, animeNameJa, currentEp }
+function AnimePlayerPage({ playerState, authToken, onBack }) {
   const { animeName, animeNameJa, episodes } = playerState;
-  const [sources, setSources] = useState(playerState.sources);
+  const [sources, setSources] = useState([]);
   const [currentEp, setCurrentEp] = useState(playerState.currentEp);
   const [currentSrcIdx, setCurrentSrcIdx] = useState(0);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [playerError, setPlayerError] = useState(null);
   const [loadingEp, setLoadingEp] = useState(null);
   const videoRef = useRef(null);
   const hlsRef = useRef(null);
 
-  const currentSrc = sources[currentSrcIdx] || sources[0];
+  const currentSrc = sources[currentSrcIdx] ?? null;
 
+  // Search for sources for a given episode
+  async function fetchSources(epSort, signal) {
+    const params = new URLSearchParams({ name: animeName, ep: String(epSort) });
+    if (animeNameJa && animeNameJa !== animeName) params.set("nameFallback", animeNameJa);
+    const r = await fetch(`/api/anime/find-stream?${params}`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+      signal,
+    });
+    if (!r.ok) { const t = await r.text().catch(() => ""); throw new Error(t || `HTTP ${r.status}`); }
+    return r.json();
+  }
+
+  // On mount and whenever currentEp changes, fetch sources
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 25_000);
+    setSources([]);
+    setCurrentSrcIdx(0);
+    setPlayerError(null);
+    setSearchLoading(true);
+    fetchSources(currentEp, controller.signal)
+      .then((data) => {
+        const s = data.sources || [];
+        if (s.length === 0) setPlayerError("未找到可用播放源");
+        else setSources(s);
+      })
+      .catch((e) => {
+        if (e.name !== "AbortError" || !controller.signal.aborted)
+          setPlayerError(e.name === "AbortError" ? "搜索超时" : (e.message || "加载失败"));
+      })
+      .finally(() => { clearTimeout(timer); setSearchLoading(false); });
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [currentEp]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Load video when source changes
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !currentSrc?.playUrl || playerError === "__loading") return;
+    if (!video || !currentSrc?.playUrl) return;
     setPlayerError(null);
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
     if (Hls.isSupported()) {
@@ -299,7 +335,7 @@ function AnimePlayerPage({ playerState, authToken, onBack, onChangeEp }) {
       hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
       hls.on(Hls.Events.ERROR, (_, data) => {
         if (data.fatal) {
-          setPlayerError(`播放失败：${data.type} — ${data.details}`);
+          setPlayerError(`播放失败：${data.details}`);
           hls.destroy(); hlsRef.current = null;
         }
       });
@@ -311,38 +347,11 @@ function AnimePlayerPage({ playerState, authToken, onBack, onChangeEp }) {
       setPlayerError("当前浏览器不支持 HLS 播放");
     }
     return () => { if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; } };
-  }, [currentSrcIdx, sources]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentSrc]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function handleEpClick(epSort) {
+  function handleEpClick(epSort) {
     if (epSort === currentEp || loadingEp !== null) return;
-    setLoadingEp(epSort);
-    setPlayerError(null);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 25_000);
-    try {
-      const params = new URLSearchParams({ name: animeName, ep: String(epSort) });
-      if (animeNameJa && animeNameJa !== animeName) params.set("nameFallback", animeNameJa);
-      const data = await fetch(`/api/anime/find-stream?${params}`, {
-        headers: { Authorization: `Bearer ${authToken}` },
-        signal: controller.signal,
-      }).then(async (r) => {
-        if (!r.ok) { const t = await r.text().catch(() => ""); throw new Error(t || `HTTP ${r.status}`); }
-        return r.json();
-      });
-      const newSources = data.sources || [];
-      if (newSources.length === 0) {
-        setPlayerError("该集未找到可用播放源");
-      } else {
-        setSources(newSources);
-        setCurrentSrcIdx(0);
-        setCurrentEp(epSort);
-      }
-    } catch (e) {
-      setPlayerError(e.name === "AbortError" ? "搜索超时" : (e.message || "加载失败"));
-    } finally {
-      clearTimeout(timer);
-      setLoadingEp(null);
-    }
+    setCurrentEp(epSort);
   }
 
   const nextSrcIdx = currentSrcIdx + 1 < sources.length ? currentSrcIdx + 1 : null;
@@ -362,7 +371,11 @@ function AnimePlayerPage({ playerState, authToken, onBack, onChangeEp }) {
 
       {/* Video area */}
       <div className="animePlayerPageVideo">
-        {playerError ? (
+        {searchLoading ? (
+          <div className="animePlayerError">
+            <Spinner size="medium" label="正在搜索播放源…" />
+          </div>
+        ) : playerError ? (
           <div className="animePlayerError">
             <div className="animePlayerErrorMsg">{playerError}</div>
             {nextSrcIdx !== null && (
@@ -377,8 +390,8 @@ function AnimePlayerPage({ playerState, authToken, onBack, onChangeEp }) {
         )}
       </div>
 
-      {/* Source bar */}
-      {sources.length > 1 && (
+      {/* Source bar — always show all sources */}
+      {sources.length > 0 && (
         <div className="animeSourceBar">
           <span className="animeSourceBarLabel">线路：</span>
           {sources.map((s, i) => (
@@ -401,16 +414,14 @@ function AnimePlayerPage({ playerState, authToken, onBack, onChangeEp }) {
           <div className="animePlayerPageEpList">
             {episodes.map((ep) => {
               const isActive = ep.sort === currentEp;
-              const isLoading = loadingEp === ep.sort;
               return (
                 <button
                   key={ep.id}
                   type="button"
                   className={`animePlayerEpBtn${isActive ? " active" : ""}`}
-                  disabled={loadingEp !== null}
                   onClick={() => handleEpClick(ep.sort)}
                 >
-                  {isLoading ? <Spinner size="tiny" /> : `EP${ep.sort}`}
+                  {`EP${ep.sort}`}
                 </button>
               );
             })}
@@ -491,8 +502,6 @@ function DetailPanel({ subjectId, authToken, onClose, onPlay }) {
   const [episodesExpanded, setEpisodesExpanded] = useState(false);
   const [mikanQuery, setMikanQuery] = useState(null);
   const [copiedInfo, setCopiedInfo] = useState(null);
-  const [streamLoading, setStreamLoading] = useState(null); // ep number being searched
-  const [streamError, setStreamError] = useState(null);
 
   useEffect(() => {
     if (!subjectId) return;
@@ -502,8 +511,6 @@ function DetailPanel({ subjectId, authToken, onClose, onPlay }) {
     setEpisodes(null);
     setEpisodesExpanded(false);
     setMikanQuery(null);
-    setStreamError(null);
-    setStreamLoading(null);
     Promise.all([
       fetchSubjectDetail(subjectId),
       fetchEpisodes(subjectId)
@@ -516,38 +523,9 @@ function DetailPanel({ subjectId, authToken, onClose, onPlay }) {
       .finally(() => setLoading(false));
   }, [subjectId]);
 
-  async function handlePlayEpisode(ep, animeName, animeNameJa) {
-    setStreamLoading(ep);
-    setStreamError(null);
-    setMikanQuery(null);
-    setCopiedInfo(null);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 25_000);
-    try {
-      const params = new URLSearchParams({ ep: String(ep), name: animeName });
-      if (animeNameJa && animeNameJa !== animeName) params.set("nameFallback", animeNameJa);
-      const data = await fetch(`/api/anime/find-stream?${params}`, {
-        headers: { Authorization: `Bearer ${authToken}` },
-        signal: controller.signal,
-      }).then(async (r) => {
-        if (!r.ok) {
-          const t = await r.text().catch(() => "");
-          throw new Error(t || `HTTP ${r.status}`);
-        }
-        return r.json();
-      });
-      const sources = data.sources || [];
-      if (sources.length === 0) {
-        setStreamError("未找到可用播放源，请尝试蜜柑下载");
-      } else {
-        onPlay({ sources, episodes, animeName, animeNameJa, currentEp: ep });
-      }
-    } catch (e) {
-      setStreamError(e.name === "AbortError" ? "搜索超时，请稍后再试" : (e.message || "搜索失败"));
-    } finally {
-      clearTimeout(timer);
-      setStreamLoading(null);
-    }
+  // Navigate to player page immediately — player fetches sources itself
+  function handlePlayEpisode(ep, animeName, animeNameJa) {
+    onPlay({ episodes, animeName, animeNameJa, currentEp: ep });
   }
 
   function handlePickMagnet(item) {
@@ -634,13 +612,6 @@ function DetailPanel({ subjectId, authToken, onClose, onPlay }) {
         />
       )}
 
-      {streamError && (
-        <StreamSourceError
-          message={streamError}
-          onClose={() => setStreamError(null)}
-        />
-      )}
-
       {detail && !loading && !mikanQuery && (
         <div className="animeDetailBody">
           <div className="animeDetailHero">
@@ -682,12 +653,11 @@ function DetailPanel({ subjectId, authToken, onClose, onPlay }) {
           <div className="animeDetailActions">
             <Button
               appearance="primary"
-              icon={streamLoading === 1 ? <Spinner size="tiny" /> : <PlayRegular />}
+              icon={<PlayRegular />}
               className="animeWatchBtn"
-              disabled={streamLoading !== null}
               onClick={() => handlePlayEpisode(1, animeName, animeNameJa)}
             >
-              {streamLoading === 1 ? "搜索播放源…" : "开始观看"}
+              开始观看
             </Button>
             <Button
               appearance="outline"
@@ -723,7 +693,6 @@ function DetailPanel({ subjectId, authToken, onClose, onPlay }) {
                 {visibleEpisodes.map((ep) => {
                   const epName = ep.name_cn || ep.name || `第 ${ep.sort} 集`;
                   const searchKw = `${animeName} ${ep.sort}`;
-                  const isLoadingThis = streamLoading === ep.sort;
                   return (
                     <div key={ep.id} className="animeEpisodeItem">
                       <span className="animeEpNum">EP{ep.sort}</span>
@@ -733,13 +702,9 @@ function DetailPanel({ subjectId, authToken, onClose, onPlay }) {
                         type="button"
                         className="animeEpPlay"
                         title={`在线播放 第${ep.sort}集`}
-                        disabled={streamLoading !== null}
                         onClick={() => handlePlayEpisode(ep.sort, animeName, animeNameJa)}
                       >
-                        {isLoadingThis
-                          ? <Spinner size="tiny" />
-                          : <PlayRegular />
-                        }
+                        <PlayRegular />
                       </button>
                       <button
                         type="button"
