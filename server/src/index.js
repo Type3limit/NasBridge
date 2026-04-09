@@ -1180,7 +1180,9 @@ app.get("/api/anime/find-stream", requireAuth, async (req, res) => {
       const routeUrls = parseAllEpisodeUrls(detail.vod_play_url, detail.vod_play_from, ep);
       for (const { route, url } of routeUrls) {
         const playUrl = `/api/tv/stream?url=${encodeURIComponent(url)}`;
-        sources.push({ site: site.name, route, ep, url, playUrl, vodName });
+        // Detect URL type so the frontend can choose the right player
+        const type = /\.(mp4|flv|mkv)(\?|$)/i.test(url) ? "mp4" : "hls";
+        sources.push({ site: site.name, route, ep, url, playUrl, vodName, type });
       }
     } catch { /* ignore per-site errors */ } finally { clearTimeout(timer); }
   }

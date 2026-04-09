@@ -327,7 +327,15 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
     if (!video || !currentSrc?.playUrl) return;
     setPlayerError(null);
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
-    if (Hls.isSupported()) {
+
+    const isMp4 = currentSrc.type === "mp4" || /\.(mp4|flv|mkv)(\?|$)/i.test(currentSrc.url || "");
+
+    if (isMp4) {
+      // Direct video file — set src directly, no HLS.js needed
+      video.src = currentSrc.playUrl;
+      video.play().catch(() => {});
+      video.onerror = () => setPlayerError(`播放失败：${video.error?.message || "未知错误"}`);
+    } else if (Hls.isSupported()) {
       const hls = new Hls({ enableWorker: false, fragLoadingMaxRetry: 1, manifestLoadingMaxRetry: 1 });
       hlsRef.current = hls;
       hls.loadSource(currentSrc.playUrl);
