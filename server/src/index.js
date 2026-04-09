@@ -549,6 +549,8 @@ app.get("/api/tv/stream", requireAuth, async (req, res) => {
       headers: {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
         "Accept": "application/x-mpegURL, application/vnd.apple.mpegurl, video/mp2t, */*",
+        "Referer": `${parsed.protocol}//${parsed.host}/`,
+        "Origin": `${parsed.protocol}//${parsed.host}`,
       },
     });
     clearTimeout(timer);
@@ -558,11 +560,21 @@ app.get("/api/tv/stream", requireAuth, async (req, res) => {
     const contentType = (upstream.headers.get("content-type") || "").toLowerCase();
     const pathNoQuery = raw.split("?")[0];
     const isM3u8 = contentType.includes("mpegurl") || contentType.includes("x-mpegurl") ||
+                   contentType.includes("octet-stream") ||
                    /\.m3u8$/i.test(pathNoQuery);
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Cache-Control", "no-cache");
     if (isM3u8) {
       const text = await upstream.text();
+      // If the response looks like HTML (VIP player wrapper), reject it
+      if (/^\s*<!DOCTYPE|^\s*<html/i.test(text)) {
+        return res.status(422).json({ error: "not an m3u8 stream (got HTML player page)" });
+      }
+      // If it doesn't look like an m3u8 manifest, pass it through raw as octet-stream
+      if (!text.trimStart().startsWith("#EXTM3U")) {
+        res.setHeader("Content-Type", contentType || "application/octet-stream");
+        return res.send(text);
+      }
       // Build base URL for resolving relative paths in the manifest
       const pathParts = parsed.pathname.split("/");
       pathParts.pop();
@@ -577,10 +589,13 @@ app.get("/api/tv/stream", requireAuth, async (req, res) => {
       };
       const rewritten = text.split(/\r?\n/).map((line) => {
         const t = line.trim();
-        if (!t || t.startsWith("#")) return line;
-        // EXT-X-KEY URI rewrite
-        if (/^#EXT-X-KEY/i.test(t)) {
-          return line.replace(/URI="([^"]+)"/, (_, u) => `URI="${toProxy(u)}"`);
+        if (!t) return line;
+        // Rewrite URI="..." in any tag (EXT-X-KEY, EXT-X-MEDIA, EXT-X-I-FRAME-STREAM-INF etc.)
+        if (t.startsWith("#")) {
+          if (/URI="/i.test(t)) {
+            return line.replace(/URI="([^"]+)"/g, (_, u) => `URI="${toProxy(u)}"`);
+          }
+          return line;
         }
         return toProxy(t);
       }).join("\n");
@@ -641,10 +656,48 @@ app.get("/api/files", requireAuth, (req, res) => {
       columnId: meta.columnId || "",
       folderPath: meta.folderPath || "",
       mimeType: meta.mimeType || file.mimeType,
-      originalMimeType: file.mimeType
+      originalMimeType: file.mimeType,
+      aiSummary: meta.aiSummary || null,
+      subtitleCachePath: meta.subtitleCachePath || "",
+      tags: Array.isArray(meta.tags) ? meta.tags : []
     };
   });
-  return res.json({ files: enriched, directories });
+  const SUBTITLE_EXTS = new Set([".srt", ".ass", ".vtt", ".sub", ".ssa"]);
+  const filtered = enriched.filter((file) => {
+    const ext = String(file.name || "").match(/(\.[^.]+)$/)?.[1]?.toLowerCase() || "";
+    return !SUBTITLE_EXTS.has(ext);
+  });
+  return res.json({ files: filtered, directories });
+});
+
+app.get("/api/tags", requireAuth, (req, res) => {
+  const metaMap = getFileMetaMap();
+  const tagSet = new Set();
+  for (const meta of metaMap.values()) {
+    if (Array.isArray(meta.tags)) {
+      for (const tag of meta.tags) {
+        if (tag && typeof tag === "string") {
+          tagSet.add(tag.trim());
+        }
+      }
+    }
+  }
+  return res.json({ tags: [...tagSet].sort() });
+});
+
+app.post("/api/files/tags", requireAuth, (req, res) => {
+  const fileId = String(req.body?.fileId || "").trim();
+  if (!fileId) {
+    return res.status(400).json({ message: "fileId is required" });
+  }
+  const tags = req.body?.tags;
+  if (!Array.isArray(tags)) {
+    return res.status(400).json({ message: "tags must be an array" });
+  }
+  const cleanTags = tags.map((t) => String(t || "").trim()).filter(Boolean);
+  const meta = upsertFileMeta(fileId, { tags: cleanTags });
+  serverLog("files-tags-update", req.reqId, req.auth.sub, fileId, JSON.stringify(cleanTags));
+  return res.json({ ok: true, fileId, tags: cleanTags, meta });
 });
 
 app.post("/api/files/update", requireAuth, (req, res) => {
@@ -893,6 +946,27 @@ app.post("/api/client/heartbeat", requireAuth, requireRole("client"), (req, res)
   return res.json({ ok: true, client });
 });
 
+app.post("/api/client/files-meta", requireAuth, requireRole("client"), (req, res) => {
+  const fileId = String(req.body?.fileId || "").trim();
+  if (!fileId) {
+    return res.status(400).json({ message: "fileId is required" });
+  }
+  const patch = req.body?.patch;
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+    return res.status(400).json({ message: "patch must be a non-null object" });
+  }
+  const ALLOWED_META_FIELDS = ["aiSummary", "subtitleCachePath", "columnId", "folderPath", "mimeType", "tags"];
+  const sanitized = {};
+  for (const key of ALLOWED_META_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(patch, key)) {
+      sanitized[key] = patch[key];
+    }
+  }
+  const meta = upsertFileMeta(fileId, sanitized);
+  serverLog("client-files-meta", req.reqId, req.auth.sub, fileId);
+  return res.json({ ok: true, fileId, meta });
+});
+
 app.post("/api/client/filesync", requireAuth, requireRole("client"), (req, res) => {
   const files = Array.isArray(req.body.files) ? req.body.files : [];
   const directories = Array.isArray(req.body.directories) ? req.body.directories : [];
@@ -951,6 +1025,148 @@ app.post("/api/dev/upload-relay", requireAuth, upload.single("file"), (req, res)
     bytes: req.file?.size ?? 0,
     note: "Large files should use p2p mode"
   });
+});
+
+// ─── Anime CMS stream finder ───────────────────────────────────────────────────
+// GET /api/anime/find-stream?name=NAME&ep=N
+// Tries multiple 苹果CMS v10 anime sites, returns {sources:[{site,ep,url,playUrl}]}
+// Verified 苹果CMS v10 compatible sites (all expose /api.php/provide/vod/)
+const CMS_ANIME_SITES = [
+  { name: "落攻动漫", base: "https://www.fengchedonman.com" },
+  { name: "酱紫社",   base: "http://www.jzsdm1.com" },
+  { name: "七色番",   base: "https://www.7sefun.top" },
+  { name: "第一动漫", base: "https://1anime2025.me" },
+  { name: "新动漫网", base: "https://www.xdmdy.cc" },
+  { name: "咕咕番",   base: "https://www.gugu3.com" },
+  { name: "去看吧",   base: "https://11kt.net" },
+  { name: "热播之家", base: "https://www.rebozj.pro" },
+  { name: "新优酷",   base: "https://www.youknow.tv" },
+  { name: "omofun",   base: "https://enlienli.link" },
+];
+
+const CMS_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+};
+
+async function cmsSearch(base, keyword, signal) {
+  const url = `${base}/api.php/provide/vod/?ac=videolist&wd=${encodeURIComponent(keyword)}`;
+  const r = await fetch(url, { signal, headers: { ...CMS_HEADERS, "Referer": base } });
+  if (!r.ok) return null;
+  const data = await r.json();
+  return data?.list?.[0] ?? null;
+}
+
+async function cmsDetail(base, id, signal) {
+  const url = `${base}/api.php/provide/vod/?ac=detail&ids=${id}`;
+  const r = await fetch(url, { signal, headers: { ...CMS_HEADERS, "Referer": base } });
+  if (!r.ok) return null;
+  const data = await r.json();
+  return data?.list?.[0] ?? null;
+}
+
+// Returns all routes for a given episode from vod_play_url + vod_play_from
+// vod_play_url format: "EP01$url|EP02$url$$$线路2EP01$url|..."
+// vod_play_from format: "source1$$$source2$$$..."  (route names)
+function parseAllEpisodeUrls(vodPlayUrl, vodPlayFrom, epIndex) {
+  if (!vodPlayUrl) return [];
+  const results = [];
+  const urlRoutes = vodPlayUrl.split("$$$");
+  const fromRoutes = vodPlayFrom ? vodPlayFrom.split("$$$") : [];
+  urlRoutes.forEach((route, ri) => {
+    const routeName = fromRoutes[ri]?.trim() || `线路${ri + 1}`;
+    const eps = route.split("|");
+    const epEntry = eps[epIndex - 1] || (epIndex <= eps.length ? eps[epIndex - 1] : null);
+    if (!epEntry) return;
+    const parts = epEntry.split("$");
+    const url = parts[parts.length - 1]?.trim();
+    if (url && /^https?:\/\//i.test(url)) {
+      results.push({ route: routeName, url });
+    }
+  });
+  return results;
+}
+
+app.get("/api/anime/find-stream", requireAuth, async (req, res) => {
+  const name = String(req.query.name || "").trim();
+  const nameFallback = String(req.query.nameFallback || "").trim(); // alternate search name
+  const ep = Math.max(1, parseInt(req.query.ep || "1", 10) || 1);
+  if (!name) return res.status(400).json({ error: "name required" });
+
+  const sources = [];
+
+  async function querySite(site, keyword) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5_000);
+    try {
+      const hit = await cmsSearch(site.base, keyword, controller.signal);
+      if (!hit?.vod_id) return;
+      const detail = await cmsDetail(site.base, hit.vod_id, controller.signal);
+      if (!detail?.vod_play_url) return;
+      const vodName = detail.vod_name || hit.vod_name || keyword;
+      const routeUrls = parseAllEpisodeUrls(detail.vod_play_url, detail.vod_play_from, ep);
+      for (const { route, url } of routeUrls) {
+        const playUrl = `/api/tv/stream?url=${encodeURIComponent(url)}`;
+        sources.push({ site: site.name, route, ep, url, playUrl, vodName });
+      }
+    } catch { /* ignore per-site errors */ } finally { clearTimeout(timer); }
+  }
+
+  // Hard cap: respond within 8 seconds no matter what
+  const hardTimeout = new Promise((resolve) => setTimeout(resolve, 8_000));
+  const searchAll = Promise.allSettled(
+    CMS_ANIME_SITES.flatMap((site) => {
+      const tasks = [querySite(site, name)];
+      if (nameFallback && nameFallback !== name) tasks.push(querySite(site, nameFallback));
+      return tasks;
+    })
+  );
+  await Promise.race([searchAll, hardTimeout]);
+
+  return res.json({ sources, name, ep });
+});
+
+// ─── Mikan anime torrent search proxy ─────────────────────────────────────────
+// GET /api/anime/mikan?q=keyword
+// Fetches Mikan RSS and returns parsed torrent list
+app.get("/api/anime/mikan", requireAuth, async (req, res) => {
+  const keyword = String(req.query.q || "").trim();
+  if (!keyword) return res.status(400).json({ error: "q required" });
+  const url = `https://mikanime.tv/RSS/Search?searchstr=${encodeURIComponent(keyword)}&subgroupid=0`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const upstream = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "NAS-Media-Manager/1.0",
+        "Accept": "application/rss+xml, application/xml, text/xml, */*"
+      }
+    });
+    clearTimeout(timer);
+    if (!upstream.ok) {
+      return res.status(502).json({ error: `mikan ${upstream.status}` });
+    }
+    const xml = await upstream.text();
+    // Parse RSS items: title, enclosure url (magnet or torrent), size, pubDate
+    const items = [];
+    const itemRe = /<item>([\s\S]*?)<\/item>/g;
+    let m;
+    while ((m = itemRe.exec(xml)) !== null) {
+      const block = m[1];
+      const title = (/<title><!\[CDATA\[([\s\S]*?)\]\]><\/title>/.exec(block) || /<title>(.*?)<\/title>/.exec(block) || [])[1]?.trim() || "";
+      const link = (/<enclosure url="([^"]+)"/.exec(block) || /<link>(.*?)<\/link>/.exec(block) || [])[1]?.trim() || "";
+      const pubDate = (/<pubDate>(.*?)<\/pubDate>/.exec(block) || [])[1]?.trim() || "";
+      const size = (/<contentLength>(.*?)<\/contentLength>/.exec(block) || [])[1]?.trim() || "";
+      const magnet = (/<magnetUrl><!\[CDATA\[(.*?)\]\]><\/magnetUrl>/.exec(block) || /<magnetUrl>(.*?)<\/magnetUrl>/.exec(block) || [])[1]?.trim() || link;
+      if (title) {
+        items.push({ title, link, magnet, pubDate, size });
+      }
+    }
+    return res.json({ items, keyword });
+  } catch (err) {
+    clearTimeout(timer);
+    return res.status(502).json({ error: "fetch failed", detail: err.message });
+  }
 });
 
 const __filename = fileURLToPath(import.meta.url);
