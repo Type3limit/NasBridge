@@ -390,44 +390,47 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
         )}
       </div>
 
-      {/* Source bar — always show all sources */}
-      {sources.length > 0 && (
-        <div className="animeSourceBar">
-          <span className="animeSourceBarLabel">线路：</span>
-          {sources.map((s, i) => (
-            <button
-              key={i}
-              type="button"
-              className={`animeSourceBtn${i === currentSrcIdx ? " active" : ""}`}
-              onClick={() => { setCurrentSrcIdx(i); setPlayerError(null); }}
-            >
-              {s.site} {s.route}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Episode list */}
-      {episodes && episodes.length > 0 && (
-        <div className="animePlayerPageEps">
-          <div className="animePlayerPageEpsTitle">剧集</div>
-          <div className="animePlayerPageEpList">
-            {episodes.map((ep) => {
-              const isActive = ep.sort === currentEp;
-              return (
-                <button
-                  key={ep.id}
-                  type="button"
-                  className={`animePlayerEpBtn${isActive ? " active" : ""}`}
-                  onClick={() => handleEpClick(ep.sort)}
-                >
-                  {`EP${ep.sort}`}
-                </button>
-              );
-            })}
+      {/* Source bar + Episodes — scrollable section below the fixed video */}
+      <div className="animePlayerPageScroll">
+        {/* Source bar */}
+        {sources.length > 0 && (
+          <div className="animeSourceBar">
+            <span className="animeSourceBarLabel">线路：</span>
+            {sources.map((s, i) => (
+              <button
+                key={i}
+                type="button"
+                className={`animeSourceBtn${i === currentSrcIdx ? " active" : ""}`}
+                onClick={() => { setCurrentSrcIdx(i); setPlayerError(null); }}
+              >
+                {s.site} {s.route}
+              </button>
+            ))}
           </div>
-        </div>
-      )}
+        )}
+
+        {/* Episode list */}
+        {episodes && episodes.length > 0 && (
+          <div className="animePlayerPageEps">
+            <div className="animePlayerPageEpsTitle">剧集</div>
+            <div className="animePlayerPageEpList">
+              {episodes.map((ep) => {
+                const isActive = ep.sort === currentEp;
+                return (
+                  <button
+                    key={ep.id}
+                    type="button"
+                    className={`animePlayerEpBtn${isActive ? " active" : ""}`}
+                    onClick={() => handleEpClick(ep.sort)}
+                  >
+                    {`EP${ep.sort}`}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

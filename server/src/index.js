@@ -1074,12 +1074,13 @@ const CMS_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
 };
 
-async function cmsSearch(base, keyword, signal) {
+// Fetch all search results (not just first)
+async function cmsSearchAll(base, keyword, signal) {
   const url = `${base}/api.php/provide/vod/?ac=videolist&wd=${encodeURIComponent(keyword)}`;
   const r = await fetch(url, { signal, headers: { ...CMS_HEADERS, "Referer": base } });
-  if (!r.ok) return null;
+  if (!r.ok) return [];
   const data = await r.json();
-  return data?.list?.[0] ?? null;
+  return Array.isArray(data?.list) ? data.list : [];
 }
 
 async function cmsDetail(base, id, signal) {
@@ -1088,6 +1089,48 @@ async function cmsDetail(base, id, signal) {
   if (!r.ok) return null;
   const data = await r.json();
   return data?.list?.[0] ?? null;
+}
+
+// Strip trailing season markers so "葬送的芙莉蓮 第二季" → "葬送的芙莉蓮"
+function stripSeason(title) {
+  return title
+    .replace(/\s*第[一二三四五六七八九十百\d]+[季期]\s*$/, "")
+    .replace(/\s*Season\s*\d+\s*$/i, "")
+    .replace(/\s*第\d+期\s*$/, "")
+    .trim();
+}
+
+// Normalize for fuzzy comparison: lowercase, remove punctuation/spaces
+function normTitle(s) {
+  return String(s || "").toLowerCase()
+    .replace(/[^\p{L}\p{N}]/gu, "");
+}
+
+// Score how well a CMS title matches the expected title (0-100)
+function titleScore(cmsTitle, expected) {
+  const a = normTitle(cmsTitle);
+  const b = normTitle(expected);
+  if (!a || !b) return 0;
+  if (a === b) return 100;
+  if (a.includes(b) || b.includes(a)) return 80;
+  // character overlap ratio
+  const setA = new Set([...a]);
+  const common = [...b].filter((c) => setA.has(c)).length;
+  return Math.floor((common / b.length) * 60);
+}
+
+// Pick the best matching result from a list of CMS hits
+function pickBestHit(hits, fullName) {
+  if (!hits.length) return null;
+  const stripped = stripSeason(fullName);
+  let best = null, bestScore = -1;
+  for (const h of hits) {
+    // Score against full name and stripped name, take the better of the two
+    const s = Math.max(titleScore(h.vod_name, fullName), titleScore(h.vod_name, stripped));
+    if (s > bestScore) { bestScore = s; best = h; }
+  }
+  // Require at least some similarity (avoid totally unrelated results)
+  return bestScore >= 40 ? best : null;
 }
 
 // Returns all routes for a given episode from vod_play_url + vod_play_from
@@ -1120,15 +1163,20 @@ app.get("/api/anime/find-stream", requireAuth, async (req, res) => {
 
   const sources = [];
 
-  async function querySite(site, keyword) {
+  async function querySite(site, fullName) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 5_000);
     try {
-      const hit = await cmsSearch(site.base, keyword, controller.signal);
+      // Search using the base name (without season) to maximize CMS matches
+      const searchKw = stripSeason(fullName) || fullName;
+      const hits = await cmsSearchAll(site.base, searchKw, controller.signal);
+      if (!hits.length) return;
+      // Also try the full name if stripped is different and results were empty
+      const hit = pickBestHit(hits, fullName);
       if (!hit?.vod_id) return;
       const detail = await cmsDetail(site.base, hit.vod_id, controller.signal);
       if (!detail?.vod_play_url) return;
-      const vodName = detail.vod_name || hit.vod_name || keyword;
+      const vodName = detail.vod_name || hit.vod_name || fullName;
       const routeUrls = parseAllEpisodeUrls(detail.vod_play_url, detail.vod_play_from, ep);
       for (const { route, url } of routeUrls) {
         const playUrl = `/api/tv/stream?url=${encodeURIComponent(url)}`;

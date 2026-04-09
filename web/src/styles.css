@@ -265,7 +265,6 @@ textarea {
 .summaryPill::before,
 .uploadPlanCard::before,
 .selectedFilesList::before,
-.bulkToolbar::before,
 .filterPanelShell::before {
   content: "";
   position: absolute;
@@ -289,7 +288,6 @@ textarea {
 .summaryPill,
 .uploadPlanCard,
 .selectedFilesList,
-.bulkToolbar,
 .filterPanelShell {
   position: relative;
   overflow: hidden;
@@ -2981,25 +2979,25 @@ textarea {
 
 .chatDynamicCardCover {
   display: block;
-  width: min(100%, 420px);
+  width: min(100%, 220px);
   max-width: 100%;
   height: auto;
-  max-height: min(56vh, 460px);
+  max-height: min(30vh, 240px);
   align-self: center;
   object-fit: contain;
-  border-radius: 12px;
+  border-radius: 10px;
   border: 1px solid rgba(148, 163, 184, 0.12);
   background: rgba(241, 245, 249, 0.88);
 }
 
 .chatDynamicCardCover.fit-contain {
-  width: min(100%, 420px);
+  width: min(100%, 240px);
   max-width: 100%;
-  max-height: min(56vh, 460px);
+  max-height: min(30vh, 240px);
   height: auto;
   box-sizing: border-box;
   object-fit: contain;
-  padding: 20px;
+  padding: 12px;
   border-radius: 0;
   image-rendering: pixelated;
   background: #ffffff;
@@ -3107,6 +3105,277 @@ textarea {
   background: rgba(219, 234, 254, 0.92);
   border-color: rgba(59, 130, 246, 0.24);
 }
+
+/* ── AI 星图（宇宙贴近视角）──────────────────────────────────────── */
+.aiStarMapContainer {
+  margin-top: 8px;
+  background: #020408;
+  border-radius: 10px;
+  overflow: hidden;
+  will-change: transform;
+  contain: layout style;
+  position: relative;
+  height: 240px;
+  display: flex;
+  flex-direction: column;
+}
+
+.aiStarMapCanvasWrap {
+  flex: 1 1 0;
+  min-height: 0;
+  position: relative;
+}
+
+.aiStarMapCanvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 10px 10px 0 0;
+}
+
+/* HUD 角标叠层 */
+.hudOverlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+.hudCorner {
+  position: absolute;
+  font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
+  font-size: 13px;
+  color: rgba(147, 197, 253, 0.22);
+  line-height: 1;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.hudCorner.hudTL { top: 6px;  left: 8px; }
+.hudCorner.hudTR { top: 6px;  right: 8px; }
+.hudCorner.hudBL { bottom: 4px; left: 8px; }
+.hudCorner.hudBR { bottom: 4px; right: 8px; }
+
+/* ── 扫描线 ── */
+@keyframes hudScanAnim {
+  0%   { transform: translateY(-8px); opacity: 0; }
+  5%   { opacity: 0.7; }
+  90%  { opacity: 0.3; }
+  100% { transform: translateY(260px); opacity: 0; }
+}
+.hudScanLine {
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent 5%,
+    rgba(96, 165, 250, 0.18) 20%,
+    rgba(147, 197, 253, 0.45) 50%,
+    rgba(96, 165, 250, 0.18) 80%,
+    transparent 95%
+  );
+  animation: hudScanAnim 5s linear infinite;
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* ── LIVE 指示器 (左上) ── */
+.hudTagTL {
+  position: absolute;
+  top: 18px; left: 16px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+@keyframes hudBlink {
+  0%, 100% { opacity: 1; box-shadow: 0 0 6px rgba(74,222,128,0.9); }
+  50%       { opacity: 0.28; box-shadow: none; }
+}
+.hudTagDot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 6px rgba(74,222,128,0.9);
+  animation: hudBlink 1.9s ease-in-out infinite;
+  flex-shrink: 0;
+}
+.hudTagText {
+  font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
+  font-size: 9px;
+  color: rgba(74, 222, 128, 0.65);
+  letter-spacing: 2px;
+}
+
+/* ── 信号强度柱 (右上) ── */
+.hudSignalGroup {
+  position: absolute;
+  top: 15px; right: 16px;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+}
+@keyframes hudSigPulse {
+  0%,100% { opacity: 0.6; }
+  50%      { opacity: 0.3; }
+}
+.hudSignalBar {
+  width: 3px;
+  background: rgba(147, 197, 253, 0.55);
+  border-radius: 1px;
+}
+.hudSB1 { height: 4px; }
+.hudSB2 { height: 7px; }
+.hudSB3 { height: 10px; animation: hudSigPulse 2.2s ease-in-out infinite; }
+.hudSB4 { height: 13px; opacity: 0.28; animation: hudSigPulse 3.0s ease-in-out infinite 0.4s; }
+
+/* ── 中心瞄准线 ── */
+.hudReticle {
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 14px; height: 14px;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(147, 197, 253, 0.14);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.hudReticle::before {
+  content: '';
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 1px; height: 8px;
+  background: rgba(147, 197, 253, 0.12);
+  transform: translate(-50%, -50%);
+}
+.hudReticle::after {
+  content: '';
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 8px; height: 1px;
+  background: rgba(147, 197, 253, 0.12);
+  transform: translate(-50%, -50%);
+}
+
+/* ── 遥测竖条 ── */
+@keyframes hudTelePulse {
+  0%,100% { opacity: 0.5; }
+  50%      { opacity: 1.0; }
+}
+.hudTelemetryBar {
+  position: absolute;
+  right: 10px; top: 36px; bottom: 14px;
+  width: 2px;
+  background: linear-gradient(
+    to bottom,
+    rgba(147,197,253,0)    0%,
+    rgba(147,197,253,0.20) 25%,
+    rgba(96,165,250,0.35)  50%,
+    rgba(147,197,253,0.20) 75%,
+    rgba(147,197,253,0)    100%
+  );
+  animation: hudTelePulse 3.5s ease-in-out infinite;
+}
+.hudTelemetryBarL {
+  position: absolute;
+  left: 10px; top: 36px; bottom: 14px;
+  width: 2px;
+  background: linear-gradient(
+    to bottom,
+    rgba(147,197,253,0)    0%,
+    rgba(147,197,253,0.15) 30%,
+    rgba(96,165,250,0.28)  55%,
+    rgba(147,197,253,0.15) 80%,
+    rgba(147,197,253,0)    100%
+  );
+  animation: hudTelePulse 4.2s ease-in-out infinite 0.7s;
+}
+
+/* ── 底部中心节点标 ── */
+.hudBottomCenter {
+  position: absolute;
+  bottom: 10px; left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+.hudBottomLabel {
+  font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
+  font-size: 9px;
+  color: rgba(147, 197, 253, 0.28);
+  letter-spacing: 2.5px;
+}
+
+/* 精细扫描线底纹 + 科技网格 */
+.aiStarMapCanvasWrap::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-image:
+    linear-gradient(rgba(147,197,253,0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(147,197,253,0.035) 1px, transparent 1px);
+  background-size: 32px 32px;
+  pointer-events: none;
+  z-index: 0;
+  border-radius: 10px 10px 0 0;
+}
+/* 扫描线效果 */
+.aiStarMapCanvasWrap::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(147, 197, 253, 0.012) 2px,
+    rgba(147, 197, 253, 0.012) 4px
+  );
+  pointer-events: none;
+  z-index: 2;
+  border-radius: 10px 10px 0 0;
+}
+
+/* HUD 底部状态行 */
+.cosmicStatusRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 12px;
+  background: rgba(3, 5, 8, 0.92);
+  border-top: 1px solid rgba(147, 197, 253, 0.08);
+  position: relative;
+  z-index: 3;
+}
+.cosmicStatusLabel {
+  color: #93c5fd;
+  font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.8px;
+  text-shadow: 0 0 8px rgba(96, 165, 250, 0.5);
+}
+.cosmicElapsed {
+  color: rgba(160, 185, 220, 0.45);
+  font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+}
+.cosmicDetailRow {
+  padding: 3px 12px 5px;
+  background: rgba(3, 5, 8, 0.88);
+  color: rgba(147, 197, 253, 0.55);
+  font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  position: relative;
+  z-index: 3;
+}
+.cosmicDetailHint {
+  color: rgba(147, 197, 253, 0.35);
+  font-size: 9px;
+  padding-top: 0;
+}
+/* ── /AI 星图 ────────────────────────────────────────────────────── */
 
 .chatAttachmentGrid {
   display: grid;
@@ -3936,6 +4205,134 @@ button.chatAttachmentTile:disabled {
   border-radius: 14px;
   background: rgba(241, 245, 249, 0.88);
   color: var(--text-soft);
+}
+
+/* ── File Picker Popup ── */
+.chatFilePickerPopup {
+  position: fixed;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  width: min(380px, calc(100vw - 48px));
+  max-width: calc(100vw - 24px);
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(255, 255, 255, 0.98));
+  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.14);
+  overflow: hidden;
+}
+
+.chatFilePickerHeader {
+  padding: 10px 10px 0;
+}
+
+.chatFilePickerSearch {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 10px;
+  background: rgba(241, 245, 249, 0.7);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+  color: var(--text);
+  transition: border-color 0.15s;
+}
+
+.chatFilePickerSearch:focus {
+  border-color: var(--brand);
+}
+
+.chatFilePickerList {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chatFilePickerItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.12s;
+  text-align: left;
+  width: 100%;
+  font: inherit;
+  color: var(--text);
+}
+
+.chatFilePickerItem:hover {
+  background: rgba(241, 245, 249, 0.88);
+}
+
+.chatFilePickerItemIcon {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: rgba(148, 163, 184, 0.1);
+  color: var(--text-soft);
+  font-size: 16px;
+}
+
+.chatFilePickerItemMeta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.chatFilePickerItemName {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+}
+
+.chatFilePickerItemMeta > span:last-child {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+.chatFilePickerEmpty {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--text-faint);
+}
+
+/* ── File-ref queued assets ── */
+.chatQueuedVisual.fileRef {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(241, 245, 249, 0.92), rgba(226, 232, 240, 0.72));
+}
+
+.chatQueuedRefIcon {
+  font-size: 28px;
+  color: var(--text-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chatQueuedStatusPill.ready {
+  color: var(--brand);
+  background: rgba(15, 118, 110, 0.1);
 }
 
 .chatDropOverlay {
@@ -4965,31 +5362,187 @@ button.chatAttachmentTile:disabled {
 }
 
 .bulkToolbar {
-  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  flex-wrap: wrap;
-  padding: 16px 18px;
-  border-radius: 20px;
-  border: 1px solid rgba(96, 165, 250, 0.24);
-  background:
-    linear-gradient(180deg, rgba(239, 246, 255, 0.88), rgba(255, 255, 255, 0.98)),
-    radial-gradient(circle at top right, rgba(34, 197, 94, 0.1), transparent 32%);
-  box-shadow: 0 16px 28px rgba(37, 99, 235, 0.08);
+  gap: 10px;
+  flex-wrap: nowrap;
+  padding: 5px 22px;
 }
 
 .bulkToolbarInfo {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.bulkCountBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent, #0ea5e9);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .bulkToolbarActions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.bulkActionPill {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(248, 250, 252, 0.95);
+  color: var(--text-soft, #475569);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.bulkActionPill:hover {
+  background: rgba(226, 232, 240, 0.95);
+  border-color: rgba(148, 163, 184, 0.38);
+  color: var(--text, #0f172a);
+}
+
+.bulkActionPill.danger {
+  background: rgba(254, 242, 242, 0.95);
+  border-color: rgba(220, 38, 38, 0.22);
+  color: #dc2626;
+}
+
+.bulkActionPill.danger:hover {
+  background: rgba(254, 226, 226, 0.98);
+  border-color: rgba(220, 38, 38, 0.4);
+}
+
+/* ─── Tag Filter Bar (always-visible category pills) ─────────── */
+.tagFilterBar {
+  display: flex;
+  align-items: center;
   gap: 8px;
+  padding: 6px 18px;
+  flex-shrink: 0;
+}
+
+.tagFilterSearch {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.tagFilterInput {
+  width: 130px;
+  padding: 5px 28px 5px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
+  background: rgba(248, 250, 252, 0.95);
+  color: var(--text, #0f172a);
+  font-size: 12.5px;
+  line-height: 1.5;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.tagFilterInput:focus {
+  border-color: var(--accent, #0ea5e9);
+  box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.15);
+}
+
+.tagFilterInput::placeholder {
+  color: var(--text-muted, #94a3b8);
+}
+
+.tagFilterClear {
+  position: absolute;
+  right: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 10px;
+  color: var(--text-muted, #94a3b8);
+  line-height: 1;
+}
+
+.tagFilterClear:hover {
+  color: var(--text, #0f172a);
+}
+
+.tagFilterPills {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  overflow-x: auto;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 4px 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.3) transparent;
+}
+
+.tagFilterPills::-webkit-scrollbar {
+  height: 3px;
+}
+
+.tagFilterPills::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 2px;
+}
+
+.tagFilterPills::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tagFilterBarPill {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 3px 11px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(248, 250, 252, 0.95);
+  color: var(--text-soft, #475569);
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  white-space: nowrap;
+  line-height: 1.6;
+}
+
+.tagFilterBarPill:hover {
+  background: rgba(226, 232, 240, 0.95);
+  border-color: rgba(148, 163, 184, 0.38);
+  color: var(--text, #0f172a);
+}
+
+.tagFilterBarPill.active {
+  background: var(--accent, #0ea5e9);
+  border-color: var(--accent, #0ea5e9);
+  color: #fff;
+  font-weight: 600;
 }
 
 .uploadList,
@@ -5149,45 +5702,50 @@ button.chatAttachmentTile:disabled {
   position: absolute;
   top: 12px;
   left: 12px;
-  width: 42px;
-  height: 42px;
-  border: 1px solid rgba(255, 255, 255, 0.3);
+  width: 36px;
+  height: 36px;
+  border: none;
   border-radius: 14px;
-  background: rgba(15, 23, 42, 0.54);
+  background: transparent;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   z-index: 2;
-  box-shadow: 0 16px 28px rgba(15, 23, 42, 0.2);
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
-  transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: none;
+  transition: transform 0.15s ease;
 }
 
 .selectToggle:hover {
-  transform: translateY(-1px) scale(1.03);
-  background: rgba(15, 23, 42, 0.68);
-  border-color: rgba(255, 255, 255, 0.4);
+  transform: translateY(-1px) scale(1.06);
+  background: transparent;
 }
 
 .selectToggle.active {
-  border-color: rgba(125, 211, 252, 0.62);
-  background: linear-gradient(145deg, rgba(14, 165, 233, 0.9), rgba(37, 99, 235, 0.88));
-  box-shadow: 0 18px 34px rgba(37, 99, 235, 0.28);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
 }
 
 .selectToggleFrame {
   position: relative;
   z-index: 1;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   border-radius: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.08);
+  border: 1.5px solid rgba(255, 255, 255, 0.5);
+  background: rgba(15, 23, 42, 0.52);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.selectToggle.active .selectToggleFrame {
+  background: linear-gradient(145deg, rgba(14, 165, 233, 0.9), rgba(37, 99, 235, 0.88));
+  border-color: rgba(125, 211, 252, 0.7);
 }
 
 .selectToggleMark {
@@ -5204,16 +5762,11 @@ button.chatAttachmentTile:disabled {
 }
 
 .selectToggleGlow {
-  position: absolute;
-  inset: -18%;
-  border-radius: 18px;
-  background: radial-gradient(circle, rgba(125, 211, 252, 0.26), transparent 68%);
-  opacity: 0;
-  transition: opacity 0.15s ease;
+  display: none;
 }
 
 .selectToggle.active .selectToggleGlow {
-  opacity: 1;
+  display: none;
 }
 
 .fileName,
@@ -5281,6 +5834,17 @@ button.chatAttachmentTile:disabled {
 
 .actionChip.danger {
   color: #dc2626;
+}
+
+.actionChip.pending {
+  opacity: 0.6;
+  cursor: wait;
+  animation: chipPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes chipPulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 0.35; }
 }
 
 .actionChip:disabled {
@@ -6575,6 +7139,7 @@ button.chatAttachmentTile:disabled {
   width: 36px;
   height: 36px;
   border-radius: 12px;
+  position: relative;
 }
 
 .previewToolbarButton.active {
@@ -6595,6 +7160,96 @@ button.chatAttachmentTile:disabled {
   box-shadow: 0 24px 48px rgba(15, 23, 42, 0.14);
   z-index: 5;
 }
+
+/* ─── Toolbar popup panels (tags, AI summary) ───────────────── */
+.previewTagsPopup,
+.previewSummaryPopup {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  border-radius: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 24px 48px rgba(15, 23, 42, 0.14);
+  z-index: 5;
+  padding: 14px 16px;
+}
+
+.previewTagsPopup {
+  width: min(360px, 80vw);
+}
+
+.previewSummaryPopup {
+  width: min(460px, 88vw);
+  max-height: min(560px, 72vh);
+  overflow-y: auto;
+}
+
+.popupPanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.popupPanelTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text, #0f172a);
+  display: flex;
+  align-items: center;
+}
+
+.popupActionLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent, #2563eb);
+  background: none;
+  border: none;
+  padding: 4px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.12s;
+  white-space: nowrap;
+}
+
+.popupActionLink:hover:not(:disabled) {
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.popupActionLink:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Badge on toolbar button showing data count */
+.toolbarBadge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  background: var(--accent, #2563eb);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 8px;
+  line-height: 14px;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* Subtle tint when toolbar button has data */
+.previewToolbarButton.has-data {
+  color: var(--accent, #2563eb);
+}
+
+
 
 .playerSurface {
   min-height: 0;
@@ -7566,6 +8221,907 @@ button.chatAttachmentTile:disabled {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+}
+
+/* ─── 番剧页 ────────────────────────────────────────────────── */
+.animePage {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+.animeMain {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.animePageTabBar {
+  display: flex;
+  gap: 4px;
+  padding: 16px 20px 0;
+  border-bottom: 1.5px solid var(--stroke);
+  flex-shrink: 0;
+}
+
+.animePageTab {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-faint);
+  border-bottom: 2.5px solid transparent;
+  margin-bottom: -1.5px;
+  border-radius: 8px 8px 0 0;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.animePageTab:hover {
+  color: var(--text);
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.animePageTab.active {
+  color: var(--brand);
+  border-bottom-color: var(--brand);
+  background: none;
+}
+
+.animeContent {
+  flex: 1 1 0;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+/* ─── Schedule ── */
+.animeScheduleView {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.animeDayBar {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.animeDayBtn {
+  background: var(--surface);
+  border: 1.5px solid var(--stroke);
+  border-radius: var(--radius-sm);
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--text-soft);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+}
+
+.animeDayBtn:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+.animeDayBtn.active {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+
+.animeDayBtn.today::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+  flex-shrink: 0;
+}
+
+.animeDayBtn.active.today::before {
+  background: #fff;
+}
+
+.animeDayTodayDot {
+  display: none;
+}
+
+.animeDayCount {
+  font-size: 11px;
+  opacity: 0.7;
+  font-weight: 500;
+}
+
+/* ─── Anime Grid ── */
+.animeGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 14px;
+}
+
+.animeCard {
+  background: var(--surface);
+  border: 1.5px solid var(--stroke);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  cursor: pointer;
+  text-align: left;
+  padding: 0;
+  transition: box-shadow 0.15s, border-color 0.15s, transform 0.15s;
+  display: flex;
+  flex-direction: column;
+}
+
+.animeCard:hover {
+  box-shadow: var(--shadow-md);
+  border-color: var(--brand);
+  transform: translateY(-2px);
+}
+
+.animeCardPoster {
+  position: relative;
+  aspect-ratio: 3/4;
+  background: var(--page-bg);
+  overflow: hidden;
+}
+
+.animeCardImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.animeCardImgPlaceholder {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, #e2e8f0, #cbd5e1);
+}
+
+.animeCardScore {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  backdrop-filter: blur(4px);
+}
+
+.animeCardInfo {
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.animeCardTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.animeCardMeta {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* ─── Search View ── */
+.animeSearchView {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.animeSearchBar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  max-width: 560px;
+}
+
+.animeSearchInput {
+  flex: 1;
+}
+
+.animeSearchMeta {
+  font-size: 12px;
+  color: var(--text-faint);
+  padding: 2px 0;
+}
+
+.animePageNav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: center;
+  padding: 16px 0;
+}
+
+.animePageNavLabel {
+  font-size: 13px;
+  color: var(--text-soft);
+  min-width: 60px;
+  text-align: center;
+}
+
+/* ─── Detail Panel ── */
+.animePage.hasDetail .animeMain {
+  border-right: 1.5px solid var(--stroke);
+}
+
+.animeDetailPanel {
+  width: 380px;
+  min-width: 320px;
+  max-width: 420px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background: var(--surface-strong);
+}
+
+.animeDetailHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1.5px solid var(--stroke);
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  background: var(--surface-strong);
+  z-index: 2;
+}
+
+.animeDetailClose {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  padding: 4px;
+  border-radius: 6px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.animeDetailClose:hover {
+  color: var(--text);
+  background: rgba(148, 163, 184, 0.15);
+}
+
+.animeDetailBgmLink {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--brand);
+  text-decoration: none;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1.5px solid var(--brand);
+  transition: background 0.15s;
+}
+
+.animeDetailBgmLink:hover {
+  background: rgba(15, 118, 110, 0.08);
+}
+
+.animeDetailBody {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.animeDetailHero {
+  display: flex;
+  gap: 14px;
+}
+
+.animeDetailPoster {
+  width: 100px;
+  min-width: 100px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  aspect-ratio: 3/4;
+  box-shadow: var(--shadow-md);
+}
+
+.animeDetailMeta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.animeDetailName {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.animeDetailNameJa {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.animeDetailStats {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.animeDetailScore {
+  font-size: 16px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.animeDetailRank {
+  font-size: 12px;
+  color: var(--text-faint);
+  font-weight: 600;
+  background: var(--page-bg);
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+
+.animeDetailInfoRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.animeDetailInfoLabel {
+  color: var(--text-faint);
+  font-weight: 600;
+  min-width: 28px;
+}
+
+.animeDetailTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.animeDetailSection {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.animeDetailSectionTitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.animeDetailSummary {
+  font-size: 13px;
+  color: var(--text-soft);
+  line-height: 1.7;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.animeEpisodeList {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border: 1.5px solid var(--stroke);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.animeEpisodeItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  font-size: 13px;
+  background: var(--surface);
+  transition: background 0.12s;
+}
+
+.animeEpisodeItem:hover {
+  background: var(--surface-muted);
+}
+
+.animeEpNum {
+  font-weight: 700;
+  color: var(--brand);
+  min-width: 36px;
+  font-size: 12px;
+}
+
+.animeEpName {
+  flex: 1;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.animeEpDate {
+  color: var(--text-faint);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.animeEpisodesToggle {
+  background: none;
+  border: 1.5px solid var(--stroke);
+  border-radius: var(--radius-sm);
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-soft);
+  font-weight: 600;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.animeEpisodesToggle:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+.animeToggleIconUp {
+  transform: rotate(90deg);
+}
+
+/* ─── Download button ── */
+.animeDownloadBtn {
+  width: 100%;
+}
+
+.animeDetailHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Per-episode download icon */
+.animeEpDownload {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-faint);
+  padding: 2px 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+  flex-shrink: 0;
+  transition: color 0.12s, background 0.12s;
+}
+
+.animeEpDownload:hover {
+  color: var(--brand);
+  background: rgba(15, 118, 110, 0.1);
+}
+
+/* Per-episode play button */
+.animeEpPlay {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--accent);
+  padding: 2px 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+  flex-shrink: 0;
+  transition: color 0.12s, background 0.12s;
+}
+
+.animeEpPlay:hover {
+  background: rgba(37, 99, 235, 0.1);
+}
+
+.animeEpPlay:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Source switcher bar below player */
+.animeSourceBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px;
+  background: #1a1a1a;
+  border-top: 1px solid #333;
+}
+
+.animeSourceBarLabel {
+  font-size: 11px;
+  color: #888;
+  white-space: nowrap;
+  margin-right: 4px;
+}
+
+.animeSourceBtn {
+  background: #2a2a2a;
+  border: 1px solid #444;
+  color: #ccc;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.animeSourceBtn:hover {
+  background: #3a3a3a;
+  color: #fff;
+  border-color: #666;
+}
+
+.animeSourceBtn.active {
+  background: var(--brand, #2563eb);
+  color: #fff;
+  border-color: var(--brand, #2563eb);
+}
+/* ─── Full-screen player modal ── */
+/* ─── Full-page player ── */
+.animePlayerPage {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.animePlayerPageHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--stroke);
+  flex-shrink: 0;
+}
+
+.animePlayerPageBack {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-soft);
+  font-size: 13px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: background 0.12s, color 0.12s;
+  flex-shrink: 0;
+}
+
+.animePlayerPageBack:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.animePlayerPageTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.animePlayerPageVideo {
+  width: 100%;
+  background: #000;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.animePlayerPageVideoEl {
+  width: 100%;
+  max-height: 58vh;
+  aspect-ratio: 16/9;
+  display: block;
+  background: #000;
+}
+
+/* Source bar + episodes scroll freely below the fixed video */
+.animePlayerPageScroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.animePlayerPageEps {
+  padding: 14px 16px;
+}
+
+.animePlayerPageEpsTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-soft);
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.animePlayerPageEpList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.animePlayerEpBtn {
+  background: var(--surface-muted);
+  border: 1px solid var(--stroke);
+  color: var(--text-soft);
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  min-width: 54px;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.animePlayerEpBtn:hover {
+  background: var(--hover);
+  color: var(--text);
+  border-color: var(--brand);
+}
+
+.animePlayerEpBtn.active {
+  background: var(--brand);
+  color: #fff;
+  border-color: var(--brand);
+  font-weight: 600;
+}
+
+.animePlayerEpBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.animePlayerError {
+  width: 100%;
+  aspect-ratio: 16/9;
+  background: #0d0d0d;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+}
+
+.animePlayerErrorMsg {
+  color: #f87171;
+  font-size: 13px;
+  text-align: center;
+  line-height: 1.5;
+}
+
+/* Action buttons row */
+.animeDetailActions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.animeWatchBtn { flex: 1; min-width: 120px; justify-content: center; }
+.animeDownloadBtn { flex: 1; min-width: 120px; justify-content: center; }
+
+/* ─── Mikan Picker ── */
+.mikanPicker {
+  border-bottom: 1.5px solid var(--stroke);
+  background: var(--surface-muted);
+  display: flex;
+  flex-direction: column;
+  max-height: 420px;
+  overflow: hidden;
+}
+
+.mikanPickerHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1.5px solid var(--stroke);
+  flex-shrink: 0;
+}
+
+.mikanPickerTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mikanPickerList {
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.mikanPickerItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text-soft);
+  border-bottom: 1px solid var(--stroke);
+  transition: background 0.1s;
+}
+
+.mikanPickerItem:hover {
+  background: rgba(15, 118, 110, 0.07);
+  color: var(--brand);
+}
+
+.mikanPickerIcon {
+  color: var(--brand);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.mikanPickerName {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.mikanPickerDate {
+  color: var(--text-faint);
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+/* ─── Copied banner ── */
+.mikanCopiedBanner {
+  background: #f0fdf4;
+  border-bottom: 1.5px solid #86efac;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.mikanCopiedTitle {
+  font-size: 12px;
+  color: #15803d;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mikanCopiedActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mikanCopiedBtn {
+  background: #16a34a;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.mikanCopiedBtn:hover {
+  background: #15803d;
+}
+
+.mikanCopiedBtn:not(.primary) {
+  background: transparent;
+  color: #15803d;
+  border: 1px solid #86efac;
+}
+
+.mikanCopiedBtn:not(.primary):hover {
+  background: #dcfce7;
+}
+
+/* ─── Shared helpers ── */
+.animePageCenter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 16px;
+  gap: 8px;
+  color: var(--text-faint);
+  font-size: 14px;
+  text-align: center;
+}
+
+.animePageError {
+  color: #dc2626;
+}
+
+.animePageEmpty {
+  color: var(--text-faint);
+}
+
+/* Responsive: collapse detail panel below 900px */
+@media (max-width: 900px) {
+  .animePage {
+    position: relative;
+  }
+  .animeDetailPanel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(100vw, 420px);
+    max-width: 100vw;
+    z-index: 100;
+    box-shadow: var(--shadow-lg);
+  }
 }
 
 /* ─── TV 直播 ─────────────────────────────────────────────── */
@@ -9908,6 +11464,11 @@ button.chatAttachmentTile:disabled {
     position: sticky;
     bottom: 0;
     z-index: 5;
+    background: rgba(255, 255, 255, 0.96);
+    border-top: 1px solid rgba(148, 163, 184, 0.18);
+    padding: 8px 14px;
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
   }
 
   /* 概览指标网格两列 */
@@ -10314,8 +11875,268 @@ button.chatAttachmentTile:disabled {
   background: var(--chip-bg, rgba(148, 163, 184, 0.18));
 }
 
-/* ══════════════════════════════════════════════════════════════
-   全屏覆写（必须置于文件末尾，覆盖所有 @media 中的 !important 规则）
+/* ─── AI Summary Panel ──────────────────────────────────────── */
+.aiSummaryPanel {
+  border-top: 1px solid var(--stroke, rgba(148, 163, 184, 0.15));
+  padding-top: 12px;
+}
+
+.aiSummaryHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.aiSummaryContent {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text, #0f172a);
+}
+
+.aiSummaryContent p { margin: 0 0 8px; }
+.aiSummaryContent ul, .aiSummaryContent ol { margin: 0 0 8px; padding-left: 20px; }
+.aiSummaryContent h1, .aiSummaryContent h2, .aiSummaryContent h3 { font-size: 14px; margin: 8px 0 4px; }
+
+.aiSummaryEmpty {
+  color: var(--text-2, #64748b);
+  font-size: 13px;
+}
+
+/* ─── AI Summary Viewer Modal ───────────────────────────────── */
+.aiSummaryViewModal {
+  max-width: 560px;
+  width: 92vw;
+}
+
+.aiSummaryViewBody {
+  overflow-y: auto;
+  max-height: 55vh;
+}
+
+.aiSummaryViewText {
+  font-size: 14px;
+  line-height: 1.75;
+  color: var(--text, #0f172a);
+  word-break: break-word;
+}
+
+.aiSummaryViewText p { margin: 0 0 0.6em; }
+.aiSummaryViewText p:last-child { margin-bottom: 0; }
+.aiSummaryViewText h1, .aiSummaryViewText h2, .aiSummaryViewText h3 {
+  font-weight: 600;
+  margin: 0.9em 0 0.3em;
+  line-height: 1.3;
+}
+.aiSummaryViewText h1 { font-size: 1.15em; }
+.aiSummaryViewText h2 { font-size: 1.05em; }
+.aiSummaryViewText h3 { font-size: 1em; }
+.aiSummaryViewText ul, .aiSummaryViewText ol {
+  margin: 0.4em 0 0.6em 1.4em;
+  padding: 0;
+}
+.aiSummaryViewText li { margin-bottom: 0.25em; }
+.aiSummaryViewText strong { font-weight: 600; }
+.aiSummaryViewText em { font-style: italic; }
+.aiSummaryViewText code {
+  background: rgba(148, 163, 184, 0.12);
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+  font-size: 0.88em;
+  font-family: ui-monospace, monospace;
+}
+.aiSummaryViewText blockquote {
+  border-left: 3px solid var(--accent, #0ea5e9);
+  margin: 0.5em 0;
+  padding: 0.2em 0.8em;
+  color: var(--text-soft, #475569);
+}
+.aiSummaryViewText hr {
+  border: none;
+  border-top: 1px solid var(--stroke, rgba(148,163,184,0.2));
+  margin: 0.8em 0;
+}
+
+/* ─── File Tags (PreviewModal) ──────────────────────────────── */
+.fileTagsPanel {
+  border-top: 1px solid var(--stroke, rgba(148, 163, 184, 0.15));
+  padding-top: 12px;
+}
+
+.fileTagsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.fileTagsActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.fileTagsList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.fileTagsEmpty {
+  color: var(--text-2, #64748b);
+  font-size: 13px;
+}
+
+.fileTagsInputRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.fileTagsInput {
+  flex: 1 1 100px;
+  min-width: 80px;
+}
+
+/* ─── Tag Pills (universal) ──────────────────────────────────── */
+.tagPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--chip-bg, rgba(14, 165, 233, 0.08));
+  border: 1px solid rgba(14, 165, 233, 0.2);
+  border-radius: 20px;
+  font-size: 12px;
+  color: var(--accent, #0ea5e9);
+  cursor: pointer;
+  line-height: 1.5;
+  transition: background 0.12s, border-color 0.12s;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.tagPill:hover {
+  background: rgba(14, 165, 233, 0.14);
+  border-color: var(--accent, #0ea5e9);
+}
+
+.tagPillEditable {
+  cursor: default;
+}
+
+.tagPillRemove {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.6;
+  display: inline-flex;
+  align-items: center;
+  transition: opacity 0.1s;
+}
+
+.tagPillRemove:hover {
+  opacity: 1;
+}
+
+/* Tag row in list view */
+.fileTagRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+/* Tag row in grid view */
+.gridTagRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px 0;
+}
+
+/* Tag overlay on thumbnail (sticky-note style) */
+.thumbTagOverlay {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  right: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.thumbTagPill {
+  font-size: 11px !important;
+  padding: 1px 6px !important;
+  background: rgba(10, 17, 32, 0.76) !important;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  color: rgba(255, 255, 255, 0.92) !important;
+  pointer-events: auto;
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  border-radius: 12px !important;
+}
+
+.thumbTagPill:hover {
+  background: rgba(14, 165, 233, 0.72) !important;
+  border-color: rgba(125, 211, 252, 0.5) !important;
+  color: #fff !important;
+}
+
+/* ─── Tag filter in desktop filter panel ────────────────────── */
+.tagFilterField {
+  grid-column: 1 / -1;
+}
+
+.filterTagLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2, #64748b);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+  display: block;
+}
+
+.filterTagChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.filterTagChip {
+  font-size: 12px;
+  padding: 3px 10px;
+}
+
+.filterTagChip.active {
+  background: var(--accent-bg, rgba(14, 165, 233, 0.15));
+  border-color: var(--accent, #0ea5e9);
+  color: var(--accent, #0ea5e9);
+}
+
+/* AI batch tag button in filter panel */
+.batchTagButton {
+  color: var(--accent, #0ea5e9);
+  opacity: 0.8;
+}
+
+.batchTagButton:hover {
+  opacity: 1;
+  background: rgba(14, 165, 233, 0.08);
+}
+
+
    根本原因：:fullscreen 与 @media(max-width:760px) 同等优先级，
    后者因出现更晚而获胜；将全屏规则放到文件绝对末尾解决此问题。
    ══════════════════════════════════════════════════════════════ */
