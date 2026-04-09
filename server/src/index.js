@@ -1155,23 +1155,41 @@ function parseAllEpisodeUrls(vodPlayUrl, vodPlayFrom, epIndex) {
   return results;
 }
 
-app.get("/api/anime/find-stream", requireAuth, async (req, res) => {
+app.get("/api/anime/find-stream", requireAuth, (req, res) => {
   const name = String(req.query.name || "").trim();
-  const nameFallback = String(req.query.nameFallback || "").trim(); // alternate search name
+  const nameFallback = String(req.query.nameFallback || "").trim();
   const ep = Math.max(1, parseInt(req.query.ep || "1", 10) || 1);
   if (!name) return res.status(400).json({ error: "name required" });
 
-  const sources = [];
+  // SSE: stream sources to the client as each site responds
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.flushHeaders();
+
+  let finished = false;
+  const seen = new Set(); // deduplicate by url
+
+  function sendSource(src) {
+    if (finished || seen.has(src.url)) return;
+    seen.add(src.url);
+    res.write(`data: ${JSON.stringify({ type: "source", source: src })}\n\n`);
+  }
+  function done() {
+    if (finished) return;
+    finished = true;
+    res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+    res.end();
+  }
 
   async function querySite(site, fullName) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 5_000);
     try {
-      // Search using the base name (without season) to maximize CMS matches
       const searchKw = stripSeason(fullName) || fullName;
       const hits = await cmsSearchAll(site.base, searchKw, controller.signal);
       if (!hits.length) return;
-      // Also try the full name if stripped is different and results were empty
       const hit = pickBestHit(hits, fullName);
       if (!hit?.vod_id) return;
       const detail = await cmsDetail(site.base, hit.vod_id, controller.signal);
@@ -1180,25 +1198,21 @@ app.get("/api/anime/find-stream", requireAuth, async (req, res) => {
       const routeUrls = parseAllEpisodeUrls(detail.vod_play_url, detail.vod_play_from, ep);
       for (const { route, url } of routeUrls) {
         const playUrl = `/api/tv/stream?url=${encodeURIComponent(url)}`;
-        // Detect URL type so the frontend can choose the right player
         const type = /\.(mp4|flv|mkv)(\?|$)/i.test(url) ? "mp4" : "hls";
-        sources.push({ site: site.name, route, ep, url, playUrl, vodName, type });
+        sendSource({ site: site.name, route, ep, url, playUrl, vodName, type });
       }
-    } catch { /* ignore per-site errors */ } finally { clearTimeout(timer); }
+    } catch { /* ignore */ } finally { clearTimeout(timer); }
   }
 
-  // Hard cap: respond within 10 seconds no matter what
-  const hardTimeout = new Promise((resolve) => setTimeout(resolve, 10_000));
-  const searchAll = Promise.allSettled(
-    CMS_ANIME_SITES.flatMap((site) => {
-      const tasks = [querySite(site, name)];
-      if (nameFallback && nameFallback !== name) tasks.push(querySite(site, nameFallback));
-      return tasks;
-    })
-  );
-  await Promise.race([searchAll, hardTimeout]);
+  const tasks = CMS_ANIME_SITES.flatMap((site) => {
+    const t = [querySite(site, name)];
+    if (nameFallback && nameFallback !== name) t.push(querySite(site, nameFallback));
+    return t;
+  });
 
-  return res.json({ sources, name, ep });
+  // Hard cap: close stream after 15 seconds no matter what
+  const hardTimer = setTimeout(done, 15_000);
+  Promise.allSettled(tasks).then(() => { clearTimeout(hardTimer); done(); });
 });
 
 // ─── Mikan anime torrent search proxy ─────────────────────────────────────────

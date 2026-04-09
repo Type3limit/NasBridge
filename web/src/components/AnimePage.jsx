@@ -281,44 +281,67 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
   const [currentSrcIdx, setCurrentSrcIdx] = useState(0);
   const [searchLoading, setSearchLoading] = useState(false);
   const [playerError, setPlayerError] = useState(null);
-  const [loadingEp, setLoadingEp] = useState(null);
   const videoRef = useRef(null);
   const hlsRef = useRef(null);
 
   const currentSrc = sources[currentSrcIdx] ?? null;
 
-  // Search for sources for a given episode
-  async function fetchSources(epSort, signal) {
-    const params = new URLSearchParams({ name: animeName, ep: String(epSort) });
-    if (animeNameJa && animeNameJa !== animeName) params.set("nameFallback", animeNameJa);
-    const r = await fetch(`/api/anime/find-stream?${params}`, {
-      headers: { Authorization: `Bearer ${authToken}` },
-      signal,
-    });
-    if (!r.ok) { const t = await r.text().catch(() => ""); throw new Error(t || `HTTP ${r.status}`); }
-    return r.json();
-  }
-
-  // On mount and whenever currentEp changes, fetch sources
+  // On mount and whenever currentEp changes, stream sources progressively via SSE
   useEffect(() => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 25_000);
+    let cancelled = false;
     setSources([]);
     setCurrentSrcIdx(0);
     setPlayerError(null);
     setSearchLoading(true);
-    fetchSources(currentEp, controller.signal)
-      .then((data) => {
-        const s = data.sources || [];
-        if (s.length === 0) setPlayerError("未找到可用播放源");
-        else setSources(s);
-      })
-      .catch((e) => {
-        if (e.name !== "AbortError" || !controller.signal.aborted)
+
+    const controller = new AbortController();
+    const hardTimer = setTimeout(() => controller.abort(), 20_000);
+
+    (async () => {
+      try {
+        const params = new URLSearchParams({ name: animeName, ep: String(currentEp) });
+        if (animeNameJa && animeNameJa !== animeName) params.set("nameFallback", animeNameJa);
+        const r = await fetch(`/api/anime/find-stream?${params}`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+          signal: controller.signal,
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        let foundAny = false;
+
+        while (!cancelled) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const chunks = buf.split("\n\n");
+          buf = chunks.pop() ?? "";
+          for (const chunk of chunks) {
+            const line = chunk.trim();
+            if (!line.startsWith("data: ")) continue;
+            let msg;
+            try { msg = JSON.parse(line.slice(6)); } catch { continue; }
+            if (msg.type === "source") {
+              if (!foundAny) { foundAny = true; setSearchLoading(false); }
+              if (!cancelled) setSources((prev) => [...prev, msg.source]);
+            } else if (msg.type === "done") {
+              if (!foundAny && !cancelled) setPlayerError("未找到可用播放源");
+              if (!cancelled) setSearchLoading(false);
+            }
+          }
+        }
+        if (!cancelled && !foundAny) { setPlayerError("未找到可用播放源"); setSearchLoading(false); }
+      } catch (e) {
+        if (!cancelled) {
           setPlayerError(e.name === "AbortError" ? "搜索超时" : (e.message || "加载失败"));
-      })
-      .finally(() => { clearTimeout(timer); setSearchLoading(false); });
-    return () => { controller.abort(); clearTimeout(timer); };
+          setSearchLoading(false);
+        }
+      } finally { clearTimeout(hardTimer); }
+    })();
+
+    return () => { cancelled = true; controller.abort(); clearTimeout(hardTimer); };
   }, [currentEp]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load video when source changes
@@ -336,7 +359,13 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
       video.play().catch(() => {});
       video.onerror = () => setPlayerError(`播放失败：${video.error?.message || "未知错误"}`);
     } else if (Hls.isSupported()) {
-      const hls = new Hls({ enableWorker: false, fragLoadingMaxRetry: 1, manifestLoadingMaxRetry: 1 });
+      const hls = new Hls({
+        enableWorker: false,
+        fragLoadingMaxRetry: 1,
+        manifestLoadingMaxRetry: 1,
+        // Pass auth header so /api/tv/stream returns 200 (not 401)
+        xhrSetup: (xhr) => { xhr.setRequestHeader("Authorization", `Bearer ${authToken}`); },
+      });
       hlsRef.current = hls;
       hls.loadSource(currentSrc.playUrl);
       hls.attachMedia(video);
@@ -358,7 +387,7 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
   }, [currentSrc]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleEpClick(epSort) {
-    if (epSort === currentEp || loadingEp !== null) return;
+    if (epSort === currentEp) return;
     setCurrentEp(epSort);
   }
 
