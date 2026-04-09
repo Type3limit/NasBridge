@@ -273,24 +273,32 @@ function SearchView({ onSelectAnime }) {
 }
 
 // ─── Full-page Player ─────────────────────────────────────────────────────────
-// playerState = { episodes, animeName, animeNameJa, currentEp }
+// playerState = { animeName, animeNameJa, hintEp }
+// Episode list comes entirely from CMS sources, NOT from Bangumi.
 function AnimePlayerPage({ playerState, authToken, onBack }) {
-  const { animeName, animeNameJa, episodes } = playerState;
-  const [sources, setSources] = useState([]);
-  const [currentEp, setCurrentEp] = useState(playerState.currentEp);
-  const [currentSrcIdx, setCurrentSrcIdx] = useState(0);
-  const [searchLoading, setSearchLoading] = useState(false);
+  const { animeName, animeNameJa, hintEp } = playerState;
+
+  // routes: [{ site, route, vodName, episodes: [{ep, url, playUrl, type}] }]
+  const [routes, setRoutes] = useState([]);
+  const [currentRouteIdx, setCurrentRouteIdx] = useState(0);
+  const [currentEp, setCurrentEp] = useState(null); // CMS episode number (1-based)
+  const [searchLoading, setSearchLoading] = useState(true);
   const [playerError, setPlayerError] = useState(null);
   const videoRef = useRef(null);
   const hlsRef = useRef(null);
 
-  const currentSrc = sources[currentSrcIdx] ?? null;
+  const currentRoute = routes[currentRouteIdx] ?? null;
+  const cmsEpisodes = currentRoute?.episodes ?? [];
+  const currentEpisode = (currentEp != null && cmsEpisodes.find((e) => e.ep === currentEp))
+    || cmsEpisodes[0]
+    || null;
 
-  // On mount and whenever currentEp changes, stream sources progressively via SSE
+  // Fetch all routes + their episode lists from CMS (runs once on mount)
   useEffect(() => {
     let cancelled = false;
-    setSources([]);
-    setCurrentSrcIdx(0);
+    setRoutes([]);
+    setCurrentRouteIdx(0);
+    setCurrentEp(null);
     setPlayerError(null);
     setSearchLoading(true);
 
@@ -299,14 +307,7 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
 
     (async () => {
       try {
-        // Map Bangumi's continuous sort number to within-season episode index.
-        // e.g. Season 2 episodes [29..38] → CMS EP 1..10
-        const epMin = episodes && episodes.length > 0
-          ? Math.min(...episodes.map((e) => e.sort))
-          : 1;
-        const cmsEp = currentEp - epMin + 1;
-
-        const params = new URLSearchParams({ name: animeName, ep: String(cmsEp) });
+        const params = new URLSearchParams({ name: animeName });
         if (animeNameJa && animeNameJa !== animeName) params.set("nameFallback", animeNameJa);
         const r = await fetch(`/api/anime/find-stream?${params}`, {
           headers: { Authorization: `Bearer ${authToken}` },
@@ -317,7 +318,7 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
         const reader = r.body.getReader();
         const decoder = new TextDecoder();
         let buf = "";
-        let foundAny = false;
+        let firstRoute = true;
 
         while (!cancelled) {
           const { done, value } = await reader.read();
@@ -331,15 +332,25 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
             let msg;
             try { msg = JSON.parse(line.slice(6)); } catch { continue; }
             if (msg.type === "source") {
-              if (!foundAny) { foundAny = true; setSearchLoading(false); }
-              if (!cancelled) setSources((prev) => [...prev, msg.source]);
+              if (!cancelled) {
+                setRoutes((prev) => [...prev, msg.source]);
+                if (firstRoute) {
+                  firstRoute = false;
+                  setSearchLoading(false);
+                  const eps = msg.source.episodes || [];
+                  const found = hintEp != null && eps.find((e) => e.ep === hintEp);
+                  setCurrentEp(found ? hintEp : (eps[0]?.ep ?? 1));
+                }
+              }
             } else if (msg.type === "done") {
-              if (!foundAny && !cancelled) setPlayerError("未找到可用播放源");
-              if (!cancelled) setSearchLoading(false);
+              if (!cancelled) {
+                if (firstRoute) setPlayerError("未找到可用播放源");
+                setSearchLoading(false);
+              }
             }
           }
         }
-        if (!cancelled && !foundAny) { setPlayerError("未找到可用播放源"); setSearchLoading(false); }
+        if (!cancelled && firstRoute) { setPlayerError("未找到可用播放源"); setSearchLoading(false); }
       } catch (e) {
         if (!cancelled) {
           setPlayerError(e.name === "AbortError" ? "搜索超时" : (e.message || "加载失败"));
@@ -349,20 +360,19 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
     })();
 
     return () => { cancelled = true; controller.abort(); clearTimeout(hardTimer); };
-  }, [currentEp]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load video when source changes
+  // Load video whenever the active episode changes
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !currentSrc?.playUrl) return;
+    if (!video || !currentEpisode?.playUrl) return;
     setPlayerError(null);
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
 
-    const isMp4 = currentSrc.type === "mp4" || /\.(mp4|flv|mkv)(\?|$)/i.test(currentSrc.url || "");
+    const isMp4 = currentEpisode.type === "mp4" || /\.(mp4|flv|mkv)(\?|$)/i.test(currentEpisode.url || "");
 
     if (isMp4) {
-      // Direct video file — set src directly, no HLS.js needed
-      video.src = currentSrc.playUrl;
+      video.src = currentEpisode.playUrl;
       video.play().catch(() => {});
       video.onerror = () => setPlayerError(`播放失败：${video.error?.message || "未知错误"}`);
     } else if (Hls.isSupported()) {
@@ -370,50 +380,47 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
         enableWorker: false,
         fragLoadingMaxRetry: 1,
         manifestLoadingMaxRetry: 1,
-        // Pass auth header so /api/tv/stream returns 200 (not 401)
         xhrSetup: (xhr) => { xhr.setRequestHeader("Authorization", `Bearer ${authToken}`); },
       });
       hlsRef.current = hls;
-      hls.loadSource(currentSrc.playUrl);
+      hls.loadSource(currentEpisode.playUrl);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
       hls.on(Hls.Events.ERROR, (_, data) => {
-        if (data.fatal) {
-          setPlayerError(`播放失败：${data.details}`);
-          hls.destroy(); hlsRef.current = null;
-        }
+        if (data.fatal) { setPlayerError(`播放失败：${data.details}`); hls.destroy(); hlsRef.current = null; }
       });
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      video.src = currentSrc.playUrl;
+      video.src = currentEpisode.playUrl;
       video.play().catch(() => {});
       video.onerror = () => setPlayerError(`播放失败：${video.error?.message || "未知错误"}`);
     } else {
       setPlayerError("当前浏览器不支持 HLS 播放");
     }
     return () => { if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; } };
-  }, [currentSrc]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentEpisode]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function handleEpClick(epSort) {
-    if (epSort === currentEp) return;
-    setCurrentEp(epSort);
+  function handleRouteSwitch(idx) {
+    if (idx === currentRouteIdx) return;
+    setCurrentRouteIdx(idx);
+    setPlayerError(null);
+    const newEps = routes[idx]?.episodes ?? [];
+    if (!newEps.find((e) => e.ep === currentEp)) setCurrentEp(newEps[0]?.ep ?? 1);
   }
 
-  const nextSrcIdx = currentSrcIdx + 1 < sources.length ? currentSrcIdx + 1 : null;
+  const nextRouteIdx = currentRouteIdx + 1 < routes.length ? currentRouteIdx + 1 : null;
 
   return (
     <div className="animePlayerPage">
-      {/* Header */}
       <div className="animePlayerPageHeader">
         <button type="button" className="animePlayerPageBack" onClick={onBack}>
           <ChevronRightRegular style={{ transform: "rotate(180deg)" }} /> 返回
         </button>
         <span className="animePlayerPageTitle">
-          {animeName}
-          {currentEp ? ` · EP${currentEp}` : ""}
+          {currentRoute?.vodName || animeName}
+          {currentEpisode ? ` · EP${currentEpisode.ep}` : ""}
         </span>
       </div>
 
-      {/* Video area */}
       <div className="animePlayerPageVideo">
         {searchLoading ? (
           <div className="animePlayerError">
@@ -422,10 +429,10 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
         ) : playerError ? (
           <div className="animePlayerError">
             <div className="animePlayerErrorMsg">{playerError}</div>
-            {nextSrcIdx !== null && (
+            {nextRouteIdx !== null && (
               <button type="button" className="animeSourceBtn active"
-                onClick={() => { setCurrentSrcIdx(nextSrcIdx); setPlayerError(null); }}>
-                尝试下一个源 →
+                onClick={() => { handleRouteSwitch(nextRouteIdx); setPlayerError(null); }}>
+                尝试下一个线路 →
               </button>
             )}
           </div>
@@ -434,43 +441,31 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
         )}
       </div>
 
-      {/* Source bar + Episodes — scrollable section below the fixed video */}
       <div className="animePlayerPageScroll">
-        {/* Source bar */}
-        {sources.length > 0 && (
+        {routes.length > 0 && (
           <div className="animeSourceBar">
             <span className="animeSourceBarLabel">线路：</span>
-            {sources.map((s, i) => (
-              <button
-                key={i}
-                type="button"
-                className={`animeSourceBtn${i === currentSrcIdx ? " active" : ""}`}
-                onClick={() => { setCurrentSrcIdx(i); setPlayerError(null); }}
-              >
-                {s.site} {s.route}
+            {routes.map((r, i) => (
+              <button key={i} type="button"
+                className={`animeSourceBtn${i === currentRouteIdx ? " active" : ""}`}
+                onClick={() => handleRouteSwitch(i)}>
+                {r.site} {r.route}
               </button>
             ))}
           </div>
         )}
 
-        {/* Episode list */}
-        {episodes && episodes.length > 0 && (
+        {cmsEpisodes.length > 0 && (
           <div className="animePlayerPageEps">
-            <div className="animePlayerPageEpsTitle">剧集</div>
+            <div className="animePlayerPageEpsTitle">剧集（共 {cmsEpisodes.length} 集）</div>
             <div className="animePlayerPageEpList">
-              {episodes.map((ep) => {
-                const isActive = ep.sort === currentEp;
-                return (
-                  <button
-                    key={ep.id}
-                    type="button"
-                    className={`animePlayerEpBtn${isActive ? " active" : ""}`}
-                    onClick={() => handleEpClick(ep.sort)}
-                  >
-                    {`EP${ep.sort}`}
-                  </button>
-                );
-              })}
+              {cmsEpisodes.map((ep) => (
+                <button key={ep.ep} type="button"
+                  className={`animePlayerEpBtn${ep.ep === currentEpisode?.ep ? " active" : ""}`}
+                  onClick={() => setCurrentEp(ep.ep)}>
+                  EP{ep.ep}
+                </button>
+              ))}
             </div>
           </div>
         )}
@@ -570,9 +565,9 @@ function DetailPanel({ subjectId, authToken, onClose, onPlay }) {
       .finally(() => setLoading(false));
   }, [subjectId]);
 
-  // Navigate to player page immediately — player fetches sources itself
-  function handlePlayEpisode(ep, animeName, animeNameJa) {
-    onPlay({ episodes, animeName, animeNameJa, currentEp: ep });
+  // Navigate to player page — player fetches its own episode list from CMS
+  function handlePlayEpisode(epSort, animeName, animeNameJa) {
+    onPlay({ animeName, animeNameJa, hintEp: epSort });
   }
 
   function handlePickMagnet(item) {
