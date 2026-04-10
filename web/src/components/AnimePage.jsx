@@ -654,6 +654,8 @@ function AnimePlayerPage({ playerState, authToken, p2p, clients, onBack }) {
   const [danmakuTextOpacity, setDanmakuTextOpacity] = useState(1);
   const [danmakuBackgroundOpacity, setDanmakuBackgroundOpacity] = useState(0.12);
   const [danmakuSettingsOpen, setDanmakuSettingsOpen] = useState(false);
+  const [danmakuDraft, setDanmakuDraft] = useState("");
+  const [danmakuSubmitting, setDanmakuSubmitting] = useState(false);
   const [activeDanmaku, setActiveDanmaku] = useState([]);
   const danmakuFiredRef = useRef(new Set());
   const danmakuScrollLaneRef = useRef(0);
@@ -663,6 +665,37 @@ function AnimePlayerPage({ playerState, authToken, p2p, clients, onBack }) {
   const danmakuTimersRef = useRef(new Map());
   const activeDanmakuIdsRef = useRef(new Set());
   const lastVideoTimeRef = useRef(0);
+
+  // ── Send danmaku ───────────────────────────────────────────────────────
+  async function submitDanmaku() {
+    const content = danmakuDraft.trim();
+    const bgmEpId = bgmEpisodes.find((ep) => ep.sort === firstBgmSort + (currentEp ?? 1) - 1)?.id;
+    if (!content || !bgmEpId || !authToken) return;
+    setDanmakuSubmitting(true);
+    try {
+      const ct = videoRef.current?.currentTime || 0;
+      const r = await fetch(`/api/anime/danmaku/${bgmEpId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ content, timeSec: ct, color: danmakuColor, mode: danmakuMode }),
+      });
+      if (r.ok) {
+        setDanmakuDraft("");
+        const data = await r.json();
+        // Add the newly created item to danmaku list for immediate display
+        if (data?.item) {
+          const normalized = normalizeAnimekoDanmaku(data.item);
+          if (normalized.content) {
+            setDanmakuItems((prev) => [...prev, normalized].sort((a, b) => a.timeSec - b.timeSec));
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[Anime] danmaku submit:", err);
+    } finally {
+      setDanmakuSubmitting(false);
+    }
+  }
 
   function handleRefreshSources() {
     SOURCE_CACHE.delete(animeName);
@@ -1214,6 +1247,14 @@ function AnimePlayerPage({ playerState, authToken, p2p, clients, onBack }) {
               danmakuMode={danmakuMode}
               onDanmakuModeChange={setDanmakuMode}
               onToggleDanmakuVisible={() => setDanmakuVisible((v) => !v)}
+              draft={danmakuDraft}
+              onDraftChange={setDanmakuDraft}
+              onDraftKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent?.isComposing) {
+                  e.preventDefault();
+                  submitDanmaku();
+                }
+              }}
               danmakuSettingsOpen={danmakuSettingsOpen}
               onToggleDanmakuSettings={() => setDanmakuSettingsOpen((v) => !v)}
               danmakuColor={danmakuColor}
@@ -1224,7 +1265,24 @@ function AnimePlayerPage({ playerState, authToken, p2p, clients, onBack }) {
               onDanmakuTextOpacityChange={(v) => setDanmakuTextOpacity(clampNum(v, 0.2, 1, danmakuTextOpacity))}
               danmakuFontScale={danmakuFontScale}
               onDanmakuFontScaleChange={(v) => setDanmakuFontScale(clampNum(v, 0.8, 1.6, danmakuFontScale))}
-              sendDisabled={true}
+              onSubmit={submitDanmaku}
+              sendDisabled={danmakuSubmitting || !authToken || !danmakuDraft.trim()}
+              inputNode={(
+                <div className="previewDanmakuInputShell">
+                  <span className="previewDanmakuInputGlyph" aria-hidden="true">A</span>
+                  <input
+                    autoComplete="off"
+                    className="previewDanmakuInput previewDanmakuInputBili"
+                    value={danmakuDraft}
+                    placeholder="发个友善的弹幕见证当下"
+                    onChange={(e) => setDanmakuDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === " ") { e.stopPropagation(); return; }
+                      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitDanmaku(); }
+                    }}
+                  />
+                </div>
+              )}
             />
           </VideoPlayerControls>
         }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { apiRequest } from "./api.js";
 import { P2PBridgePool } from "./webrtc.js";
 import VideoPlayerControls, { VideoDanmakuComposer } from "./components/VideoPlayerControls";
+import AnimePage from "./components/AnimePage";
 import {
   filterPlayableFiles,
   isVideoMime,
@@ -667,6 +668,7 @@ export default function LivingRoomPage() {
   const [focusedFileId, setFocusedFileId] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [browseMode, setBrowseMode] = useState("strip"); // "strip" | "grid"
+  const [contentMode, setContentMode] = useState("downloaded"); // "downloaded" | "anime"
   const [gridQuery, setGridQuery] = useState("");
   const [lrTagFilter, setLrTagFilter] = useState([]);
   const gridSearchRef = useRef(null);
@@ -2147,7 +2149,28 @@ export default function LivingRoomPage() {
         {/* TopBar */}
         <header className="lrTopBar">
           <span className="lrTopBarLogo">▶ NAS</span>
-          <div className="lrTopBarCenter" />
+          <div className="lrTopBarCenter">
+            <div className="lrContentToggle" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                className={`lrContentToggleBtn${contentMode === "downloaded" ? " active" : ""}`}
+                aria-selected={contentMode === "downloaded"}
+                onClick={() => setContentMode("downloaded")}
+              >
+                已下载资源
+              </button>
+              <button
+                type="button"
+                role="tab"
+                className={`lrContentToggleBtn${contentMode === "anime" ? " active" : ""}`}
+                aria-selected={contentMode === "anime"}
+                onClick={() => setContentMode("anime")}
+              >
+                在线番剧
+              </button>
+            </div>
+          </div>
           <div className="lrTopBarRight">
             <LiveClock />
             <button
@@ -2176,92 +2199,104 @@ export default function LivingRoomPage() {
           </div>
         </header>
 
-        {/* Hero 区（strip 模式下显示）*/}
-        {browseMode === "strip" && (
-          <div className="lrHero">
-            {heroDisplayFile && thumbMap[thumbKey(heroDisplayFile)]?.url && (
-              <div
-                className="lrHeroBg"
-                style={{ backgroundImage: `url(${thumbMap[thumbKey(heroDisplayFile)].url})` }}
+        {/* ── 内容区：已下载资源 ── */}
+        {contentMode === "downloaded" && (
+          <>
+            {/* Hero 区（strip 模式下显示）*/}
+            {browseMode === "strip" && (
+              <div className="lrHero">
+                {heroDisplayFile && thumbMap[thumbKey(heroDisplayFile)]?.url && (
+                  <div
+                    className="lrHeroBg"
+                    style={{ backgroundImage: `url(${thumbMap[thumbKey(heroDisplayFile)].url})` }}
+                  />
+                )}
+                {/* 背景视频：选中超过1秒后替代封面图 */}
+                <video
+                  ref={heroBgVideoRef}
+                  className="lrHeroBgVideo"
+                  muted
+                  loop
+                  playsInline
+                  aria-hidden="true"
+                />
+                <div className="lrHeroOverlay" />
+                {heroDisplayFile && (
+                  <div className="lrHeroContent">
+                    <span className="lrHeroLabel">
+                      {continueMap[heroDisplayFile.id] ? "继续观看" : "最新上传"}
+                    </span>
+                    <h1 className="lrHeroTitle">{heroDisplayFile.name}</h1>
+                    <div className="lrHeroMeta">
+                      <span>{isVideoMime(heroDisplayFile.mimeType) ? "视频" : isAudioMime(heroDisplayFile.mimeType) ? "音频" : "媒体"}</span>
+                      {heroDisplayFile.size ? <span>{formatSize(heroDisplayFile.size)}</span> : null}
+                      {getFileTs(heroDisplayFile) ? <span>{formatRelative(heroDisplayFile.createdAt || heroDisplayFile.updatedAt)}</span> : null}
+                    </div>
+                    <button
+                      type="button"
+                      className="lrHeroCTA"
+                      onClick={() => playFile(heroDisplayFile)}
+                    >
+                      ▶ 立即播放
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* 底部横向列表（strip 模式）/ 全屏网格（grid 模式）*/}
+            {lrAvailableTags.length > 0 && browseMode === "strip" && (
+              <LrTagFilterBar
+                availableTags={lrAvailableTags}
+                tagFilter={lrTagFilter}
+                onTagFilterChange={setLrTagFilter}
               />
             )}
-            {/* 背景视频：选中超过1秒后替代封面图 */}
-            <video
-              ref={heroBgVideoRef}
-              className="lrHeroBgVideo"
-              muted
-              loop
-              playsInline
-              aria-hidden="true"
-            />
-            <div className="lrHeroOverlay" />
-            {heroDisplayFile && (
-              <div className="lrHeroContent">
-                <span className="lrHeroLabel">
-                  {continueMap[heroDisplayFile.id] ? "继续观看" : "最新上传"}
-                </span>
-                <h1 className="lrHeroTitle">{heroDisplayFile.name}</h1>
-                <div className="lrHeroMeta">
-                  <span>{isVideoMime(heroDisplayFile.mimeType) ? "视频" : isAudioMime(heroDisplayFile.mimeType) ? "音频" : "媒体"}</span>
-                  {heroDisplayFile.size ? <span>{formatSize(heroDisplayFile.size)}</span> : null}
-                  {getFileTs(heroDisplayFile) ? <span>{formatRelative(heroDisplayFile.createdAt || heroDisplayFile.updatedAt)}</span> : null}
-                </div>
-                <button
-                  type="button"
-                  className="lrHeroCTA"
-                  onClick={() => playFile(heroDisplayFile)}
-                >
-                  ▶ 立即播放
-                </button>
+            {browseMode === "grid" ? (
+              <InlineGrid
+                files={allBrowseFiles}
+                thumbMap={thumbMap}
+                continueMap={continueMap}
+                focusedId={focusedFileId}
+                query={gridQuery}
+                onQueryChange={setGridQuery}
+                onPlay={(f) => { setGridQuery(""); setBrowseMode("strip"); playFile(f); }}
+                onFocus={setFocusedFileId}
+                onClose={() => { setBrowseMode("strip"); setGridQuery(""); }}
+                searchRef={gridSearchRef}
+                onColsChange={(cols) => { gridColsRef.current = cols; }}
+                onRefreshThumb={forceRefreshThumb}
+                availableTags={lrAvailableTags}
+                tagFilter={lrTagFilter}
+                onTagFilterChange={setLrTagFilter}
+              />
+            ) : (
+              <div className="lrShelvesBottom">
+                <InfiniteStrip
+                  files={allBrowseFiles}
+                  thumbMap={thumbMap}
+                  continueMap={continueMap}
+                  focusedId={focusedFileId}
+                  onPlay={playFile}
+                  onFocus={setFocusedFileId}
+                  onRefreshThumb={forceRefreshThumb}
+                />
+                {pageState === "browsing" && !allBrowseFiles.length && (
+                  <div className="lrShelfSection">
+                    <div className="lrShelfEmpty">
+                      暂无在线媒体文件。请确认 storage-client 在线，且已上传视频或音频文件。
+                    </div>
+                  </div>
+                )}
               </div>
             )}
-          </div>
+          </>
         )}
 
-        {/* 底部横向列表（strip 模式）/ 全屏网格（grid 模式）*/}
-        {lrAvailableTags.length > 0 && browseMode === "strip" && (
-          <LrTagFilterBar
-            availableTags={lrAvailableTags}
-            tagFilter={lrTagFilter}
-            onTagFilterChange={setLrTagFilter}
-          />
-        )}
-        {browseMode === "grid" ? (
-          <InlineGrid
-            files={allBrowseFiles}
-            thumbMap={thumbMap}
-            continueMap={continueMap}
-            focusedId={focusedFileId}
-            query={gridQuery}
-            onQueryChange={setGridQuery}
-            onPlay={(f) => { setGridQuery(""); setBrowseMode("strip"); playFile(f); }}
-            onFocus={setFocusedFileId}
-            onClose={() => { setBrowseMode("strip"); setGridQuery(""); }}
-            searchRef={gridSearchRef}
-            onColsChange={(cols) => { gridColsRef.current = cols; }}
-            onRefreshThumb={forceRefreshThumb}
-            availableTags={lrAvailableTags}
-            tagFilter={lrTagFilter}
-            onTagFilterChange={setLrTagFilter}
-          />
-        ) : (
-          <div className="lrShelvesBottom">
-            <InfiniteStrip
-              files={allBrowseFiles}
-              thumbMap={thumbMap}
-              continueMap={continueMap}
-              focusedId={focusedFileId}
-              onPlay={playFile}
-              onFocus={setFocusedFileId}
-              onRefreshThumb={forceRefreshThumb}
-            />
-            {pageState === "browsing" && !allBrowseFiles.length && (
-              <div className="lrShelfSection">
-                <div className="lrShelfEmpty">
-                  暂无在线媒体文件。请确认 storage-client 在线，且已上传视频或音频文件。
-                </div>
-              </div>
-            )}
+        {/* ── 内容区：在线番剧 ── */}
+        {contentMode === "anime" && (
+          <div className="lrAnimeContent">
+            <AnimePage authToken={token} p2p={p2p} clients={clients} />
           </div>
         )}
       </div>

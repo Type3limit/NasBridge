@@ -50,6 +50,8 @@ import {
   setCommentReaction,
   listFileDanmaku,
   createFileDanmaku,
+  listAnimeDanmaku,
+  createAnimeDanmaku,
   listTvSources,
   saveTvSource,
   deleteTvSource
@@ -2164,19 +2166,75 @@ app.get("/api/anime/resolve-url", requireAuth, async (req, res) => {
 // ─── Danmaku proxy (bypass CORS) ──────────────────────────────────────────────
 // The animeko danmaku server doesn't set Access-Control-Allow-Origin, so
 // browser requests from our domain are blocked. Proxy through our server.
+// Also merges locally-stored anime danmaku for this episode.
 app.get("/api/anime/danmaku/:episodeId", requireAuth, async (req, res) => {
   const epId = req.params.episodeId;
   if (!epId || !/^\d+$/.test(epId)) return res.status(400).json({ error: "invalid episodeId" });
+
+  // Fetch upstream animeko danmaku + local danmaku in parallel
+  const localItems = listAnimeDanmaku(epId);
+  let upstreamList = [];
   try {
     const r = await fetch(`https://danmaku-cn.myani.org/v1/danmaku/${epId}`, {
       signal: AbortSignal.timeout(8_000),
     });
-    if (!r.ok) return res.status(r.status).json({ error: `upstream ${r.status}` });
-    const data = await r.json();
-    res.json(data);
-  } catch (e) {
-    res.status(502).json({ error: e.message });
-  }
+    if (r.ok) {
+      const data = await r.json();
+      upstreamList = data?.danmakuList ?? [];
+    }
+  } catch { /* upstream failure is non-critical */ }
+
+  // Convert local items to the same format as animeko upstream
+  const localAsDanmaku = localItems.map((it) => ({
+    id: it.id,
+    senderId: it.createdByUserId || "",
+    danmakuInfo: {
+      text: it.content,
+      playTime: it.timeSec,
+      color: parseInt((it.color || "#FFFFFF").replace("#", ""), 16) || 16777215,
+      location: it.mode === "top" ? 1 : it.mode === "bottom" ? 2 : 0,
+    },
+  }));
+
+  res.json({ danmakuList: [...upstreamList, ...localAsDanmaku] });
+});
+
+// ─── Anime danmaku POST (store locally) ───────────────────────────────────────
+app.post("/api/anime/danmaku/:episodeId", requireAuth, (req, res) => {
+  const epId = req.params.episodeId;
+  if (!epId || !/^\d+$/.test(epId)) return res.status(400).json({ error: "invalid episodeId" });
+  const content = String(req.body?.content || "").trim();
+  if (!content) return res.status(400).json({ error: "content is required" });
+  const timeSec = Math.max(0, Number(req.body?.timeSec || 0));
+  const color = /^#([0-9a-f]{6})$/i.test(String(req.body?.color || "").trim())
+    ? String(req.body.color).trim().toUpperCase()
+    : "#FFFFFF";
+  const mode = ["scroll", "top", "bottom"].includes(String(req.body?.mode || "").trim())
+    ? String(req.body.mode).trim()
+    : "scroll";
+  const user = getUserById(req.auth.sub);
+  const created = createAnimeDanmaku({
+    bgmEpId: epId,
+    content: content.slice(0, 120),
+    timeSec,
+    color,
+    mode,
+    createdByUserId: req.auth.sub,
+    createdByDisplayName: user?.displayName || req.auth.displayName,
+  });
+  // Return the created item in animeko-compatible format for immediate display
+  res.json({
+    item: {
+      id: created.id,
+      senderId: created.createdByUserId,
+      danmakuInfo: {
+        text: created.content,
+        playTime: created.timeSec,
+        color: parseInt(created.color.replace("#", ""), 16) || 16777215,
+        location: created.mode === "top" ? 1 : created.mode === "bottom" ? 2 : 0,
+      },
+    },
+  });
 });
 
 // ─── HLS stream proxy ─────────────────────────────────────────────────────────

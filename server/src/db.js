@@ -17,6 +17,7 @@ const defaultDb = {
   fileShares: [],
   comments: [],
   danmaku: [],
+  animeDanmaku: [],
   tvSources: []
 };
 
@@ -793,6 +794,40 @@ export function createFileDanmaku({ fileId, content, timeSec = 0, color = "#FFFF
     updatedAt: now
   };
   db.danmaku.push(entity);
+  writeDb(db);
+  return entity;
+}
+
+// ── Anime Danmaku (keyed by bgmEpId) ───────────────────────────────────────
+
+export function listAnimeDanmaku(bgmEpId) {
+  return readDb()
+    .animeDanmaku
+    .filter((item) => String(item.bgmEpId) === String(bgmEpId))
+    .sort((left, right) => {
+      const timeDelta = Number(left.timeSec || 0) - Number(right.timeSec || 0);
+      if (timeDelta !== 0) return timeDelta;
+      return String(left.createdAt || "").localeCompare(String(right.createdAt || ""));
+    });
+}
+
+export function createAnimeDanmaku({ bgmEpId, content, timeSec = 0, color = "#FFFFFF", mode = "scroll", createdByUserId, createdByDisplayName }) {
+  const db = readDb();
+  if (!Array.isArray(db.animeDanmaku)) db.animeDanmaku = [];
+  const now = new Date().toISOString();
+  const entity = {
+    id: nanoid(14),
+    bgmEpId: String(bgmEpId),
+    content,
+    timeSec: Math.max(0, Number(timeSec || 0)),
+    color,
+    mode,
+    createdByUserId,
+    createdByDisplayName: createdByDisplayName || "匿名用户",
+    createdAt: now,
+    updatedAt: now
+  };
+  db.animeDanmaku.push(entity);
   writeDb(db);
   return entity;
 }
