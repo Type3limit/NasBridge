@@ -4,6 +4,14 @@ import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import express from "express";
+
+// ─── Global error handlers: prevent the process from crashing on stray errors ──
+process.on("uncaughtException", (err) => {
+  console.error("[FATAL] uncaughtException — server stays alive:", err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[FATAL] unhandledRejection — server stays alive:", reason);
+});
 import cors from "cors";
 import bcrypt from "bcryptjs";
 import multer from "multer";
