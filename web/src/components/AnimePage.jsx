@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Button, Input, Spinner, Badge } from "@fluentui/react-components";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button, Input, Spinner, Badge, Select } from "@fluentui/react-components";
 import {
   ArrowDownloadRegular,
   ChevronRightRegular,
@@ -11,6 +11,8 @@ import {
 } from "@fluentui/react-icons";
 import Hls from "hls.js";
 import { apiRequest } from "../api";
+import VideoPlayerControls, { VideoDanmakuComposer } from "./VideoPlayerControls";
+import VideoViewportSurface from "./VideoViewportSurface";
 
 const BGM_API = "https://api.bgm.tv";
 const BGM_HEADERS = { "User-Agent": "nas-media-manager/1.0 (https://github.com)" };
@@ -19,6 +21,40 @@ const BGM_HEADERS = { "User-Agent": "nas-media-manager/1.0 (https://github.com)"
 const ANIME_TYPE = 2;
 
 const WEEKDAY_LABELS = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+
+// ─── Danmaku constants ────────────────────────────────────────────────────────
+const DANMAKU_SCROLL_DURATION_MS = 9000;
+const DANMAKU_FIXED_DURATION_MS = 4200;
+const DANMAKU_SCROLL_LANES = 8;
+const DANMAKU_FIXED_LANES = 3;
+
+// animeko public danmaku server (Bangumi episode IDs)
+const ANIMEKO_DANMAKU_CN = "https://danmaku-cn.myani.org";
+
+function clampNum(value, min, max, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+}
+
+function toAlphaColor(alpha = 0.12) {
+  return `rgba(2, 6, 23, ${clampNum(alpha, 0, 0.9, 0.12)})`;
+}
+
+// Normalize animeko danmaku item → internal format
+function normalizeAnimekoDanmaku(raw) {
+  const info = raw?.danmakuInfo ?? {};
+  const color = Number.isFinite(Number(info.color))
+    ? `#${Number(info.color).toString(16).padStart(6, "0").toUpperCase()}`
+    : "#FFFFFF";
+  const mode = info.location === 1 ? "top" : info.location === 2 ? "bottom" : "scroll";
+  return {
+    id: String(raw?.id ?? Math.random()),
+    content: String(info.text || "").trim(),
+    timeSec: Math.max(0, Number(info.playTime || 0)),
+    color,
+    mode,
+  };
+}
 
 // ─── Source cache (module-level, survives component re-mounts) ─────────────────
 // Key: animeName, Value: { routes: [...], time: timestamp }
@@ -287,22 +323,69 @@ function SearchView({ onSelectAnime }) {
   );
 }
 
-// ─── Full-page Player ─────────────────────────────────────────────────────────
-// playerState = { animeName, animeNameJa, hintEp }
-// Episode list comes entirely from CMS sources, NOT from Bangumi.
-function AnimePlayerPage({ playerState, authToken, onBack }) {
-  const { animeName, animeNameJa, hintEp } = playerState;
+// Deterministic color from site name (for avatar circles)
+function siteColor(name) {
+  let h = 0;
+  for (let i = 0; i < (name || "").length; i++) h = Math.imul(31, h) + name.charCodeAt(i) | 0;
+  return `hsl(${Math.abs(h) % 360}, 50%, 42%)`;
+}
 
-  // routes: [{ site, route, vodName, episodes: [{ep, url, playUrl, type}] }]
+// ─── Full-page Player ─────────────────────────────────────────────────────────
+// playerState = { animeName, animeNameJa, hintEp, bgmEpisodes }
+// Episode names come from Bangumi (bgmEpisodes); stream URLs from CMS sources.
+function AnimePlayerPage({ playerState, authToken, onBack }) {
+  const { animeName, animeNameJa, hintEp, bgmEpisodes = [] } = playerState;
+
+  // Bangumi may number episodes globally across seasons (e.g. S2 ep1 = sort 29).
+  // CMS sites number per-season starting from 1. Use firstBgmSort as offset.
+  const firstBgmSort = bgmEpisodes.length > 0 ? bgmEpisodes[0].sort : 1;
+  // Maps Bangumi global sort number → CMS per-season episode number
+  const bgmToCms = (bgmSort) => Math.max(1, bgmSort - firstBgmSort + 1);
+
+  // routes: [{ site, route, vodName, episodes: [{ep, label, url, type, vipWrapped}] }]
   const [routes, setRoutes] = useState([]);
   const [currentRouteIdx, setCurrentRouteIdx] = useState(0);
   const [currentEp, setCurrentEp] = useState(null); // CMS episode number (1-based)
   const [searchLoading, setSearchLoading] = useState(true);
   const [playerError, setPlayerError] = useState(null);
   const [searchKey, setSearchKey] = useState(0); // increment to force re-search
+  const [sitesChecked, setSitesChecked] = useState([]); // sites that have responded (may have dupes from nameFallback)
+  const [sitesTotal, setSitesTotal] = useState(32);     // updated from SSE done event
+  const [blockedSites, setBlockedSites] = useState([]); // sites returning Cloudflare/captcha challenges
+  const [manualSelectOpen, setManualSelectOpen] = useState(false);
+  const [videoReady, setVideoReady] = useState(false);
   const videoRef = useRef(null);
   const hlsRef = useRef(null);
   const routesAccumRef = useRef([]); // accumulates routes during SSE for caching
+
+  // ── Custom player state ────────────────────────────────────────────────
+  const [videoCurrentTime, setVideoCurrentTime] = useState(0);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [videoBufferedTime, setVideoBufferedTime] = useState(0);
+  const [videoPlaying, setVideoPlaying] = useState(false);
+  const [pictureInPictureActive, setPictureInPictureActive] = useState(false);
+  const [fullscreenActive, setFullscreenActive] = useState(false);
+  const viewportRef = useRef(null);
+  const canUsePip = typeof document !== "undefined" && Boolean(document.pictureInPictureEnabled);
+
+  // ── Danmaku state ──────────────────────────────────────────────────────
+  const [danmakuItems, setDanmakuItems] = useState([]);
+  const [danmakuVisible, setDanmakuVisible] = useState(true);
+  const [danmakuMode, setDanmakuMode] = useState("scroll");
+  const [danmakuColor, setDanmakuColor] = useState("#FFFFFF");
+  const [danmakuFontScale, setDanmakuFontScale] = useState(1);
+  const [danmakuTextOpacity, setDanmakuTextOpacity] = useState(1);
+  const [danmakuBackgroundOpacity, setDanmakuBackgroundOpacity] = useState(0.12);
+  const [danmakuSettingsOpen, setDanmakuSettingsOpen] = useState(false);
+  const [activeDanmaku, setActiveDanmaku] = useState([]);
+  const danmakuFiredRef = useRef(new Set());
+  const danmakuScrollLaneRef = useRef(0);
+  const danmakuTopLaneRef = useRef(0);
+  const danmakuBottomLaneRef = useRef(0);
+  const danmakuSequenceRef = useRef(0);
+  const danmakuTimersRef = useRef(new Map());
+  const activeDanmakuIdsRef = useRef(new Set());
+  const lastVideoTimeRef = useRef(0);
 
   function handleRefreshSources() {
     SOURCE_CACHE.delete(animeName);
@@ -315,6 +398,23 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
     || cmsEpisodes[0]
     || null;
 
+  // Group routes by site name for the picker UI (animeko simple-mode style)
+  const siteGroups = useMemo(() => {
+    const map = new Map();
+    routes.forEach((r, i) => {
+      if (!map.has(r.site)) map.set(r.site, []);
+      map.get(r.site).push({ route: r.route, idx: i });
+    });
+    return [...map.entries()].map(([site, siteRoutes]) => ({ site, routes: siteRoutes }));
+  }, [routes]);
+
+  // Deduplicate checked sites (each site may emit twice when nameFallback is different)
+  const checkedUnique = useMemo(() => [...new Set(sitesChecked)], [sitesChecked]);
+
+  // Prefer Bangumi episode name for the header; fall back to CMS label
+  // Defined early so effects below can use currentBgmEp?.id as a dependency.
+  const currentBgmEp = bgmEpisodes.find((ep) => ep.sort === firstBgmSort + (currentEp ?? 1) - 1);
+
   // Fetch all routes + their episode lists from CMS. Runs on mount; re-runs when searchKey changes.
   useEffect(() => {
     let cancelled = false;
@@ -323,6 +423,11 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
     setCurrentEp(null);
     setPlayerError(null);
     setSearchLoading(true);
+    setSitesChecked([]);
+    setSitesTotal(32);
+    setBlockedSites([]);
+    setManualSelectOpen(false);
+    setVideoReady(false);
     routesAccumRef.current = [];
 
     // Check cache first — skip SSE if we already have results
@@ -331,13 +436,13 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
       setRoutes(cached);
       setSearchLoading(false);
       const eps = cached[0].episodes || [];
-      const found = hintEp != null && eps.find((e) => e.ep === hintEp);
-      setCurrentEp(found ? hintEp : (eps[0]?.ep ?? 1));
+      const cmsHintEp = hintEp != null ? bgmToCms(hintEp) : (eps[0]?.ep ?? 1);
+      setCurrentEp(eps.find((e) => e.ep === cmsHintEp) ? cmsHintEp : (eps[0]?.ep ?? 1));
       return;
     }
 
     const controller = new AbortController();
-    const hardTimer = setTimeout(() => controller.abort(), 20_000);
+    const hardTimer = setTimeout(() => controller.abort(), 50_000);
 
     (async () => {
       try {
@@ -373,14 +478,19 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
                   firstRoute = false;
                   setSearchLoading(false);
                   const eps = msg.source.episodes || [];
-                  const found = hintEp != null && eps.find((e) => e.ep === hintEp);
-                  setCurrentEp(found ? hintEp : (eps[0]?.ep ?? 1));
+                  const cmsHintEp = hintEp != null ? bgmToCms(hintEp) : (eps[0]?.ep ?? 1);
+                  setCurrentEp(eps.find((e) => e.ep === cmsHintEp) ? cmsHintEp : (eps[0]?.ep ?? 1));
                 }
               }
+            } else if (msg.type === "checked") {
+              if (!cancelled) setSitesChecked((prev) => [...prev, msg.site]);
+            } else if (msg.type === "blocked") {
+              if (!cancelled) setBlockedSites((prev) => [...prev, { site: msg.site, url: msg.url }]);
             } else if (msg.type === "done") {
               if (!cancelled) {
                 if (firstRoute) setPlayerError("未找到可用播放源");
                 setSearchLoading(false);
+                if (msg.total) setSitesTotal(msg.total);
                 setCachedRoutes(animeName, routesAccumRef.current);
               }
             }
@@ -400,41 +510,86 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
     return () => { cancelled = true; controller.abort(); clearTimeout(hardTimer); };
   }, [searchKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load video whenever the active episode changes
+  // Load video whenever the active episode changes.
+  // All streams are routed through /api/anime/proxy-stream which injects the
+  // correct Referer header, bypassing CDN Referer checks that cause manifestLoadError.
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !currentEpisode?.playUrl) return;
+    if (!video || !currentEpisode?.url) return;
     setPlayerError(null);
+    setVideoReady(false);
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
 
-    const isMp4 = currentEpisode.type === "mp4" || /\.(mp4|flv|mkv)(\?|$)/i.test(currentEpisode.url || "");
+    let cancelled = false;
 
-    if (isMp4) {
-      video.src = currentEpisode.playUrl;
-      video.play().catch(() => {});
-      video.onerror = () => setPlayerError(`播放失败：${video.error?.message || "未知错误"}`);
-    } else if (Hls.isSupported()) {
-      const hls = new Hls({
-        enableWorker: false,
-        fragLoadingMaxRetry: 1,
-        manifestLoadingMaxRetry: 1,
-        xhrSetup: (xhr) => { xhr.setRequestHeader("Authorization", `Bearer ${authToken}`); },
-      });
-      hlsRef.current = hls;
-      hls.loadSource(currentEpisode.playUrl);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
-      hls.on(Hls.Events.ERROR, (_, data) => {
-        if (data.fatal) { setPlayerError(`播放失败：${data.details}`); hls.destroy(); hlsRef.current = null; }
-      });
-    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      video.src = currentEpisode.playUrl;
-      video.play().catch(() => {});
-      video.onerror = () => setPlayerError(`播放失败：${video.error?.message || "未知错误"}`);
-    } else {
-      setPlayerError("当前浏览器不支持 HLS 播放");
+    async function loadStream() {
+      let streamUrl = currentEpisode.url;
+      let streamReferer = currentEpisode.referer || "";
+
+      // Resolve VIP wrapper pages server-side (HTML extraction → real stream URL + referer)
+      if (currentEpisode.vipWrapped) {
+        try {
+          const r = await fetch(
+            `/api/anime/resolve-url?url=${encodeURIComponent(currentEpisode.url)}`,
+            { headers: { Authorization: `Bearer ${authToken}` } }
+          );
+          const data = await r.json();
+          if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+          if (data.url) { streamUrl = data.url; streamReferer = data.referer || streamReferer; }
+        } catch (e) {
+          if (!cancelled) setPlayerError(`链接解析失败：${e.message}`);
+          return;
+        }
+      }
+
+      if (cancelled) return;
+
+      const isMp4 = currentEpisode.type === "mp4" || /\.(mp4|flv|mkv)(\?|$)/i.test(streamUrl);
+
+      // Route all CDN requests through our server proxy so the correct Referer is sent.
+      // HLS.js segment requests also go through the proxy via the rewritten m3u8 URLs.
+      const proxied = `/api/anime/proxy-stream?url=${encodeURIComponent(streamUrl)}&ref=${encodeURIComponent(streamReferer)}`;
+
+      if (isMp4) {
+        video.src = proxied;
+        video.play().catch(() => {});
+        video.onerror = () => { if (!cancelled) setPlayerError(`播放失败：${video.error?.message || "未知错误"}`); };
+      } else if (Hls.isSupported()) {
+        const hls = new Hls({
+          enableWorker: false,
+          fragLoadingMaxRetry: 1,
+          manifestLoadingMaxRetry: 1,
+          // All HLS.js requests (manifest + segments) go through our proxy endpoint
+          // which requires auth, so we inject the Bearer token here.
+          xhrSetup: (xhr) => {
+            xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
+          },
+        });
+        hlsRef.current = hls;
+        hls.loadSource(proxied);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => { if (!cancelled) video.play().catch(() => {}); });
+        hls.on(Hls.Events.ERROR, (_, data) => {
+          if (data.fatal && !cancelled) {
+            setPlayerError(`播放失败：${data.details}`);
+            hls.destroy();
+            hlsRef.current = null;
+          }
+        });
+      } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        video.src = proxied;
+        video.play().catch(() => {});
+        video.onerror = () => { if (!cancelled) setPlayerError(`播放失败：${video.error?.message || "未知错误"}`); };
+      } else {
+        setPlayerError("当前浏览器不支持 HLS 播放");
+      }
     }
-    return () => { if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; } };
+
+    loadStream();
+    return () => {
+      cancelled = true;
+      if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+    };
   }, [currentEpisode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleRouteSwitch(idx) {
@@ -445,7 +600,213 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
     if (!newEps.find((e) => e.ep === currentEp)) setCurrentEp(newEps[0]?.ep ?? 1);
   }
 
+  // ── Custom player: sync video element events → React state ────────────────
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const syncState = () => {
+      const time = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+      const dur = Number.isFinite(video.duration) ? video.duration : 0;
+      let buffered = time;
+      try {
+        for (let i = 0; i < video.buffered.length; i++) {
+          if (time >= video.buffered.start(i) && time <= video.buffered.end(i)) {
+            buffered = video.buffered.end(i);
+            break;
+          }
+        }
+      } catch { /* ignore */ }
+      setVideoCurrentTime(time);
+      setVideoDuration(dur);
+      setVideoBufferedTime(buffered);
+      setVideoPlaying(!video.paused && !video.ended);
+    };
+    const onPip = () => setPictureInPictureActive(document.pictureInPictureElement === video);
+    const onFs = () => {
+      const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+      setFullscreenActive(Boolean(fsEl && viewportRef.current?.contains(fsEl)));
+    };
+    video.addEventListener("timeupdate", syncState);
+    video.addEventListener("durationchange", syncState);
+    video.addEventListener("progress", syncState);
+    video.addEventListener("play", syncState);
+    video.addEventListener("pause", syncState);
+    video.addEventListener("ended", syncState);
+    video.addEventListener("enterpictureinpicture", onPip);
+    video.addEventListener("leavepictureinpicture", onPip);
+    document.addEventListener("fullscreenchange", onFs);
+    document.addEventListener("webkitfullscreenchange", onFs);
+    return () => {
+      video.removeEventListener("timeupdate", syncState);
+      video.removeEventListener("durationchange", syncState);
+      video.removeEventListener("progress", syncState);
+      video.removeEventListener("play", syncState);
+      video.removeEventListener("pause", syncState);
+      video.removeEventListener("ended", syncState);
+      video.removeEventListener("enterpictureinpicture", onPip);
+      video.removeEventListener("leavepictureinpicture", onPip);
+      document.removeEventListener("fullscreenchange", onFs);
+      document.removeEventListener("webkitfullscreenchange", onFs);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Danmaku: clear + queue display ────────────────────────────────────────
+  function clearActiveDanmaku() {
+    for (const timer of danmakuTimersRef.current.values()) clearTimeout(timer);
+    danmakuTimersRef.current.clear();
+    activeDanmakuIdsRef.current.clear();
+    setActiveDanmaku([]);
+  }
+
+  function enqueueDanmaku(item) {
+    if (!item?.id || activeDanmakuIdsRef.current.has(item.id)) return;
+    const overlayId = `${item.id}:${danmakuSequenceRef.current++}`;
+    const isScroll = item.mode === "scroll";
+    const lane = isScroll
+      ? danmakuScrollLaneRef.current++ % DANMAKU_SCROLL_LANES
+      : item.mode === "top"
+        ? danmakuTopLaneRef.current++ % DANMAKU_FIXED_LANES
+        : danmakuBottomLaneRef.current++ % DANMAKU_FIXED_LANES;
+    const durationMs = isScroll ? DANMAKU_SCROLL_DURATION_MS : DANMAKU_FIXED_DURATION_MS;
+    const next = { ...item, overlayId, lane, durationMs };
+    activeDanmakuIdsRef.current.add(item.id);
+    setActiveDanmaku((prev) => [...prev, next]);
+    const timer = window.setTimeout(() => {
+      danmakuTimersRef.current.delete(overlayId);
+      activeDanmakuIdsRef.current.delete(item.id);
+      setActiveDanmaku((prev) => prev.filter((e) => e.overlayId !== overlayId));
+    }, durationMs + 400);
+    danmakuTimersRef.current.set(overlayId, timer);
+  }
+
+  // ── Danmaku: sync per video frame ─────────────────────────────────────────
+  const danmakuItemsRef = useRef([]);
+  danmakuItemsRef.current = danmakuItems; // always fresh snapshot
+  const danmakuVisibleRef = useRef(danmakuVisible);
+  danmakuVisibleRef.current = danmakuVisible;
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const syncDanmaku = () => {
+      const currentTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+      const previousTime = lastVideoTimeRef.current;
+      const rewound = currentTime + 0.8 < previousTime;
+      if (rewound) {
+        danmakuFiredRef.current = new Set();
+        danmakuScrollLaneRef.current = 0;
+        danmakuTopLaneRef.current = 0;
+        danmakuBottomLaneRef.current = 0;
+        clearActiveDanmaku();
+      }
+      const lowerBound = rewound ? Math.max(0, currentTime - 0.1) : previousTime;
+      const upperBound = currentTime + 0.12;
+      if (danmakuVisibleRef.current) {
+        for (const item of danmakuItemsRef.current) {
+          if (danmakuFiredRef.current.has(item.id)) continue;
+          if (item.timeSec >= lowerBound && item.timeSec < upperBound) {
+            danmakuFiredRef.current.add(item.id);
+            enqueueDanmaku(item);
+          }
+        }
+      }
+      lastVideoTimeRef.current = currentTime;
+    };
+    video.addEventListener("timeupdate", syncDanmaku);
+    return () => video.removeEventListener("timeupdate", syncDanmaku);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Danmaku: fetch from animeko when episode changes ──────────────────────
+  useEffect(() => {
+    const bgmEpId = currentBgmEp?.id;
+    if (!bgmEpId) { setDanmakuItems([]); return; }
+    let cancelled = false;
+    setDanmakuItems([]);
+    danmakuFiredRef.current = new Set();
+    clearActiveDanmaku();
+    lastVideoTimeRef.current = 0;
+    (async () => {
+      try {
+        const r = await fetch(`${ANIMEKO_DANMAKU_CN}/v1/danmaku/${bgmEpId}`, {
+          signal: AbortSignal.timeout(8_000),
+        });
+        if (!r.ok || cancelled) return;
+        const data = await r.json();
+        const items = (data?.danmakuList ?? [])
+          .map(normalizeAnimekoDanmaku)
+          .filter((it) => it.content)
+          .sort((a, b) => a.timeSec - b.timeSec);
+        if (!cancelled) setDanmakuItems(items);
+      } catch { /* silently ignore — danmaku is non-critical */ }
+    })();
+    return () => { cancelled = true; };
+  }, [currentBgmEp?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Custom player actions ──────────────────────────────────────────────────
+  function seekVideoTo(time) {
+    const video = videoRef.current;
+    if (!video) return;
+    const safeDur = Number.isFinite(video.duration) ? video.duration : 0;
+    video.currentTime = Math.max(0, Math.min(time, safeDur || time));
+  }
+
+  function togglePlay() {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) video.play().catch(() => {}); else video.pause();
+  }
+
+  async function togglePip() {
+    const video = videoRef.current;
+    if (!video) return;
+    try {
+      if (document.pictureInPictureElement === video) await document.exitPictureInPicture();
+      else await video.requestPictureInPicture();
+    } catch { /* ignore */ }
+  }
+
+  async function toggleFullscreen() {
+    const el = viewportRef.current;
+    if (!el) return;
+    try {
+      const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+      if (fsEl) {
+        await (document.exitFullscreen?.() ?? document.webkitExitFullscreen?.());
+      } else {
+        await (el.requestFullscreen?.() ?? el.webkitRequestFullscreen?.());
+      }
+    } catch { /* ignore */ }
+  }
+
+  // ── Danmaku overlay renderer ───────────────────────────────────────────────
+  function renderDanmakuLayer() {
+    if (!danmakuVisible || !activeDanmaku.length) return null;
+    return (
+      <div className="previewDanmakuLayer" aria-hidden="true">
+        {activeDanmaku.map((item) => (
+          <div
+            key={item.overlayId}
+            className={`previewDanmakuItem ${item.mode}`}
+            style={{
+              color: item.color,
+              fontSize: `${Math.round(24 * danmakuFontScale)}px`,
+              opacity: danmakuTextOpacity,
+              top: item.mode === "scroll" ? `${14 + item.lane * 9}%` : item.mode === "top" ? `${8 + item.lane * 10}%` : "auto",
+              bottom: item.mode === "bottom" ? `${10 + item.lane * 10}%` : "auto",
+              animationDuration: `${item.durationMs}ms`,
+            }}
+          >
+            <span style={{ backgroundColor: toAlphaColor(danmakuBackgroundOpacity) }}>{item.content}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   const nextRouteIdx = currentRouteIdx + 1 < routes.length ? currentRouteIdx + 1 : null;
+  const episodeTitle = currentBgmEp
+    ? `${String(currentBgmEp.sort).padStart(2, "0")} ${currentBgmEp.name_cn || currentBgmEp.name || ""}`.trim()
+    : currentEpisode ? (currentEpisode.label || `EP${currentEpisode.ep}`) : "";
 
   return (
     <div className="animePlayerPage">
@@ -455,73 +816,268 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
         </button>
         <span className="animePlayerPageTitle">
           {currentRoute?.vodName || animeName}
-          {currentEpisode ? ` · EP${currentEpisode.ep}` : ""}
+          {episodeTitle ? ` · ${episodeTitle}` : ""}
         </span>
       </div>
 
-      <div className="animePlayerPageVideo">
-        {searchLoading ? (
-          <div className="animePlayerError">
-            <Spinner size="medium" label="正在搜索播放源…" />
-          </div>
-        ) : playerError ? (
-          <div className="animePlayerError">
-            <div className="animePlayerErrorMsg">{playerError}</div>
-            {nextRouteIdx !== null && (
-              <button type="button" className="animeSourceBtn active"
-                onClick={() => { handleRouteSwitch(nextRouteIdx); setPlayerError(null); }}>
-                尝试下一个线路 →
-              </button>
-            )}
-          </div>
-        ) : (
-          <video ref={videoRef} className="animePlayerPageVideoEl" controls playsInline autoPlay />
-        )}
-      </div>
+      {/* ── Custom video player + danmaku ───────────────────────── */}
+      <VideoViewportSurface
+        surfaceRef={viewportRef}
+        playing={videoPlaying}
+        className="animePlayerPageVideo"
+        controls={
+          <VideoPlayerControls
+            currentTime={videoCurrentTime}
+            duration={videoDuration}
+            bufferedTime={videoBufferedTime}
+            playing={videoPlaying}
+            pictureInPictureActive={pictureInPictureActive}
+            pageFillActive={false}
+            fullscreenActive={fullscreenActive}
+            canUsePictureInPicture={canUsePip}
+            onTogglePlay={togglePlay}
+            onSeek={seekVideoTo}
+            onTogglePictureInPicture={() => togglePip().catch(() => {})}
+            onTogglePageFill={() => {}}
+            onToggleFullscreen={() => toggleFullscreen().catch(() => {})}
+            showPageFillButton={false}
+          >
+            <VideoDanmakuComposer
+              danmakuVisible={danmakuVisible}
+              danmakuItemsCount={danmakuItems.length}
+              danmakuMode={danmakuMode}
+              onDanmakuModeChange={setDanmakuMode}
+              onToggleDanmakuVisible={() => setDanmakuVisible((v) => !v)}
+              danmakuSettingsOpen={danmakuSettingsOpen}
+              onToggleDanmakuSettings={() => setDanmakuSettingsOpen((v) => !v)}
+              danmakuColor={danmakuColor}
+              onDanmakuColorChange={setDanmakuColor}
+              danmakuBackgroundOpacity={danmakuBackgroundOpacity}
+              onDanmakuBackgroundOpacityChange={(v) => setDanmakuBackgroundOpacity(clampNum(v, 0, 0.9, danmakuBackgroundOpacity))}
+              danmakuTextOpacity={danmakuTextOpacity}
+              onDanmakuTextOpacityChange={(v) => setDanmakuTextOpacity(clampNum(v, 0.2, 1, danmakuTextOpacity))}
+              danmakuFontScale={danmakuFontScale}
+              onDanmakuFontScaleChange={(v) => setDanmakuFontScale(clampNum(v, 0.8, 1.6, danmakuFontScale))}
+              sendDisabled={true}
+            />
+          </VideoPlayerControls>
+        }
+        overlay={
+          <>
+            {renderDanmakuLayer()}
 
+            {/* No source yet — still searching */}
+            {!currentEpisode && !playerError && (
+              <div className="animePlayerOverlay">
+                <div className="animePlayerOverlayText">正在自动选择数据源，请稍候</div>
+              </div>
+            )}
+
+            {/* Source found but video buffering / resolving */}
+            {currentEpisode && !videoReady && !playerError && (
+              <div className="animePlayerOverlay">
+                <Spinner size="small" />
+                <div className="animePlayerOverlayText">正在解析资源链接</div>
+                <div className="animePlayerOverlaySub">通常几秒内完成，否则请切换数据源</div>
+              </div>
+            )}
+
+            {/* Player error */}
+            {playerError && (
+              <div className="animePlayerOverlay">
+                <div className="animePlayerErrorMsg">{playerError}</div>
+                {nextRouteIdx !== null && (
+                  <button type="button" className="animeSourceBtn active"
+                    onClick={() => { handleRouteSwitch(nextRouteIdx); setPlayerError(null); }}>
+                    尝试下一线路 →
+                  </button>
+                )}
+              </div>
+            )}
+          </>
+        }
+        onDoubleClick={() => toggleFullscreen().catch(() => {})}
+      >
+        <video
+          ref={videoRef}
+          className="animePlayerPageVideoEl"
+          style={{ visibility: videoReady && !playerError ? "visible" : "hidden" }}
+          playsInline autoPlay
+          onCanPlay={() => setVideoReady(true)}
+        />
+      </VideoViewportSurface>
+
+      {/* ── Scroll area ─────────────────────────────────────────── */}
       <div className="animePlayerPageScroll">
-        {routes.length > 0 && (
-          <div className="animeSourceBar">
-            <span className="animeSourceBarLabel">线路：</span>
-            {routes.map((r, i) => (
-              <button key={i} type="button"
-                className={`animeSourceBtn${i === currentRouteIdx ? " active" : ""}`}
-                onClick={() => handleRouteSwitch(i)}>
-                {r.site} {r.route}
-              </button>
-            ))}
-            {!searchLoading && (
-              <button type="button" className="animeSourceBtn animeSourceRefreshBtn"
-                title="重新搜索播放源" onClick={handleRefreshSources}>
+
+        {/* Source panel */}
+        <div className="animeSourcePanel">
+          {routes.length === 0 ? (
+            /* Still searching OR done with no results */
+            <>
+              <div className="animeSourcePanelSearchRow">
+                {searchLoading && <span className="animeSourcePulse" />}
+                <span className="animeSourcePanelSearchLabel">
+                  {searchLoading ? "正在自动选择数据源" : "未找到可用播放源"}
+                </span>
+                <button type="button" className="animeSourceManualBtn"
+                  onClick={() => setManualSelectOpen(true)} disabled={routes.length === 0}>
+                  ⇌ 手动选择
+                </button>
+              </div>
+              {searchLoading && (
+                <div className="animeSourceProgressTrack">
+                  <div className="animeSourceProgressFill"
+                    style={{ width: `${Math.min((checkedUnique.length / sitesTotal) * 100, 96)}%` }} />
+                </div>
+              )}
+              <div className="animeSourceCheckedRow">
+                <span className="animeSourceCheckedLabel">已查找：</span>
+                {checkedUnique.slice(0, 6).map((name) => (
+                  <span key={name} className="animeSourceSiteAvatar" title={name}
+                    style={{ background: siteColor(name) }}>
+                    {name[0]}
+                  </span>
+                ))}
+                {checkedUnique.length > 6 && (
+                  <span className="animeSourceCheckedMore">+{checkedUnique.length - 6}</span>
+                )}
+              </div>
+              {!searchLoading && (
+                <button type="button" className="animeSourceBtn animeSourceRefreshBtn"
+                  style={{ marginTop: 10 }} onClick={handleRefreshSources}>
+                  ↻ 重新搜索
+                </button>
+              )}
+            </>
+          ) : (
+            /* Source chosen — found mode */
+            <div className="animeSourcePanelFoundRow">
+              <span className="animeSourceSiteAvatar animeSourceSiteAvatarLg"
+                style={{ background: siteColor(currentRoute?.site || "") }}>
+                {(currentRoute?.site || "?")[0]}
+              </span>
+              <div className="animeSourcePanelFoundInfo">
+                <span className="animeSourcePanelMeta">数据源</span>
+                <span className="animeSourcePanelName">
+                  {currentRoute?.site}
+                  {currentRoute?.route ? ` · ${currentRoute.route}` : ""}
+                </span>
+              </div>
+              <button type="button" className="animeSourceRefreshBtn animeSourceManualBtn"
+                onClick={handleRefreshSources} title="刷新源">
                 ↻ 刷新源
               </button>
-            )}
-          </div>
-        )}
-        {!searchLoading && routes.length === 0 && !playerError && (
-          <div className="animeSourceBar">
-            <button type="button" className="animeSourceBtn animeSourceRefreshBtn"
-              onClick={handleRefreshSources}>
-              ↻ 重新搜索
-            </button>
-          </div>
-        )}
+              <button type="button" className="animeSourceManualBtn"
+                onClick={() => setManualSelectOpen(true)}>
+                ⇌ 更换
+              </button>
+            </div>
+          )}
+        </div>
 
-        {cmsEpisodes.length > 0 && (
+        {/* Episode combobox — Bangumi names preferred, CMS episodes as fallback */}
+        {(bgmEpisodes.length > 0 || cmsEpisodes.length > 0) && (
           <div className="animePlayerPageEps">
-            <div className="animePlayerPageEpsTitle">剧集（共 {cmsEpisodes.length} 集）</div>
-            <div className="animePlayerPageEpList">
-              {cmsEpisodes.map((ep) => (
-                <button key={ep.ep} type="button"
-                  className={`animePlayerEpBtn${ep.ep === currentEpisode?.ep ? " active" : ""}`}
-                  onClick={() => setCurrentEp(ep.ep)}>
-                  EP{ep.ep}
-                </button>
-              ))}
+            <div className="animePlayerPageEpsHeader">
+              <span className="animePlayerPageEpsTitle">
+                剧集（共 {bgmEpisodes.length > 0 ? bgmEpisodes.length : cmsEpisodes.length} 话）
+              </span>
+              <Select
+                className="animeEpSelect"
+                value={currentEp ?? ""}
+                onChange={(_, data) => {
+                  const val = Number(data.value);
+                  if (!Number.isNaN(val)) { setCurrentEp(val); setPlayerError(null); }
+                }}
+              >
+                {bgmEpisodes.length > 0 ? bgmEpisodes.map((ep) => {
+                  const cmsEp = bgmToCms(ep.sort);
+                  const hasStream = cmsEpisodes.some((ce) => ce.ep === cmsEp);
+                  const sortLabel = String(ep.sort).padStart(2, "0");
+                  const epName = ep.name_cn || ep.name || `第${ep.sort}集`;
+                  return (
+                    <option key={ep.id || ep.sort} value={cmsEp} disabled={!hasStream}>
+                      {sortLabel} {epName}
+                    </option>
+                  );
+                }) : cmsEpisodes.map((ep) => (
+                  <option key={ep.ep} value={ep.ep}>
+                    {String(ep.ep).padStart(2, "0")} {ep.label || `第${ep.ep}集`}
+                  </option>
+                ))}
+              </Select>
             </div>
           </div>
         )}
       </div>
+
+      {/* ── Source selection sheet — animeko simple-mode style ──── */}
+      {manualSelectOpen && (
+        <div className="animeManualSelectSheet"
+          onClick={(e) => { if (e.target === e.currentTarget) setManualSelectOpen(false); }}>
+          <div className="animeManualSelectPanel">
+            <div className="animeManualSelectHeader">
+              <span>选择数据源</span>
+              <button type="button" onClick={() => setManualSelectOpen(false)}>
+                <DismissRegular />
+              </button>
+            </div>
+            <div className="animeManualSelectList">
+              {/* Group by site — each site row has route pills like animeko */}
+              {siteGroups.map(({ site, routes: siteRoutes }) => (
+                <div key={site} className="animeSourceSiteRow">
+                  <span className="animeSourceSiteAvatar" style={{ background: siteColor(site) }}>
+                    {site[0]}
+                  </span>
+                  <span className="animeSourceSiteName">{site}</span>
+                  <div className="animeSourceRoutePills">
+                    {siteRoutes.map(({ route, idx }) => (
+                      <button key={idx} type="button"
+                        className={`animeRoutePill${idx === currentRouteIdx ? " active" : ""}`}
+                        onClick={() => { handleRouteSwitch(idx); setManualSelectOpen(false); }}>
+                        {route}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              {searchLoading && (
+                <div className="animeManualSelectLoading">
+                  <Spinner size="tiny" /> 仍在搜索更多源…
+                </div>
+              )}
+              {!searchLoading && siteGroups.length === 0 && blockedSites.length === 0 && (
+                <div className="animeManualSelectLoading">暂无可用数据源</div>
+              )}
+              {/* Blocked/captcha sites — inside the picker with verify links */}
+              {blockedSites.length > 0 && (
+                <div className="animeBlockedInPicker">
+                  <span className="animeBlockedPickerTitle">
+                    以下站点需验证后可用（{blockedSites.length}）
+                  </span>
+                  <div className="animeBlockedPickerList">
+                    {blockedSites.map(({ site, url }) => (
+                      <a key={site} href={url} target="_blank" rel="noreferrer"
+                        className="animeBlockedPickerLink">
+                        <span className="animeSourceSiteAvatar animeBlockedPickerAvatar"
+                          style={{ background: siteColor(site) }}>
+                          {site[0]}
+                        </span>
+                        <span className="animeBlockedPickerName">{site}</span>
+                        <span className="animeBlockedPickerBadge">验证 ↗</span>
+                      </a>
+                    ))}
+                  </div>
+                  <span className="animeBlockedHint" style={{ padding: "4px 0 0" }}>
+                    在浏览器完成验证后，点击"刷新源"重试
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -548,7 +1104,7 @@ function MikanPicker({ keyword, authToken, onPickMagnet, onClose }) {
 
   useEffect(() => {
     setLoading(true);
-    apiRequest(`/api/anime/mikan?q=${encodeURIComponent(keyword)}`, { token: authToken })
+    apiRequest(`/api/anime/bt-search?q=${encodeURIComponent(keyword)}`, { token: authToken })
       .then((data) => setItems(data.items || []))
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
@@ -557,13 +1113,13 @@ function MikanPicker({ keyword, authToken, onPickMagnet, onClose }) {
   return (
     <div className="mikanPicker">
       <div className="mikanPickerHeader">
-        <span className="mikanPickerTitle">蜜柑搜索：{keyword}</span>
+        <span className="mikanPickerTitle">BT 搜索：{keyword}</span>
         <button type="button" className="animeDetailClose" onClick={onClose}><DismissRegular /></button>
       </div>
       {loading && <div className="animePageCenter"><Spinner size="small" label="搜索中…" /></div>}
       {error && <div className="animePageCenter animePageError">搜索失败：{error}</div>}
       {!loading && items.length === 0 && !error && (
-        <div className="animePageCenter animePageEmpty">蜜柑未找到相关种子</div>
+        <div className="animePageCenter animePageEmpty">未找到相关种子</div>
       )}
       {!loading && items.length > 0 && (
         <div className="mikanPickerList">
@@ -577,6 +1133,7 @@ function MikanPicker({ keyword, authToken, onPickMagnet, onClose }) {
             >
               <ArrowDownloadRegular className="mikanPickerIcon" />
               <span className="mikanPickerName">{item.title}</span>
+              {item.sourceName && <span className="mikanPickerSource">{item.sourceName}</span>}
               {item.pubDate && <span className="mikanPickerDate">{item.pubDate.slice(0, 10)}</span>}
             </button>
           ))}
@@ -617,9 +1174,9 @@ function DetailPanel({ subjectId, authToken, onClose, onPlay }) {
       .finally(() => setLoading(false));
   }, [subjectId]);
 
-  // Navigate to player page — player fetches its own episode list from CMS
+  // Navigate to player page — pass Bangumi episodes for episode names
   function handlePlayEpisode(epSort, animeName, animeNameJa) {
-    onPlay({ animeName, animeNameJa, hintEp: epSort });
+    onPlay({ animeName, animeNameJa, hintEp: epSort, bgmEpisodes: episodes || [] });
   }
 
   function handlePickMagnet(item) {
@@ -759,7 +1316,7 @@ function DetailPanel({ subjectId, authToken, onClose, onPlay }) {
               className="animeDownloadBtn"
               onClick={() => setMikanQuery({ keyword: animeName })}
             >
-              蜜柑下载
+              BT 下载
             </Button>
           </div>
 
@@ -803,7 +1360,7 @@ function DetailPanel({ subjectId, authToken, onClose, onPlay }) {
                       <button
                         type="button"
                         className="animeEpDownload"
-                        title={`蜜柑搜索 ${searchKw}`}
+                        title={`BT 下载 ${searchKw}`}
                         onClick={() => setMikanQuery({ keyword: searchKw })}
                       >
                         <ArrowDownloadRegular />

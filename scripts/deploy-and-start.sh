@@ -3,6 +3,7 @@ set -euo pipefail
 
 ENABLE_TURN=false
 ENABLE_TURN_WSL=false
+SKIP_DEPLOY=false
 SERVER_ENV_PATH="server/.env"
 CLIENT_ENV_PATH="storage-client/.env"
 WEB_ENV_PATH="web/.env"
@@ -15,6 +16,10 @@ for arg in "$@"; do
     --enable-turn-wsl)
       ENABLE_TURN_WSL=true
       ;;
+    --skip-deploy)
+      # Skip npm install + build; just (re)start the server processes
+      SKIP_DEPLOY=true
+      ;;
     --server-env=*)
       SERVER_ENV_PATH="${arg#*=}"
       ;;
@@ -26,7 +31,7 @@ for arg in "$@"; do
       ;;
     *)
       echo "Unknown argument: $arg"
-      echo "Usage: ./scripts/deploy-and-start.sh [--enable-turn|--enable-turn-wsl] [--server-env=path] [--client-env=path] [--web-env=path]"
+      echo "Usage: ./scripts/deploy-and-start.sh [--enable-turn|--enable-turn-wsl] [--skip-deploy] [--server-env=path] [--client-env=path] [--web-env=path]"
       exit 1
       ;;
   esac
@@ -104,13 +109,40 @@ else
 fi
 
 echo "[4/6] Installing dependencies..."
-npm install
+if [[ "$SKIP_DEPLOY" == "true" ]]; then
+  echo "  (skipped — --skip-deploy)"
+else
+  npm install
+fi
 
 echo "[5/6] Building web..."
-npm run build -w web
+if [[ "$SKIP_DEPLOY" == "true" ]]; then
+  echo "  (skipped — --skip-deploy)"
+else
+  npm run build -w web
+fi
 
 echo "[6/6] Starting server and storage client..."
 mkdir -p .run
+
+# Stop old server/client processes before starting new ones to avoid port conflicts
+stop_old() {
+  local pid_file="$1"
+  local name="$2"
+  if [[ -f "$pid_file" ]]; then
+    local old_pid
+    old_pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+      echo "  Stopping old $name (pid=$old_pid)..."
+      kill "$old_pid" 2>/dev/null || true
+      sleep 1
+      kill -0 "$old_pid" 2>/dev/null && kill -9 "$old_pid" 2>/dev/null || true
+    fi
+    rm -f "$pid_file"
+  fi
+}
+stop_old .run/server.pid server
+stop_old .run/storage-client.pid storage-client
 
 nohup npm run start -w server > .run/server.log 2>&1 &
 SERVER_PID=$!
