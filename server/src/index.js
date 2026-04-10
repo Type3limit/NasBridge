@@ -2395,23 +2395,61 @@ app.post("/api/anime/prepare-download", requireAuth, (req, res) => {
 });
 
 // GET /api/anime/stream-download/:token
-// No auth required (the token is single-use). Runs ffmpeg to pipe the
-// HLS/MP4 stream directly to the HTTP response as an MP4 container.
+// No auth required (the token is single-use). Proxies the remote video stream
+// to the HTTP response so that storage-client's aria2 can download it.
+// Uses ffmpeg for HLS streams; plain HTTP proxy for direct MP4/media URLs.
 app.get("/api/anime/stream-download/:token", async (req, res) => {
   const info = animeDownloadTokens.get(req.params.token);
   if (!info) return res.status(404).json({ error: "token expired or invalid" });
   // Consume token — single use
   animeDownloadTokens.delete(req.params.token);
 
+  const isHls = /\.m3u8(\?|$)/i.test(info.url);
+
+  // ── Direct HTTP proxy for non-HLS URLs (no ffmpeg needed) ──
+  if (!isHls) {
+    try {
+      const headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+      };
+      if (info.referer) headers["Referer"] = info.referer;
+
+      const upstream = await fetch(info.url, {
+        headers,
+        signal: AbortSignal.timeout(30_000),
+        redirect: "follow",
+      });
+      if (!upstream.ok) {
+        console.error(`[stream-download] upstream HTTP ${upstream.status} for ${info.url}`);
+        return res.status(502).json({ error: `upstream HTTP ${upstream.status}` });
+      }
+
+      const ct = upstream.headers.get("content-type") || "video/mp4";
+      const cl = upstream.headers.get("content-length");
+      res.setHeader("Content-Type", ct);
+      res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(info.filename)}"`);
+      if (cl) res.setHeader("Content-Length", cl);
+
+      const { Readable } = await import("node:stream");
+      Readable.fromWeb(upstream.body).pipe(res);
+      req.on("close", () => { try { upstream.body?.cancel(); } catch {} });
+      return;
+    } catch (e) {
+      console.error("[stream-download] direct proxy error:", e.message);
+      if (!res.headersSent) return res.status(502).json({ error: e.message });
+      return res.end();
+    }
+  }
+
+  // ── HLS streams: use ffmpeg to remux to MP4 ──
   const ffArgs = [];
-  const headers = [
+  const hdrs = [
     "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
   ];
-  if (info.referer) headers.push(`Referer: ${info.referer}`);
-  ffArgs.push("-headers", headers.join("\r\n") + "\r\n");
+  if (info.referer) hdrs.push(`Referer: ${info.referer}`);
+  ffArgs.push("-headers", hdrs.join("\r\n") + "\r\n");
   ffArgs.push("-i", info.url);
   ffArgs.push("-c", "copy");
-  // Output to stdout as mp4 (fragmented so we can stream without seeking)
   ffArgs.push("-movflags", "frag_keyframe+empty_moov");
   ffArgs.push("-f", "mp4");
   ffArgs.push("pipe:1");
@@ -2422,20 +2460,25 @@ app.get("/api/anime/stream-download/:token", async (req, res) => {
   try {
     const proc = spawn("ffmpeg", ffArgs, { stdio: ["ignore", "pipe", "pipe"] });
 
-    proc.stdout.pipe(res);
+    let stderrChunks = [];
+    proc.stderr.on("data", (chunk) => stderrChunks.push(chunk));
 
     proc.on("error", (err) => {
-      console.error("[stream-download] ffmpeg error:", err.message);
-      if (!res.headersSent) res.status(500).json({ error: err.message });
+      console.error("[stream-download] ffmpeg spawn error:", err.message);
+      if (!res.headersSent) res.status(500).json({ error: `ffmpeg not available: ${err.message}` });
       else res.end();
     });
 
+    proc.stdout.pipe(res);
+
     proc.on("close", (code) => {
-      if (code !== 0) console.error(`[stream-download] ffmpeg exited with code ${code}`);
+      if (code !== 0) {
+        const stderr = Buffer.concat(stderrChunks).toString().slice(-500);
+        console.error(`[stream-download] ffmpeg exited ${code}: ${stderr}`);
+      }
       if (!res.writableEnded) res.end();
     });
 
-    // If client disconnects, kill ffmpeg
     req.on("close", () => { try { proc.kill("SIGTERM"); } catch {} });
   } catch (e) {
     if (!res.headersSent) res.status(500).json({ error: e.message });
