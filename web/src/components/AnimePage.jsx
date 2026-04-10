@@ -79,6 +79,30 @@ async function fetchCalendar() {
   return res.json();
 }
 
+// Fetch trending/popular anime from Bangumi (sorted by popularity for recommendations)
+async function fetchTrending(limit = 24) {
+  const res = await fetch(`${BGM_API}/v0/search/subjects?limit=${limit}&offset=0`, {
+    method: "POST",
+    headers: { ...BGM_HEADERS, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      keyword: "",
+      sort: "heat",
+      filter: { type: [ANIME_TYPE], nsfw: false, air_date: [">=" + getCurrentSeasonStart()] },
+    }),
+  });
+  if (!res.ok) throw new Error(`trending ${res.status}`);
+  return res.json(); // { total, data: Subject[] }
+}
+
+// Get the start date of the current anime season (Jan/Apr/Jul/Oct)
+function getCurrentSeasonStart() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth(); // 0-indexed
+  const seasonMonth = Math.floor(month / 3) * 3 + 1; // 1, 4, 7, 10
+  return `${year}-${String(seasonMonth).padStart(2, "0")}-01`;
+}
+
 async function searchSubjects(keyword, offset = 0, limit = 24) {
   const res = await fetch(`${BGM_API}/v0/search/subjects?limit=${limit}&offset=${offset}`, {
     method: "POST",
@@ -148,8 +172,8 @@ function AnimeCard({ item, onClick }) {
       </div>
       <div className="animeCardInfo">
         <span className="animeCardTitle">{name}</span>
-        {item?.air_date && (
-          <span className="animeCardMeta">{item.air_date}</span>
+        {(item?.air_date || item?.date) && (
+          <span className="animeCardMeta">{item.air_date || item.date}</span>
         )}
       </div>
     </button>
@@ -216,6 +240,82 @@ function ScheduleView({ onSelectAnime }) {
           </div>
         )
       }
+    </div>
+  );
+}
+
+// ─── Recommendation View (shown when no search) ──────────────────────────────
+
+function RecommendationView({ onSelectAnime }) {
+  const [todayAnime, setTodayAnime] = useState(null);
+  const [trending, setTrending] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    Promise.allSettled([
+      fetchCalendar(),
+      fetchTrending(24),
+    ]).then(([calResult, trendResult]) => {
+      if (cancelled) return;
+
+      // Extract today's airing anime from calendar
+      if (calResult.status === "fulfilled") {
+        const todayId = new Date().getDay() || 7; // JS 0=Sun → 7
+        const todayGroup = calResult.value?.find((d) => d.weekday?.id === todayId);
+        setTodayAnime(todayGroup?.items || []);
+      }
+
+      // Set trending data
+      if (trendResult.status === "fulfilled") {
+        setTrending(trendResult.value?.data || []);
+      }
+
+      if (calResult.status === "rejected" && trendResult.status === "rejected") {
+        setError("推荐加载失败");
+      }
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+
+    return () => { cancelled = true; };
+  }, []);
+
+  if (loading) {
+    return <div className="animePageCenter"><Spinner size="large" label="加载推荐…" /></div>;
+  }
+
+  if (error && !todayAnime?.length && !trending?.length) {
+    return <div className="animePageCenter animePageError">{error}</div>;
+  }
+
+  return (
+    <div className="animeRecommendView">
+      {todayAnime && todayAnime.length > 0 && (
+        <section className="animeRecommendSection">
+          <h3 className="animeRecommendTitle">📅 今日放送</h3>
+          <div className="animeGrid">
+            {todayAnime.map((item) => (
+              <AnimeCard key={item.id} item={item} onClick={onSelectAnime} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {trending && trending.length > 0 && (
+        <section className="animeRecommendSection">
+          <h3 className="animeRecommendTitle">🔥 本季热门</h3>
+          <div className="animeGrid">
+            {trending.map((item) => (
+              <AnimeCard key={item.id} item={item} onClick={onSelectAnime} />
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -314,10 +414,7 @@ function SearchView({ onSelectAnime }) {
       )}
 
       {!loading && results === null && (
-        <div className="animePageCenter animePageEmpty" style={{ marginTop: 80 }}>
-          <div style={{ fontSize: 48, marginBottom: 12 }}>🔍</div>
-          <div>输入番剧名称开始搜索</div>
-        </div>
+        <RecommendationView onSelectAnime={onSelectAnime} />
       )}
     </div>
   );

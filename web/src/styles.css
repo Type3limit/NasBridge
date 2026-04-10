@@ -8475,6 +8475,29 @@ button.chatAttachmentTile:disabled {
   text-align: center;
 }
 
+/* ─── Recommendation View ── */
+.animeRecommendView {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.animeRecommendSection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.animeRecommendTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* ─── Detail Panel ── */
 .animePage.hasDetail .animeMain {
   border-right: 1.5px solid var(--stroke);
