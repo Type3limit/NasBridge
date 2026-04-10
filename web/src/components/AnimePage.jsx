@@ -117,6 +117,22 @@ async function searchSubjects(keyword, offset = 0, limit = 24) {
   return res.json(); // { total, data: Subject[] }
 }
 
+// Generic search with tag + year + sort filters (for CatalogView)
+async function searchWithFilters({ tags = [], year, sort = "heat", offset = 0, limit = 24 } = {}) {
+  const filter = { type: [ANIME_TYPE], nsfw: false };
+  if (tags.length > 0) filter.tag = tags;
+  if (year) {
+    filter.air_date = [`>=${year}-01-01`, `<${Number(year) + 1}-01-01`];
+  }
+  const res = await fetch(`${BGM_API}/v0/search/subjects?limit=${limit}&offset=${offset}`, {
+    method: "POST",
+    headers: { ...BGM_HEADERS, "Content-Type": "application/json" },
+    body: JSON.stringify({ keyword: "", sort, filter }),
+  });
+  if (!res.ok) throw new Error(`catalog ${res.status}`);
+  return res.json();
+}
+
 async function fetchSubjectDetail(id) {
   const res = await fetch(`${BGM_API}/v0/subjects/${id}`, { headers: BGM_HEADERS });
   if (!res.ok) throw new Error(`subject ${res.status}`);
@@ -315,6 +331,168 @@ function RecommendationView({ onSelectAnime }) {
             ))}
           </div>
         </section>
+      )}
+    </div>
+  );
+}
+
+// ─── Catalog View (filtered browsing) ─────────────────────────────────────────
+
+const CATALOG_TAGS = [
+  "日常", "搞笑", "战斗", "热血", "奇幻", "科幻", "冒险", "恋爱",
+  "校园", "治愈", "运动", "悬疑", "推理", "百合", "后宫", "机战",
+  "魔法", "励志", "青春", "恐怖", "竞技", "社会", "历史", "职场",
+];
+const CATALOG_YEARS = (() => {
+  const y = new Date().getFullYear();
+  const out = [];
+  for (let i = y; i >= 2000; i--) out.push(String(i));
+  return out;
+})();
+const CATALOG_SORTS = [
+  { value: "heat", label: "热门" },
+  { value: "rank", label: "排名" },
+  { value: "score", label: "评分" },
+];
+const CATALOG_PAGE_SIZE = 24;
+
+function CatalogView({ onSelectAnime }) {
+  const [selectedTags, setSelectedTags] = useState([]);
+  const [selectedYear, setSelectedYear] = useState("");
+  const [sort, setSort] = useState("heat");
+  const [results, setResults] = useState(null);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [autoLoaded, setAutoLoaded] = useState(false);
+
+  const doSearch = useCallback(async (tags, year, sortBy, off) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await searchWithFilters({ tags, year: year || undefined, sort: sortBy, offset: off, limit: CATALOG_PAGE_SIZE });
+      setResults(data.data || []);
+      setTotal(data.total || 0);
+      setOffset(off);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Auto-load on mount (show default "heat" results)
+  useEffect(() => {
+    if (!autoLoaded) {
+      setAutoLoaded(true);
+      doSearch([], "", "heat", 0);
+    }
+  }, [autoLoaded, doSearch]);
+
+  function toggleTag(tag) {
+    const next = selectedTags.includes(tag) ? selectedTags.filter((t) => t !== tag) : [...selectedTags, tag];
+    setSelectedTags(next);
+    doSearch(next, selectedYear, sort, 0);
+  }
+
+  function selectYear(y) {
+    const next = selectedYear === y ? "" : y;
+    setSelectedYear(next);
+    doSearch(selectedTags, next, sort, 0);
+  }
+
+  function changeSort(s) {
+    setSort(s);
+    doSearch(selectedTags, selectedYear, s, 0);
+  }
+
+  function handlePageChange(newOffset) {
+    doSearch(selectedTags, selectedYear, sort, newOffset);
+    window.scrollTo({ top: 0 });
+  }
+
+  const totalPages = Math.ceil(total / CATALOG_PAGE_SIZE);
+  const currentPage = Math.floor(offset / CATALOG_PAGE_SIZE) + 1;
+
+  return (
+    <div className="animeCatalogView">
+      {/* Filters */}
+      <div className="animeCatalogFilters">
+        <div className="animeCatalogFilterRow">
+          <span className="animeCatalogLabel">类型</span>
+          <div className="animeCatalogChips">
+            {CATALOG_TAGS.map((tag) => (
+              <button
+                key={tag}
+                type="button"
+                className={`animeCatalogChip${selectedTags.includes(tag) ? " active" : ""}`}
+                onClick={() => toggleTag(tag)}
+              >{tag}</button>
+            ))}
+          </div>
+        </div>
+        <div className="animeCatalogFilterRow">
+          <span className="animeCatalogLabel">年份</span>
+          <div className="animeCatalogChips">
+            {CATALOG_YEARS.map((y) => (
+              <button
+                key={y}
+                type="button"
+                className={`animeCatalogChip${selectedYear === y ? " active" : ""}`}
+                onClick={() => selectYear(y)}
+              >{y}</button>
+            ))}
+          </div>
+        </div>
+        <div className="animeCatalogFilterRow">
+          <span className="animeCatalogLabel">排序</span>
+          <div className="animeCatalogChips">
+            {CATALOG_SORTS.map((s) => (
+              <button
+                key={s.value}
+                type="button"
+                className={`animeCatalogChip${sort === s.value ? " active" : ""}`}
+                onClick={() => changeSort(s.value)}
+              >{s.label}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Results */}
+      {loading && <div className="animePageCenter"><Spinner size="large" label="加载中…" /></div>}
+      {error && <div className="animePageCenter animePageError">加载失败：{error}</div>}
+
+      {!loading && results !== null && (
+        <>
+          <div className="animeSearchMeta">
+            共 {total} 部，第 {currentPage} / {totalPages || 1} 页
+          </div>
+          {results.length === 0
+            ? <div className="animePageCenter animePageEmpty">没有找到符合条件的番剧</div>
+            : (
+              <div className="animeGrid">
+                {results.map((item) => (
+                  <AnimeCard key={item.id} item={item} onClick={onSelectAnime} />
+                ))}
+              </div>
+            )
+          }
+          {totalPages > 1 && (
+            <div className="animePageNav">
+              <Button
+                disabled={offset === 0}
+                onClick={() => handlePageChange(offset - CATALOG_PAGE_SIZE)}
+              >上一页</Button>
+              <span className="animePageNavLabel">{currentPage} / {totalPages}</span>
+              <Button
+                disabled={currentPage >= totalPages}
+                onClick={() => handlePageChange(offset + CATALOG_PAGE_SIZE)}
+              >下一页</Button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -1488,6 +1666,7 @@ function DetailPanel({ subjectId, authToken, onClose, onPlay }) {
 
 const TABS = [
   { id: "schedule", label: "新番时间表" },
+  { id: "catalog", label: "目录" },
   { id: "search", label: "搜索番剧" },
 ];
 
@@ -1534,6 +1713,9 @@ export default function AnimePage({ authToken }) {
         <div className="animeContent">
           {activeTab === "schedule" && (
             <ScheduleView onSelectAnime={handleSelectAnime} />
+          )}
+          {activeTab === "catalog" && (
+            <CatalogView onSelectAnime={handleSelectAnime} />
           )}
           {activeTab === "search" && (
             <SearchView onSelectAnime={handleSelectAnime} />
