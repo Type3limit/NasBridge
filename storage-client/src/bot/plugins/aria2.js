@@ -624,7 +624,7 @@ export function createAria2DownloaderPlugin() {
     displayName: "aria2 下载助手",
     description: "通过 aria2 下载磁力链接、电驴链接（ed2k://）及 HTTP(S) 文件，并自动入库。",
     kind: "task",
-    aliases: ["dl", "aria2", "下载"],
+    aliases: ["aria2"],
     capabilities: ["download"],
     permissions: {
       readStorage: true,
