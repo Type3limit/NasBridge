@@ -9135,6 +9135,8 @@ button.chatAttachmentTile:disabled {
 }
 .animeSourceManualBtn:hover { color: var(--text); border-color: #666; }
 .animeSourceManualBtn:disabled { opacity: 0.35; cursor: default; }
+.animeDownloadEpBtn.downloading { color: var(--accent, #3b82f6); border-color: var(--accent, #3b82f6); }
+.animeDownloadEpBtn.done { color: #22c55e; border-color: #22c55e; }
 
 /* Progress track */
 .animeSourceProgressTrack {

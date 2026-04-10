@@ -629,6 +629,9 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
   const [blockedSites, setBlockedSites] = useState([]); // sites returning Cloudflare/captcha challenges
   const [manualSelectOpen, setManualSelectOpen] = useState(false);
   const [videoReady, setVideoReady] = useState(false);
+  const [downloadStatus, setDownloadStatus] = useState(null); // null | "downloading" | "done" | "failed"
+  const [downloadError, setDownloadError] = useState(null);
+  const resolvedStreamRef = useRef(null); // { url, referer } after VIP resolution
   const videoRef = useRef(null);
   const hlsRef = useRef(null);
   const routesAccumRef = useRef([]); // accumulates routes during SSE for caching
@@ -665,6 +668,60 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
   function handleRefreshSources() {
     SOURCE_CACHE.delete(animeName);
     setSearchKey((k) => k + 1);
+  }
+
+  // Download the currently playing episode to server storage
+  async function handleDownloadEpisode() {
+    if (!currentEpisode?.url || downloadStatus === "downloading") return;
+    setDownloadStatus("downloading");
+    setDownloadError(null);
+
+    // Build episode name from Bangumi or CMS data
+    const bgmEp = bgmEpisodes.find((ep) => ep.sort === firstBgmSort + (currentEp ?? 1) - 1);
+    const epLabel = bgmEp
+      ? `EP${String(bgmEp.sort).padStart(2, "0")} ${bgmEp.name_cn || bgmEp.name || ""}`
+      : (currentEpisode.label || `EP${currentEp || 1}`);
+
+    try {
+      // Use the resolved stream URL (after VIP wrapper extraction) if available
+      const resolved = resolvedStreamRef.current;
+      const dlUrl = resolved?.url || currentEpisode.url;
+      const dlReferer = resolved?.referer || currentEpisode.referer || "";
+
+      const result = await apiRequest("/api/anime/download-episode", {
+        method: "POST",
+        token: authToken,
+        body: {
+          url: dlUrl,
+          referer: dlReferer,
+          animeName,
+          episodeName: epLabel.trim(),
+          type: currentEpisode.type || "hls",
+        },
+      });
+      // Poll for completion
+      if (result.jobId) {
+        const poll = setInterval(async () => {
+          try {
+            const jobs = await apiRequest("/api/anime/download-jobs", { token: authToken });
+            const job = jobs.jobs?.find((j) => j.id === result.jobId);
+            if (!job || job.status === "done") {
+              clearInterval(poll);
+              setDownloadStatus("done");
+            } else if (job.status === "failed") {
+              clearInterval(poll);
+              setDownloadStatus("failed");
+              setDownloadError(job.error || "下载失败");
+            }
+          } catch { /* ignore poll errors */ }
+        }, 3000);
+        // Stop polling after 30 minutes max
+        setTimeout(() => clearInterval(poll), 30 * 60 * 1000);
+      }
+    } catch (e) {
+      setDownloadStatus("failed");
+      setDownloadError(e.message);
+    }
   }
 
   const currentRoute = routes[currentRouteIdx] ?? null;
@@ -818,6 +875,9 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
       }
 
       if (cancelled) return;
+
+      // Store resolved URL for download handler
+      resolvedStreamRef.current = { url: streamUrl, referer: streamReferer };
 
       const isMp4 = currentEpisode.type === "mp4" || /\.(mp4|flv|mkv)(\?|$)/i.test(streamUrl);
 
@@ -1247,6 +1307,15 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
                 onClick={() => setManualSelectOpen(true)}>
                 ⇌ 更换
               </button>
+              <button
+                type="button"
+                className={`animeSourceManualBtn animeDownloadEpBtn${downloadStatus === "downloading" ? " downloading" : ""}${downloadStatus === "done" ? " done" : ""}`}
+                onClick={handleDownloadEpisode}
+                disabled={!currentEpisode?.url || downloadStatus === "downloading"}
+                title={downloadStatus === "done" ? "下载完成" : downloadStatus === "failed" ? (downloadError || "下载失败") : "下载当前集"}
+              >
+                {downloadStatus === "downloading" ? "⏳ 下载中…" : downloadStatus === "done" ? "✓ 已下载" : "↓ 下载"}
+              </button>
             </div>
           )}
         </div>
@@ -1263,7 +1332,7 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
                 value={currentEp ?? ""}
                 onChange={(_, data) => {
                   const val = Number(data.value);
-                  if (!Number.isNaN(val)) { setCurrentEp(val); setPlayerError(null); }
+                  if (!Number.isNaN(val)) { setCurrentEp(val); setPlayerError(null); setDownloadStatus(null); setDownloadError(null); resolvedStreamRef.current = null; }
                 }}
               >
                 {bgmEpisodes.length > 0 ? bgmEpisodes.map((ep) => {
@@ -1426,8 +1495,6 @@ function DetailPanel({ subjectId, authToken, onClose, onPlay }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [episodesExpanded, setEpisodesExpanded] = useState(false);
-  const [mikanQuery, setMikanQuery] = useState(null);
-  const [copiedInfo, setCopiedInfo] = useState(null);
 
   useEffect(() => {
     if (!subjectId) return;
@@ -1436,7 +1503,6 @@ function DetailPanel({ subjectId, authToken, onClose, onPlay }) {
     setDetail(null);
     setEpisodes(null);
     setEpisodesExpanded(false);
-    setMikanQuery(null);
     Promise.all([
       fetchSubjectDetail(subjectId),
       fetchEpisodes(subjectId)
@@ -1452,20 +1518,6 @@ function DetailPanel({ subjectId, authToken, onClose, onPlay }) {
   // Navigate to player page — pass Bangumi episodes for episode names
   function handlePlayEpisode(epSort, animeName, animeNameJa) {
     onPlay({ animeName, animeNameJa, hintEp: epSort, bgmEpisodes: episodes || [] });
-  }
-
-  function handlePickMagnet(item) {
-    const magnet = item.magnet || item.link;
-    if (!magnet) return;
-    navigator.clipboard?.writeText(magnet).catch(() => {});
-    setCopiedInfo({ magnet, title: item.title });
-    setMikanQuery(null);
-  }
-
-  function handleOpenTorrentBot(magnet) {
-    const chatText = `@torrent ${magnet}`;
-    window.dispatchEvent(new CustomEvent("anime:fill-chat", { detail: { text: chatText } }));
-    setCopiedInfo(null);
   }
 
   const score = detail?.rating?.score;
@@ -1511,34 +1563,7 @@ function DetailPanel({ subjectId, authToken, onClose, onPlay }) {
       {loading && <div className="animePageCenter" style={{ minHeight: 200 }}><Spinner size="large" label="加载中…" /></div>}
       {error && <div className="animePageCenter animePageError">加载失败：{error}</div>}
 
-      {copiedInfo && (
-        <div className="mikanCopiedBanner">
-          <div className="mikanCopiedTitle" title={copiedInfo.title}>已复制：{copiedInfo.title}</div>
-          <div className="mikanCopiedActions">
-            <button
-              type="button"
-              className="mikanCopiedBtn primary"
-              onClick={() => handleOpenTorrentBot(copiedInfo.magnet)}
-            >
-              发送给 torrent bot 下载
-            </button>
-            <button type="button" className="mikanCopiedBtn" onClick={() => setCopiedInfo(null)}>
-              关闭
-            </button>
-          </div>
-        </div>
-      )}
-
-      {mikanQuery && (
-        <MikanPicker
-          keyword={mikanQuery.keyword}
-          authToken={authToken}
-          onPickMagnet={handlePickMagnet}
-          onClose={() => setMikanQuery(null)}
-        />
-      )}
-
-      {detail && !loading && !mikanQuery && (
+      {detail && !loading && (
         <div className="animeDetailBody">
           <div className="animeDetailHero">
             {img && <img src={img} alt={animeName} className="animeDetailPoster" />}
@@ -1585,14 +1610,6 @@ function DetailPanel({ subjectId, authToken, onClose, onPlay }) {
             >
               开始观看
             </Button>
-            <Button
-              appearance="outline"
-              icon={<ArrowDownloadRegular />}
-              className="animeDownloadBtn"
-              onClick={() => setMikanQuery({ keyword: animeName })}
-            >
-              BT 下载
-            </Button>
           </div>
 
           {tags.length > 0 && (
@@ -1618,7 +1635,6 @@ function DetailPanel({ subjectId, authToken, onClose, onPlay }) {
               <div className="animeEpisodeList">
                 {visibleEpisodes.map((ep) => {
                   const epName = ep.name_cn || ep.name || `第 ${ep.sort} 集`;
-                  const searchKw = `${animeName} ${ep.sort}`;
                   return (
                     <div key={ep.id} className="animeEpisodeItem">
                       <span className="animeEpNum">EP{ep.sort}</span>
@@ -1631,14 +1647,6 @@ function DetailPanel({ subjectId, authToken, onClose, onPlay }) {
                         onClick={() => handlePlayEpisode(ep.sort, animeName, animeNameJa)}
                       >
                         <PlayRegular />
-                      </button>
-                      <button
-                        type="button"
-                        className="animeEpDownload"
-                        title={`BT 下载 ${searchKw}`}
-                        onClick={() => setMikanQuery({ keyword: searchKw })}
-                      >
-                        <ArrowDownloadRegular />
                       </button>
                     </div>
                   );
