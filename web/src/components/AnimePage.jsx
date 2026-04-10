@@ -607,7 +607,7 @@ function siteColor(name) {
 // ─── Full-page Player ─────────────────────────────────────────────────────────
 // playerState = { animeName, animeNameJa, hintEp, bgmEpisodes }
 // Episode names come from Bangumi (bgmEpisodes); stream URLs from CMS sources.
-function AnimePlayerPage({ playerState, authToken, onBack }) {
+function AnimePlayerPage({ playerState, authToken, p2p, clients, onBack }) {
   const { animeName, animeNameJa, hintEp, bgmEpisodes = [] } = playerState;
 
   // Bangumi may number episodes globally across seasons (e.g. S2 ep1 = sort 29).
@@ -672,6 +672,15 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
   // Download the currently playing episode to server storage
   async function handleDownloadEpisode() {
     if (!currentEpisode?.url || downloadStatus === "downloading") return;
+
+    // Need an online storage-client for aria2 download
+    const onlineClients = (clients || []).filter((c) => c.status === "online");
+    if (!onlineClients.length || !p2p) {
+      setDownloadError("没有在线的存储终端");
+      setDownloadStatus("failed");
+      return;
+    }
+
     setDownloadStatus("downloading");
     setDownloadError(null);
 
@@ -687,7 +696,8 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
       const dlUrl = resolved?.url || currentEpisode.url;
       const dlReferer = resolved?.referer || currentEpisode.referer || "";
 
-      const result = await apiRequest("/api/anime/download-episode", {
+      // Step 1: Ask server to prepare a one-time streaming download URL
+      const prepared = await apiRequest("/api/anime/prepare-download", {
         method: "POST",
         token: authToken,
         body: {
@@ -695,28 +705,49 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
           referer: dlReferer,
           animeName,
           episodeName: epLabel.trim(),
-          type: currentEpisode.type || "hls",
         },
       });
-      // Poll for completion
-      if (result.jobId) {
-        const poll = setInterval(async () => {
-          try {
-            const jobs = await apiRequest("/api/anime/download-jobs", { token: authToken });
-            const job = jobs.jobs?.find((j) => j.id === result.jobId);
-            if (!job || job.status === "done") {
-              clearInterval(poll);
-              setDownloadStatus("done");
-            } else if (job.status === "failed") {
-              clearInterval(poll);
-              setDownloadStatus("failed");
-              setDownloadError(job.error || "下载失败");
-            }
-          } catch { /* ignore poll errors */ }
-        }, 3000);
-        // Stop polling after 30 minutes max
-        setTimeout(() => clearInterval(poll), 30 * 60 * 1000);
+
+      if (!prepared.downloadUrl) throw new Error("服务器未返回下载链接");
+
+      // Step 2: Invoke aria2 bot on storage-client with the streaming URL
+      const clientId = onlineClients[0].id;
+      const { job } = await p2p.invokeBot(clientId, {
+        botId: "aria2.downloader",
+        trigger: {
+          type: "card-action",
+          rawText: "",
+          parsedArgs: {
+            url: prepared.downloadUrl,
+            targetFolder: prepared.targetFolder || `anime/${animeName}`,
+          },
+        },
+      });
+
+      // Step 3: Poll bot job status
+      const jobId = job?.jobId;
+      if (!jobId) {
+        setDownloadStatus("done");
+        return;
       }
+
+      const poll = setInterval(async () => {
+        try {
+          const { job: latestJob } = await p2p.getBotJob(clientId, jobId);
+          if (!latestJob) { clearInterval(poll); setDownloadStatus("done"); return; }
+          if (latestJob.status === "succeeded") {
+            clearInterval(poll);
+            setDownloadStatus("done");
+          } else if (latestJob.status === "failed" || latestJob.status === "cancelled") {
+            clearInterval(poll);
+            setDownloadStatus("failed");
+            setDownloadError(latestJob.error || "下载失败");
+          }
+        } catch { /* ignore poll errors */ }
+      }, 5000);
+      // Stop polling after 30 minutes max
+      setTimeout(() => clearInterval(poll), 30 * 60 * 1000);
+
     } catch (e) {
       setDownloadStatus("failed");
       setDownloadError(e.message);
@@ -1307,15 +1338,17 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
                 onClick={() => setManualSelectOpen(true)}>
                 ⇌ 更换
               </button>
-              <button
-                type="button"
-                className={`animeSourceManualBtn animeDownloadEpBtn${downloadStatus === "downloading" ? " downloading" : ""}${downloadStatus === "done" ? " done" : ""}`}
-                onClick={handleDownloadEpisode}
-                disabled={!currentEpisode?.url || downloadStatus === "downloading"}
-                title={downloadStatus === "done" ? "下载完成" : downloadStatus === "failed" ? (downloadError || "下载失败") : "下载当前集"}
-              >
-                {downloadStatus === "downloading" ? "⏳ 下载中…" : downloadStatus === "done" ? "✓ 已下载" : "↓ 下载"}
-              </button>
+              {videoReady && !playerError && (
+                <button
+                  type="button"
+                  className={`animeSourceManualBtn animeDownloadEpBtn${downloadStatus === "downloading" ? " downloading" : ""}${downloadStatus === "done" ? " done" : ""}`}
+                  onClick={handleDownloadEpisode}
+                  disabled={downloadStatus === "downloading"}
+                  title={downloadStatus === "done" ? "下载完成" : downloadStatus === "failed" ? (downloadError || "下载失败") : "下载当前集到NAS"}
+                >
+                  {downloadStatus === "downloading" ? "⏳ 下载中…" : downloadStatus === "done" ? "✓ 已下载" : downloadStatus === "failed" ? "✕ 失败" : "↓ 下载"}
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -1678,7 +1711,7 @@ const TABS = [
   { id: "search", label: "搜索番剧" },
 ];
 
-export default function AnimePage({ authToken }) {
+export default function AnimePage({ authToken, p2p, clients }) {
   const [activeTab, setActiveTab] = useState("schedule");
   const [selectedSubjectId, setSelectedSubjectId] = useState(null);
   const [playerState, setPlayerState] = useState(null); // {sources,episodes,animeName,currentEp}
@@ -1697,6 +1730,8 @@ export default function AnimePage({ authToken }) {
       <AnimePlayerPage
         playerState={playerState}
         authToken={authToken}
+        p2p={p2p}
+        clients={clients}
         onBack={() => setPlayerState(null)}
       />
     );

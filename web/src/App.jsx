@@ -2009,7 +2009,7 @@ export default function App() {
     if (activeWorkspaceTab === "anime") {
       return (
         <Suspense fallback={<Spinner size="large" />}>
-          <AnimePage authToken={token} />
+          <AnimePage authToken={token} p2p={p2p} clients={clients} />
         </Suspense>
       );
     }

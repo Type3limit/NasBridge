@@ -2290,128 +2290,96 @@ app.post("/api/anime/reload-subscription", requireAuth, async (req, res) => {
 
 // ─── Anime Episode Download (ffmpeg-based) ────────────────────────────────────
 
-const ANIME_DL_DIR = path.resolve(process.env.ANIME_DOWNLOAD_DIR || path.join(process.cwd(), "server/data/anime-downloads"));
-const animeDownloadJobs = new Map();
+// ─── Anime download: prepare-download creates a one-time token, stream-download
+// uses ffmpeg to pipe the stream (HLS or MP4) to the HTTP response so that
+// storage-client's aria2 can download it as a plain HTTP file. ─────────────────
+const animeDownloadTokens = new Map(); // token → { url, referer, filename, createdAt }
 
 function sanitizeFilename(name = "") {
   return String(name || "download").replace(/[<>:"/\\|?*\x00-\x1F]+/g, "_").replace(/\s+/g, " ").trim() || "download";
 }
 
-// POST /api/anime/download-episode
-// Body: { url, referer, animeName, episodeName, type: "hls"|"mp4" }
-app.post("/api/anime/download-episode", requireAuth, async (req, res) => {
-  const { url, referer, animeName, episodeName, type } = req.body || {};
+// POST /api/anime/prepare-download
+// Body: { url, referer, animeName, episodeName }
+// Returns a one-time download URL that storage-client's aria2 can fetch.
+app.post("/api/anime/prepare-download", requireAuth, (req, res) => {
+  const { url, referer, animeName, episodeName } = req.body || {};
   if (!url) return res.status(400).json({ error: "url required" });
-  if (!animeName) return res.status(400).json({ error: "animeName required" });
 
-  const safeName = sanitizeFilename(animeName);
+  const safeName = sanitizeFilename(animeName || "anime");
   const safeEp = sanitizeFilename(episodeName || "episode");
-  const folder = path.join(ANIME_DL_DIR, safeName);
-  const outFile = path.join(folder, `${safeEp}.mp4`);
+  const filename = `${safeEp}.mp4`;
 
-  // Avoid duplicate download of same file
-  for (const [, job] of animeDownloadJobs) {
-    if (job.outFile === outFile && (job.status === "downloading" || job.status === "queued")) {
-      return res.json({ jobId: job.id, status: job.status, message: "已在下载中" });
-    }
-  }
+  const token = `adl-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  animeDownloadTokens.set(token, {
+    url, referer: referer || "", filename,
+    animeName: safeName, episodeName: safeEp,
+    createdAt: Date.now(),
+  });
 
-  try {
-    await fs.promises.mkdir(folder, { recursive: true });
-  } catch (e) {
-    return res.status(500).json({ error: `创建目录失败: ${e.message}` });
-  }
+  // Auto-expire tokens after 15 minutes
+  setTimeout(() => animeDownloadTokens.delete(token), 15 * 60 * 1000);
 
-  const jobId = `dl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const job = {
-    id: jobId,
-    animeName: safeName,
-    episodeName: safeEp,
-    outFile,
-    status: "downloading",
-    progress: "",
-    startedAt: Date.now(),
-    error: null,
-  };
-  animeDownloadJobs.set(jobId, job);
+  // Build the full download URL for aria2 (no auth needed — token IS auth)
+  const proto = req.headers["x-forwarded-proto"] || req.protocol || "https";
+  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  const downloadUrl = `${proto}://${host}/api/anime/stream-download/${token}`;
 
-  // Build ffmpeg command
+  res.json({ token, downloadUrl, targetFolder: `anime/${safeName}`, filename });
+});
+
+// GET /api/anime/stream-download/:token
+// No auth required (the token is single-use). Runs ffmpeg to pipe the
+// HLS/MP4 stream directly to the HTTP response as an MP4 container.
+app.get("/api/anime/stream-download/:token", async (req, res) => {
+  const info = animeDownloadTokens.get(req.params.token);
+  if (!info) return res.status(404).json({ error: "token expired or invalid" });
+  // Consume token — single use
+  animeDownloadTokens.delete(req.params.token);
+
   const ffArgs = [];
-  // Set referer/user-agent for HTTP input
   const headers = [
     "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
   ];
-  if (referer) headers.push(`Referer: ${referer}`);
+  if (info.referer) headers.push(`Referer: ${info.referer}`);
   ffArgs.push("-headers", headers.join("\r\n") + "\r\n");
-  ffArgs.push("-i", url);
-  ffArgs.push("-c", "copy"); // no re-encoding
-  ffArgs.push("-y"); // overwrite
-  ffArgs.push("-movflags", "+faststart");
-  ffArgs.push(outFile);
+  ffArgs.push("-i", info.url);
+  ffArgs.push("-c", "copy");
+  // Output to stdout as mp4 (fragmented so we can stream without seeking)
+  ffArgs.push("-movflags", "frag_keyframe+empty_moov");
+  ffArgs.push("-f", "mp4");
+  ffArgs.push("pipe:1");
+
+  res.setHeader("Content-Type", "video/mp4");
+  res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(info.filename)}"`);
 
   try {
     const proc = spawn("ffmpeg", ffArgs, { stdio: ["ignore", "pipe", "pipe"] });
-    let stderrBuf = "";
 
-    proc.stderr.on("data", (chunk) => {
-      stderrBuf += chunk.toString();
-      // Extract progress from ffmpeg stderr (time=XX:XX:XX.XX)
-      const timeMatch = stderrBuf.match(/time=(\d{2}:\d{2}:\d{2}\.\d{2})/g);
-      if (timeMatch) {
-        job.progress = timeMatch[timeMatch.length - 1].replace("time=", "");
-      }
-      // Keep only last 4KB of stderr to avoid memory bloat
-      if (stderrBuf.length > 4096) stderrBuf = stderrBuf.slice(-4096);
+    proc.stdout.pipe(res);
+
+    proc.on("error", (err) => {
+      console.error("[stream-download] ffmpeg error:", err.message);
+      if (!res.headersSent) res.status(500).json({ error: err.message });
+      else res.end();
     });
 
     proc.on("close", (code) => {
-      if (code === 0) {
-        job.status = "done";
-        job.finishedAt = Date.now();
-      } else {
-        job.status = "failed";
-        job.error = `ffmpeg exited with code ${code}`;
-        job.finishedAt = Date.now();
-      }
+      if (code !== 0) console.error(`[stream-download] ffmpeg exited with code ${code}`);
+      if (!res.writableEnded) res.end();
     });
 
-    proc.on("error", (err) => {
-      job.status = "failed";
-      job.error = err.message;
-      job.finishedAt = Date.now();
-    });
+    // If client disconnects, kill ffmpeg
+    req.on("close", () => { try { proc.kill("SIGTERM"); } catch {} });
   } catch (e) {
-    job.status = "failed";
-    job.error = e.message;
-    return res.status(500).json({ error: e.message });
+    if (!res.headersSent) res.status(500).json({ error: e.message });
   }
 
-  res.json({ jobId, status: "downloading", outFile: `${safeName}/${safeEp}.mp4` });
-});
-
-// GET /api/anime/download-jobs — list active/recent download jobs
-app.get("/api/anime/download-jobs", requireAuth, (req, res) => {
-  const jobs = [];
-  for (const [, job] of animeDownloadJobs) {
-    jobs.push({
-      id: job.id,
-      animeName: job.animeName,
-      episodeName: job.episodeName,
-      status: job.status,
-      progress: job.progress,
-      error: job.error,
-      startedAt: job.startedAt,
-      finishedAt: job.finishedAt,
-    });
+  // Clean up old tokens
+  const cutoff = Date.now() - 15 * 60 * 1000;
+  for (const [t, v] of animeDownloadTokens) {
+    if (v.createdAt < cutoff) animeDownloadTokens.delete(t);
   }
-  // Clean up old finished jobs (older than 1 hour)
-  const cutoff = Date.now() - 3600_000;
-  for (const [id, job] of animeDownloadJobs) {
-    if ((job.status === "done" || job.status === "failed") && (job.finishedAt || 0) < cutoff) {
-      animeDownloadJobs.delete(id);
-    }
-  }
-  res.json({ jobs });
 });
 
 // ─── Anime BT torrent search (multi-source) ───────────────────────────────────
