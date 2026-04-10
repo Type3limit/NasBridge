@@ -28,8 +28,7 @@ const DANMAKU_FIXED_DURATION_MS = 4200;
 const DANMAKU_SCROLL_LANES = 8;
 const DANMAKU_FIXED_LANES = 3;
 
-// animeko public danmaku server (Bangumi episode IDs)
-const ANIMEKO_DANMAKU_CN = "https://danmaku-cn.myani.org";
+// animeko public danmaku server (Bangumi episode IDs) — proxied via /api/anime/danmaku/:id
 
 function clampNum(value, min, max, fallback) {
   const n = Number(value);
@@ -1062,7 +1061,8 @@ function AnimePlayerPage({ playerState, authToken, onBack }) {
     lastVideoTimeRef.current = 0;
     (async () => {
       try {
-        const r = await fetch(`${ANIMEKO_DANMAKU_CN}/v1/danmaku/${bgmEpId}`, {
+        const r = await fetch(`/api/anime/danmaku/${bgmEpId}`, {
+          headers: { Authorization: `Bearer ${authToken}` },
           signal: AbortSignal.timeout(8_000),
         });
         if (!r.ok || cancelled) return;

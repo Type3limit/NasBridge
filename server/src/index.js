@@ -2161,6 +2161,24 @@ app.get("/api/anime/resolve-url", requireAuth, async (req, res) => {
   }
 });
 
+// ─── Danmaku proxy (bypass CORS) ──────────────────────────────────────────────
+// The animeko danmaku server doesn't set Access-Control-Allow-Origin, so
+// browser requests from our domain are blocked. Proxy through our server.
+app.get("/api/anime/danmaku/:episodeId", requireAuth, async (req, res) => {
+  const epId = req.params.episodeId;
+  if (!epId || !/^\d+$/.test(epId)) return res.status(400).json({ error: "invalid episodeId" });
+  try {
+    const r = await fetch(`https://danmaku-cn.myani.org/v1/danmaku/${epId}`, {
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!r.ok) return res.status(r.status).json({ error: `upstream ${r.status}` });
+    const data = await r.json();
+    res.json(data);
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
 // ─── HLS stream proxy ─────────────────────────────────────────────────────────
 // GET /api/anime/proxy-stream?url=ENCODED_URL&ref=ENCODED_REFERER
 // Fetches an m3u8 playlist (or .ts/.m4s segment) on behalf of the client,
