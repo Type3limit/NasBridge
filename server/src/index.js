@@ -2354,12 +2354,30 @@ app.post("/api/anime/reload-subscription", requireAuth, async (req, res) => {
   res.json({ count: sites.length, source: subSitesCacheTime > 0 ? "subscription" : "fallback" });
 });
 
-// ─── Anime Episode Download (ffmpeg-based) ────────────────────────────────────
+// ─── Anime Episode Download ───────────────────────────────────────────────────
 
 // ─── Anime download: prepare-download creates a one-time token, stream-download
 // uses ffmpeg to pipe the stream (HLS or MP4) to the HTTP response so that
 // storage-client's aria2 can download it as a plain HTTP file. ─────────────────
 const animeDownloadTokens = new Map(); // token → { url, referer, filename, createdAt }
+
+// Lazily-cached ffmpeg availability check (null = unchecked, true/false = cached)
+let _ffmpegAvailable = null;
+async function checkFfmpegAvailable() {
+  if (_ffmpegAvailable !== null) return _ffmpegAvailable;
+  try {
+    await new Promise((resolve, reject) => {
+      const child = spawn("ffmpeg", ["-version"], { stdio: "ignore" });
+      child.on("error", reject);
+      child.on("close", resolve);
+    });
+    _ffmpegAvailable = true;
+  } catch {
+    _ffmpegAvailable = false;
+    console.warn("[anime] ffmpeg not found in PATH — HLS stream downloads will fail. Install ffmpeg to enable HLS downloads.");
+  }
+  return _ffmpegAvailable;
+}
 
 function sanitizeFilename(name = "") {
   return String(name || "download").replace(/[<>:"/\\|?*\x00-\x1F]+/g, "_").replace(/\s+/g, " ").trim() || "download";
@@ -2442,6 +2460,12 @@ app.get("/api/anime/stream-download/:token", async (req, res) => {
   }
 
   // ── HLS streams: use ffmpeg to remux to MP4 ──
+  if (!await checkFfmpegAvailable()) {
+    return res.status(503).json({
+      error: "HLS 视频下载需要 ffmpeg，但服务端未安装 ffmpeg。请在服务器上安装 ffmpeg 后重试。"
+    });
+  }
+
   const ffArgs = [];
   const hdrs = [
     "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
