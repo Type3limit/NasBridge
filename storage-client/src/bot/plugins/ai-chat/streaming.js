@@ -19,6 +19,7 @@ async function flushStreamingDraft({ latestText, latestPublishedAt, minPublishIn
 export async function streamFinalAnswer({ planningMessages, api, replyMessageId, mode = "text", modelOverride = "", defaultTextModel = "" }) {
   let latestText = "";
   let latestPublishedAt = 0;
+  let firstChunkAt = 0;
   let firstChunkReceived = false;
   const minPublishIntervalMs = 120;
   const runningCard = {
@@ -47,6 +48,7 @@ export async function streamFinalAnswer({ planningMessages, api, replyMessageId,
   }, {
     onText: async ({ text }) => {
       latestText = text;
+      if (!firstChunkAt) firstChunkAt = Date.now();
       if (!firstChunkReceived) {
         firstChunkReceived = true;
         await api.emitProgress({ phase: "stream-reply", label: "正在流式生成回复", percent: 90 });
@@ -71,15 +73,21 @@ export async function streamFinalAnswer({ planningMessages, api, replyMessageId,
     replyMessageId,
     card: runningCard
   });
+  const completionTokens = streamResult.usage?.completion_tokens || 0;
+  const genElapsedSec = firstChunkAt > 0 ? (Date.now() - firstChunkAt) / 1000 : 0;
+  const tokensPerSecond = genElapsedSec > 0.5 && completionTokens > 0 ? Math.round(completionTokens / genElapsedSec) : null;
   return {
     answer: String(streamResult.text || latestText || "").trim(),
-    model: streamResult.model || ""
+    model: streamResult.model || "",
+    usage: streamResult.usage || null,
+    tokensPerSecond
   };
 }
 
 export async function streamVisionAnswer({ systemPrompt, visionPrompt, historyMessages, imageInputs, api, replyMessageId, modelOverride = "", defaultMultimodalModel = "" }) {
   let latestText = "";
   let latestPublishedAt = 0;
+  let firstChunkAt = 0;
   let firstChunkReceived = false;
   const minPublishIntervalMs = 120;
   const runningCard = {
@@ -101,6 +109,7 @@ export async function streamVisionAnswer({ systemPrompt, visionPrompt, historyMe
   }, {
     onText: async ({ text }) => {
       latestText = text;
+      if (!firstChunkAt) firstChunkAt = Date.now();
       if (!firstChunkReceived) {
         firstChunkReceived = true;
         await api.emitProgress({ phase: "stream-reply", label: "正在流式输出看图结果", percent: 90 });
@@ -125,8 +134,13 @@ export async function streamVisionAnswer({ systemPrompt, visionPrompt, historyMe
     replyMessageId,
     card: runningCard
   });
+  const completionTokens = streamResult.usage?.completion_tokens || 0;
+  const genElapsedSec = firstChunkAt > 0 ? (Date.now() - firstChunkAt) / 1000 : 0;
+  const tokensPerSecond = genElapsedSec > 0.5 && completionTokens > 0 ? Math.round(completionTokens / genElapsedSec) : null;
   return {
     answer: String(streamResult.text || latestText || "").trim(),
-    model: streamResult.model || ""
+    model: streamResult.model || "",
+    usage: streamResult.usage || null,
+    tokensPerSecond
   };
 }

@@ -149,6 +149,17 @@ export function parseModelDirective(rawPrompt = "") {
     };
   }
 
+  if (/^\/compress\s*$/i.test(prompt)) {
+    return {
+      prompt: "",
+      modelOverride: "",
+      inspectOnly: false,
+      command: {
+        type: "compress"
+      }
+    };
+  }
+
   const inlineOption = prompt.match(/^--model(?:=|\s+)([^\s]+)(?:\s+([\s\S]*))?$/i);
   if (inlineOption?.[1]) {
     return {

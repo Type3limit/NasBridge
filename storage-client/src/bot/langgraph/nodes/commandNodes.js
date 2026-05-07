@@ -1,9 +1,76 @@
-import { buildAvailableModelsText, buildModelUsageText, buildUseListedModelText, filterModelsByCapability, getModelFilterLabel, sortModelsForDisplay } from "../../plugins/ai-chat/formatters/models.js";
+import { buildAvailableModelChoices, buildAvailableModelsText, buildModelUsageText, buildUseListedModelText, filterModelsByCapability, getModelFilterLabel, sortModelsForDisplay } from "../../plugins/ai-chat/formatters/models.js";
 import { normalizeModelFilter } from "../../plugins/ai-chat/parsers/modelDirectives.js";
 import { withSessionSubtitle } from "../../plugins/ai-chat/parsers/sessionDirectives.js";
 import { createAiSession, deleteAiSession, formatAiSessionLabel, listAiSessions, renameAiSession } from "../../plugins/ai-chat/services/aiSessions.js";
+import { compressAiSessionContext } from "../../plugins/ai-chat/services/compressAiSession.js";
 import { getEffectiveMultimodalModel, getEffectiveTextModel, writeAiModelSettings } from "../../plugins/ai-chat/services/modelSettings.js";
 import { getDefaultTextModelName, listAvailableModels } from "../../tools/llmClient.js";
+
+const MODEL_PROVIDER_SEPARATOR = "::";
+const PROVIDER_BADGE_META = {
+  copilot: { label: "GitHub Copilot", color: "informative" },
+  xunfei: { label: "讯飞Maas", color: "warning" },
+  ark: { label: "Ark", color: "success" },
+  openai: { label: "OpenAI Compatible", color: "subtle" }
+};
+
+function getProviderFromModelRef(value = "") {
+  const trimmed = String(value || "").trim();
+  if (!trimmed.includes(MODEL_PROVIDER_SEPARATOR)) {
+    return "";
+  }
+  return String(trimmed.split(MODEL_PROVIDER_SEPARATOR)[0] || "").trim().toLowerCase();
+}
+
+function getProviderLabel(provider = "") {
+  const normalized = String(provider || "").trim().toLowerCase();
+  return PROVIDER_BADGE_META[normalized]?.label || normalized || "未标记 provider";
+}
+
+function getProviderBadgeColor(provider = "") {
+  const normalized = String(provider || "").trim().toLowerCase();
+  return PROVIDER_BADGE_META[normalized]?.color || "informative";
+}
+
+function createProviderBadge(provider = "", prefix = "") {
+  const normalized = String(provider || "").trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  return {
+    label: prefix ? `${prefix} · ${getProviderLabel(normalized)}` : getProviderLabel(normalized),
+    color: getProviderBadgeColor(normalized),
+    appearance: "tint"
+  };
+}
+
+function buildProviderSummaryBadges(models = []) {
+  const counts = new Map();
+  for (const model of Array.isArray(models) ? models : []) {
+    const provider = String(model?.provider || "").trim().toLowerCase();
+    if (!provider) {
+      continue;
+    }
+    counts.set(provider, (counts.get(provider) || 0) + 1);
+  }
+  return [...counts.entries()].map(([provider, count]) => ({
+    label: `${getProviderLabel(provider)} ${count}`,
+    color: getProviderBadgeColor(provider),
+    appearance: "tint"
+  }));
+}
+
+function buildEffectiveProviderBadges(settings = {}) {
+  const textProvider = getProviderFromModelRef(getEffectiveTextModel(settings));
+  const visionProvider = getProviderFromModelRef(getEffectiveMultimodalModel(settings));
+  if (textProvider && visionProvider && textProvider === visionProvider) {
+    return [createProviderBadge(textProvider, "文本/看图")].filter(Boolean);
+  }
+  return [
+    createProviderBadge(textProvider, "文本"),
+    createProviderBadge(visionProvider, "看图")
+  ].filter(Boolean);
+}
 
 export async function handleAiChatCommandRoute(state = {}) {
   const prepared = state.prepared || {};
@@ -88,11 +155,14 @@ export async function handleAiChatCommandRoute(state = {}) {
 
   if (modelDirective.inspectOnly) {
     const usageText = buildModelUsageText(modelSettings);
+    const infoBadges = modelOverride
+      ? [createProviderBadge(getProviderFromModelRef(modelOverride), "临时")].filter(Boolean)
+      : buildEffectiveProviderBadges(modelSettings);
     return {
       result: {
         chatReply: await api.publishChatReply({
           text: usageText,
-          card: { type: "ai-answer", status: "succeeded", title: "AI 模型信息", subtitle: withSessionSubtitle(modelOverride ? `临时模型: ${modelOverride}` : "可在消息内临时切换", activeSession), body: usageText }
+          card: { type: "ai-answer", status: "succeeded", title: "AI 模型信息", subtitle: withSessionSubtitle(modelOverride ? `临时模型: ${modelOverride}` : "可在消息内临时切换", activeSession), body: usageText, badges: infoBadges }
         }),
         importedFiles: [],
         artifacts: [{ type: "model-info", textModel: defaultTextModel, multimodalModel: defaultMultimodalModel }]
@@ -101,6 +171,42 @@ export async function handleAiChatCommandRoute(state = {}) {
   }
 
   if (modelDirective.command && modelDirective.command.type !== "explicit-search") {
+    if (modelDirective.command.type === "compress") {
+      if (!activeSession) {
+        throw new Error("压缩上下文需要绑定 AI 会话，请使用格式：@ai #会话编号 /compress");
+      }
+      const summary = await compressAiSessionContext({
+        appDataRoot: api.appDataRoot,
+        session: activeSession,
+        textModel: defaultTextModel,
+        signal: api.signal
+      });
+      if (!summary) {
+        const body = "当前会话消息数量不足（少于 4 条），无需压缩上下文。";
+        return {
+          result: {
+            chatReply: await api.publishChatReply({
+              text: body,
+              card: { type: "ai-answer", status: "succeeded", title: "上下文压缩", subtitle: withSessionSubtitle("", activeSession), body }
+            }),
+            importedFiles: [],
+            artifacts: [{ type: "compress-skipped", sessionId: activeSession.id }]
+          }
+        };
+      }
+      const body = `上下文已压缩，会话历史已替换为以下摘要：\n\n${summary}\n\n后续对话将基于此摘要继续。`;
+      return {
+        result: {
+          chatReply: await api.publishChatReply({
+            text: body,
+            card: { type: "ai-answer", status: "succeeded", title: "上下文已压缩", subtitle: withSessionSubtitle("", activeSession), body }
+          }),
+          importedFiles: [],
+          artifacts: [{ type: "compress-done", sessionId: activeSession.id }]
+        }
+      };
+    }
+
     if (modelDirective.command.type === "list-models") {
       const filter = normalizeModelFilter(modelDirective.command.filter || "all");
       const result = await listAvailableModels({ signal: api.signal });
@@ -108,11 +214,13 @@ export async function handleAiChatCommandRoute(state = {}) {
       const nextSettings = { ...modelSettings, lastListedModels: displayedModels, lastListFilter: filter };
       await writeAiModelSettings(api.appDataRoot, nextSettings);
       const body = buildAvailableModelsText(displayedModels, nextSettings, filter);
+      const providerBadges = buildProviderSummaryBadges(displayedModels);
+      const modelChoices = buildAvailableModelChoices(displayedModels, nextSettings);
       return {
         result: {
           chatReply: await api.publishChatReply({
             text: body,
-            card: { type: "ai-answer", status: "succeeded", title: "AI 可用模型列表", subtitle: withSessionSubtitle(`${getModelFilterLabel(filter)} · 共 ${displayedModels.length} 个模型`, activeSession), body }
+            card: { type: "ai-answer", status: "succeeded", title: "AI 可用模型列表", subtitle: withSessionSubtitle(`${getModelFilterLabel(filter)} · 共 ${displayedModels.length} 个模型`, activeSession), body, badges: providerBadges, modelChoices }
           }),
           importedFiles: [],
           artifacts: [{ type: "model-list", count: displayedModels.length, filter }]
@@ -142,7 +250,7 @@ export async function handleAiChatCommandRoute(state = {}) {
         result: {
           chatReply: await api.publishChatReply({
             text: body,
-            card: { type: "ai-answer", status: "succeeded", title: "AI 默认模型已更新", subtitle: withSessionSubtitle(`${selectedIndex}. ${selectedModel.id}`, activeSession), body }
+            card: { type: "ai-answer", status: "succeeded", title: "AI 默认模型已更新", subtitle: withSessionSubtitle(`${selectedIndex}. ${selectedModel.modelId || selectedModel.id}`, activeSession), body, badges: [createProviderBadge(selectedModel.provider, "当前")].filter(Boolean) }
           }),
           importedFiles: [],
           artifacts: [{ type: "model-settings-updated", textModel: nextSettings.textModel || "", multimodalModel: nextSettings.multimodalModel || "" }]
@@ -172,11 +280,12 @@ export async function handleAiChatCommandRoute(state = {}) {
 
     await writeAiModelSettings(api.appDataRoot, nextSettings);
     const usageText = buildModelUsageText(nextSettings);
+    const badges = buildEffectiveProviderBadges(nextSettings);
     return {
       result: {
         chatReply: await api.publishChatReply({
           text: usageText,
-          card: { type: "ai-answer", status: "succeeded", title: "AI 默认模型已更新", subtitle: withSessionSubtitle(`文本: ${getEffectiveTextModel(nextSettings) || "未配置"} · 看图: ${getEffectiveMultimodalModel(nextSettings) || "未配置"}`, activeSession), body: usageText }
+          card: { type: "ai-answer", status: "succeeded", title: "AI 默认模型已更新", subtitle: withSessionSubtitle(`文本: ${getEffectiveTextModel(nextSettings) || "未配置"} · 看图: ${getEffectiveMultimodalModel(nextSettings) || "未配置"}`, activeSession), body: usageText, badges }
         }),
         importedFiles: [],
         artifacts: [{ type: "model-settings-updated", textModel: nextSettings.textModel || "", multimodalModel: nextSettings.multimodalModel || "" }]

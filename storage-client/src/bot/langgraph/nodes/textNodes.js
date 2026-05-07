@@ -3,10 +3,12 @@ import { createRecoveryContinuationMessage } from "../../plugins/ai-chat/recover
 import { createAnswerCard } from "../../plugins/ai-chat/formatters/cards.js";
 import { findBotInvocationInAnswer } from "../../plugins/ai-chat/selectors/botInvocations.js";
 import { appendAiSessionTurn } from "../../plugins/ai-chat/services/aiSessions.js";
+import { compressAiSessionContext } from "../../plugins/ai-chat/services/compressAiSession.js";
 import { delegateBotInvocation } from "../../plugins/ai-chat/delegation.js";
 import { streamFinalAnswer } from "../../plugins/ai-chat/streaming.js";
 import { createToolAwarePlanningMessages, executePendingToolCallsRound, invokeToolAwarePlanningRound } from "../../plugins/ai-chat/toolConversation.js";
 import { MAX_TOOL_ROUNDS } from "../../plugins/ai-chat/constants.js";
+import { getModelContextLimit } from "../../tools/llmClient.js";
 
 async function finalizeAiChatTextRoute({ prepared = {}, planningMessages = [], modelResult = null }) {
   const api = prepared.api;
@@ -56,14 +58,30 @@ async function finalizeAiChatTextRoute({ prepared = {}, planningMessages = [], m
   if (activeSession) {
     activeSession = await appendAiSessionTurn(api.appDataRoot, activeSession, toolAwarePrompt, answer);
   }
+  const stats = {
+    promptTokens: streamed.usage?.prompt_tokens ?? null,
+    contextLimit: getModelContextLimit(streamed.model),
+    tokensPerSecond: streamed.tokensPerSecond ?? null
+  };
   await emitReplyProgress({ phase: "append-chat-reply", label: "写入最终回复", percent: 96 });
+  const chatReply = await api.publishChatReply({
+    id: replyMessageId,
+    text: answer,
+    card: createAnswerCard(answer, streamed.model || modelResult?.model, "text", activeSession, stats)
+  });
+  if (activeSession && stats.promptTokens != null && stats.contextLimit != null) {
+    const usageRatio = stats.promptTokens / stats.contextLimit;
+    if (usageRatio >= 0.9) {
+      compressAiSessionContext({
+        appDataRoot: api.appDataRoot,
+        session: activeSession,
+        textModel: defaultTextModel
+      }).catch(() => {});
+    }
+  }
   return {
     result: {
-      chatReply: await api.publishChatReply({
-        id: replyMessageId,
-        text: answer,
-        card: createAnswerCard(answer, streamed.model || modelResult?.model, "text", activeSession)
-      }),
+      chatReply,
       importedFiles: [],
       artifacts: [{ type: "answer", model: streamed.model || modelResult?.model || "", historyMessages: Array.isArray(prepared.combinedHistoryMessages) ? prepared.combinedHistoryMessages.length : 0, streamed: true, sessionId: activeSession?.id || null }]
     }

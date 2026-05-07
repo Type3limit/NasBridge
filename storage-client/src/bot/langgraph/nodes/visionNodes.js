@@ -5,6 +5,7 @@ import { streamVisionAnswer } from "../../plugins/ai-chat/streaming.js";
 import { attachmentToDataUrl } from "../../plugins/ai-chat/utils/imageData.js";
 import { MAX_VISION_IMAGES } from "../../plugins/ai-chat/constants.js";
 import { listReferencedChatAttachments } from "../../tools/chatAssets.js";
+import { getModelContextLimit } from "../../tools/llmClient.js";
 
 async function collectVisionAttachments({ prepared = {} }) {
   const api = prepared.api;
@@ -75,13 +76,18 @@ async function finalizeAiChatVisionRoute({ prepared = {}, imageInputs = [], visi
   if (activeSession) {
     activeSession = await appendAiSessionTurn(api.appDataRoot, activeSession, effectivePrompt, answer);
   }
+  const stats = {
+    promptTokens: modelResult.usage?.prompt_tokens ?? null,
+    contextLimit: getModelContextLimit(modelResult.model),
+    tokensPerSecond: modelResult.tokensPerSecond ?? null
+  };
   await emitReplyProgress({ phase: "append-chat-reply", label: "写入最终回复", percent: 96 });
   return {
     result: {
       chatReply: await api.publishChatReply({
         id: replyMessageId,
         text: answer,
-        card: createAnswerCard(answer, modelResult.model, "multimodal", activeSession)
+        card: createAnswerCard(answer, modelResult.model, "multimodal", activeSession, stats)
       }),
       importedFiles: [],
       artifacts: [{ type: "vision", imageCount: imageInputs.length, model: modelResult.model || "", sessionId: activeSession?.id || null }]

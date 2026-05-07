@@ -177,6 +177,16 @@ export function formatAiSessionLabel(session = null) {
   return `#${session.id}${session.name ? ` · ${session.name}` : ""}`;
 }
 
+export async function replaceAiSessionMessages(appDataRoot = "", sessionId = 0, messages = []) {
+  const historyPath = getAiSessionHistoryPath(appDataRoot, sessionId);
+  await fs.promises.mkdir(path.dirname(historyPath), { recursive: true });
+  const lines = (Array.isArray(messages) ? messages : [])
+    .filter((m) => ["user", "assistant"].includes(m?.role) && String(m?.content || "").trim())
+    .map((m) => JSON.stringify({ role: m.role, content: String(m.content).trim(), createdAt: new Date().toISOString() }))
+    .join("\n");
+  await fs.promises.writeFile(historyPath, lines ? `${lines}\n` : "", "utf8");
+}
+
 export function buildSessionHistoryMessages(messages = []) {
   return (Array.isArray(messages) ? messages : []).map((item) => ({
     role: item.role,

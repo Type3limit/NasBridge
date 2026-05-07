@@ -2,12 +2,20 @@ import { MAX_CARD_BODY_LENGTH } from "../constants.js";
 import { withSessionSubtitle } from "../parsers/sessionDirectives.js";
 import { getMatchedSourceLabel, getSearchPreferenceLabel } from "../utils/searchPreferences.js";
 
-export function createAnswerCard(answer, model, mode = "text", session = null) {
+export function createAnswerCard(answer, model, mode = "text", session = null, stats = null) {
+  const modelPart = model ? `模型: ${model}` : "";
+  const contextPart = stats?.promptTokens != null
+    ? stats.contextLimit != null
+      ? `上下文 ${stats.promptTokens}/${stats.contextLimit}`
+      : `上下文 ${stats.promptTokens} tokens`
+    : "";
+  const toksPart = stats?.tokensPerSecond != null ? `${stats.tokensPerSecond} tok/s` : "";
+  const subtitleBase = [modelPart, contextPart, toksPart].filter(Boolean).join(" · ");
   return {
     type: mode === "multimodal" ? "image-analysis" : "ai-answer",
     status: "succeeded",
     title: mode === "multimodal" ? "AI 看图结果" : "AI 回答",
-    subtitle: withSessionSubtitle(model ? `模型: ${model}` : "", session),
+    subtitle: withSessionSubtitle(subtitleBase, session),
     body: String(answer || "").slice(0, MAX_CARD_BODY_LENGTH)
   };
 }
