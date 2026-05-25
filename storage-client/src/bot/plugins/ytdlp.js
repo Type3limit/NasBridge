@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { createBotJobMessageId } from "../context.js";
 import { importFileIntoLibrary, triggerLibraryRescan } from "../tools/libraryImport.js";
 import { createBotPlugin } from "./base.js";
 
@@ -198,6 +199,27 @@ async function downloadWithYtDlp(url, tempDir, api, { quality } = {}) {
 // Plugin export
 // ──────────────────────────────────────────────
 
+function cleanUrlCandidate(value = "") {
+  return String(value || "")
+    .trim()
+    .replace(/^[<([{]+/g, "")
+    .replace(/[>\])}.,，。;；!?！？]+$/g, "");
+}
+
+function extractFirstHttpUrl(value = "") {
+  const match = String(value || "").match(/https?:\/\/[^\s<>"']+/i);
+  return cleanUrlCandidate(match?.[0] || "");
+}
+
+export function resolveYtDlpSourceUrl(context = {}) {
+  const parsedArgs = context?.trigger?.parsedArgs || {};
+  const direct = cleanUrlCandidate(parsedArgs.url || parsedArgs.source || parsedArgs.sourceUrl || "");
+  if (direct) {
+    return direct;
+  }
+  return extractFirstHttpUrl(context?.trigger?.rawText || "");
+}
+
 export function createYtDlpDownloaderPlugin() {
   return createBotPlugin({
     botId: "ytdlp.downloader",
@@ -226,7 +248,7 @@ export function createYtDlpDownloaderPlugin() {
       maxDownloadBytes: 10 * 1024 * 1024 * 1024
     },
     async execute(context, api) {
-      const url = String(context?.trigger?.parsedArgs?.url || context?.trigger?.rawText || "").trim();
+      const url = resolveYtDlpSourceUrl(context);
       if (!url || !/^https?:\/\//i.test(url)) {
         throw new Error("请提供有效的视频 URL（以 http:// 或 https:// 开头）");
       }
@@ -274,24 +296,45 @@ export function createYtDlpDownloaderPlugin() {
         const title = String(metadata?.title || imported.fileName || "").slice(0, 80) || url;
         const uploader = String(metadata?.uploader || metadata?.channel || "").trim();
         const subtitle = [uploader, imported.relativePath].filter(Boolean).join(" · ");
+        const attachmentId = `bot-asset:${context.jobId}`;
+        const card = {
+          type: "media-result",
+          status: "succeeded",
+          title,
+          subtitle,
+          body: `已入库到 ${imported.relativePath || imported.fileName}`,
+          progress: null,
+          imageUrl: String(metadata?.thumbnail || ""),
+          imageAlt: "",
+          mediaAttachmentId: attachmentId,
+          sourceLabel: url,
+          sourceUrl: url,
+          actions: [
+            { type: "open-attachment", label: "打开资源", attachmentId },
+            { type: "open-url", label: "打开来源", url }
+          ]
+        };
+        await api.emitProgress({ phase: "append-chat-reply", label: "生成结果卡片", percent: 95 });
+        const chatReply = await api.publishChatReply({
+          id: createBotJobMessageId(context.jobId),
+          createdAt: context.createdAt,
+          text: "",
+          attachments: [{
+            id: attachmentId,
+            name: imported.fileName,
+            mimeType: imported.mimeType,
+            size: imported.size,
+            path: imported.relativePath,
+            clientId: context?.chat?.hostClientId || "",
+            kind: String(imported.mimeType || "").startsWith("video/") ? "video" : "file"
+          }],
+          card
+        });
 
         return {
+          chatReply,
           importedFiles: [imported],
-          artifacts: [],
-          card: {
-            type: "media-result",
-            status: "succeeded",
-            title,
-            subtitle,
-            body: `已入库到 ${imported.relativePath || imported.fileName}`,
-            progress: null,
-            imageUrl: String(metadata?.thumbnail || ""),
-            imageAlt: "",
-            mediaAttachmentId: "",
-            sourceLabel: url,
-            sourceUrl: url,
-            actions: [{ type: "open-url", label: "打开来源", url }]
-          }
+          artifacts: []
         };
       } finally {
         fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
