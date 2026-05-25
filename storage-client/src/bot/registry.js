@@ -6,6 +6,7 @@ import { createMultimodalImagePlugin } from "./plugins/multimodal-image.js";
 import { createVideoAnalyzePlugin } from "./plugins/videoAnalyze.js";
 import { createVideoTagPlugin } from "./plugins/videoTag.js";
 import { createAria2DownloaderPlugin } from "./plugins/aria2.js";
+import { createYtDlpDownloaderPlugin } from "./plugins/ytdlp.js";
 
 export class BotRegistry {
   constructor() {
@@ -43,6 +44,7 @@ export class BotRegistry {
     this.register(createVideoAnalyzePlugin());
     this.register(createVideoTagPlugin());
     this.register(createAria2DownloaderPlugin());
+    this.register(createYtDlpDownloaderPlugin());
     return this;
   }
 
