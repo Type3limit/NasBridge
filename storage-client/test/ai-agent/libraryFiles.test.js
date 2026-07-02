@@ -607,18 +607,42 @@ test("file tools accept absolute paths only when they stay inside storage root",
     assert.equal(metadata.files[0].fileId, `client:${relativePath}`);
     assert.equal(metadata.files[0].path, relativePath);
 
+    const diagnosis = await buildDiagnoseFileAccessResult(api, {
+      path: pathToFileURL(absolutePath).href
+    });
+    assert.equal(diagnosis.found, true);
+    assert.equal(diagnosis.identifier, relativePath);
+    assert.equal(diagnosis.file.path, relativePath);
+
     const excerpt = await buildTextExcerptResult(api, {
       path: pathToFileURL(absolutePath).href,
       maxChars: 8
     });
     assert.equal(excerpt.file.fileId, `client:${relativePath}`);
     assert.equal(excerpt.excerpt.text, "absolute");
-    assert.doesNotMatch(JSON.stringify({ metadata, excerpt }), new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
+    assert.doesNotMatch(JSON.stringify({ metadata, diagnosis, excerpt }), new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
 
     const outsidePath = path.join(path.dirname(root), `${path.basename(root)}-outside`, relativePath);
     const outside = await buildLibraryMetadataResult(api, { path: outsidePath });
     assert.equal(outside.count, 0);
     assert.deepEqual(outside.files, []);
+    assert.deepEqual(outside.missing, ["[outside-storage-root]"]);
+
+    const outsideDiagnosis = await buildDiagnoseFileAccessResult(api, { path: outsidePath });
+    assert.equal(outsideDiagnosis.found, false);
+    assert.equal(outsideDiagnosis.identifier, "[outside-storage-root]");
+    assert.equal(outsideDiagnosis.actionPlan[0].input.query, "[outside-storage-root]");
+    assert.doesNotMatch(JSON.stringify({ outside, outsideDiagnosis }), new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
+    assert.doesNotMatch(JSON.stringify({ outside, outsideDiagnosis }), new RegExp(outsidePath.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
+
+    await assert.rejects(
+      () => buildTextExcerptResult(api, { path: outsidePath }),
+      (error) => {
+        assert.match(error.message, /\[outside-storage-root\]/);
+        assert.doesNotMatch(error.message, new RegExp(outsidePath.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
+        return true;
+      }
+    );
   });
 });
 

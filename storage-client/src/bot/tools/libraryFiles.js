@@ -122,6 +122,22 @@ function normalizeStorageRootRelativeIdentifier(identifier = "", storageRoot = "
   return normalizeRelativePath(relative);
 }
 
+function buildPublicFileIdentifier(identifier = "", storageRoot = "") {
+  const raw = unwrapPathLikeIdentifier(identifier);
+  if (!raw) {
+    return "";
+  }
+  const storageRelative = normalizeStorageRootRelativeIdentifier(raw, storageRoot);
+  if (storageRelative !== null) {
+    return storageRelative || "STORAGE_ROOT";
+  }
+  const decoded = decodeFileUriPath(raw);
+  if (isAbsolutePathLike(decoded) || /^file:/i.test(raw)) {
+    return "[outside-storage-root]";
+  }
+  return raw;
+}
+
 function normalizeStringList(value) {
   if (Array.isArray(value)) {
     return value.map((item) => String(item || "").trim()).filter(Boolean);
@@ -1873,7 +1889,7 @@ export async function buildLibraryMetadataResult(api, input = {}) {
   for (const identifier of identifiers) {
     const file = resolveLibraryFile(snapshot.files, identifier, { storageRoot: api.storageRoot });
     if (!file) {
-      missing.push(identifier);
+      missing.push(buildPublicFileIdentifier(identifier, api.storageRoot));
       continue;
     }
     const profile = buildMetadataAccessProfile(api, file);
@@ -1917,7 +1933,7 @@ export async function buildTextExcerptResult(api, input = {}) {
 
   const file = resolveLibraryFile(snapshot.files, identifier, { storageRoot: api.storageRoot });
   if (!file) {
-    throw new Error(`文件未找到: ${identifier}`);
+    throw new Error(`文件未找到: ${buildPublicFileIdentifier(identifier, api.storageRoot)}`);
   }
 
   const requestedSource = String(input.source || "").trim().toLowerCase();
@@ -2009,7 +2025,7 @@ export async function buildMediaSummaryResult(api, input = {}) {
   }
   const file = resolveLibraryFile(snapshot.files, identifier, { storageRoot: api.storageRoot });
   if (!file) {
-    throw new Error(`文件未找到: ${identifier}`);
+    throw new Error(`文件未找到: ${buildPublicFileIdentifier(identifier, api.storageRoot)}`);
   }
   const hints = buildContentAccessHints(file);
   const analyzeMode = inferAnalyzeAccessMode(file, hints);
@@ -2196,6 +2212,7 @@ export async function buildFileAccessExplanation(api, input = {}) {
 export async function buildDiagnoseFileAccessResult(api, input = {}) {
   const snapshot = await loadLibrarySnapshot(api);
   const identifier = collectFileIdentifiers(input)[0] || "";
+  const publicIdentifier = buildPublicFileIdentifier(identifier, api.storageRoot);
   const policy = buildPublicFileAccessPolicy(api);
   if (!identifier) {
     throw new Error("fileId or path is required");
@@ -2206,7 +2223,7 @@ export async function buildDiagnoseFileAccessResult(api, input = {}) {
     return {
       generatedAt: new Date().toISOString(),
       status: buildFileAccessDiagnosisStatus(false),
-      identifier,
+      identifier: publicIdentifier,
       found: false,
       policy,
       safety: {
@@ -2226,14 +2243,14 @@ export async function buildDiagnoseFileAccessResult(api, input = {}) {
         buildAccessAction({
           id: "search-index",
           tool: "search_library_files",
-          input: { query: identifier, limit: 10 },
+          input: { query: publicIdentifier, limit: 10 },
           reason: "文件不在当前索引中，先重新搜索或刷新文件库。",
           contentLayer: "index"
         }),
         buildAccessAction({
           id: "list-nearby-files",
           tool: "list_storage_files",
-          input: { query: identifier, limit: 10 },
+          input: { query: publicIdentifier, limit: 10 },
           reason: "必要时列出相近候选，拿到 fileId 后再诊断或读取。",
           contentLayer: "index"
         })
@@ -2313,7 +2330,7 @@ export async function buildDiagnoseFileAccessResult(api, input = {}) {
   return {
     generatedAt: new Date().toISOString(),
     status: buildFileAccessDiagnosisStatus(true, blockers),
-    identifier,
+    identifier: publicIdentifier,
     found: true,
     file: {
       fileId: file.id,
@@ -2435,7 +2452,7 @@ export async function buildLibraryDetailsResult(api, input = {}) {
   for (const identifier of uniqueIdentifiers) {
     const file = resolveLibraryFile(snapshot.files, identifier, { storageRoot: api.storageRoot });
     if (!file) {
-      missing.push(identifier);
+      missing.push(buildPublicFileIdentifier(identifier, api.storageRoot));
       continue;
     }
     const detail = {
@@ -2974,7 +2991,7 @@ export async function buildUpdateFileMetadataResult(api, input = {}) {
   for (const identifier of identifiers) {
     const file = resolveLibraryFile(snapshot.files, identifier, { storageRoot: api.storageRoot });
     if (!file) {
-      missing.push(identifier);
+      missing.push(buildPublicFileIdentifier(identifier, api.storageRoot));
       continue;
     }
     const { patch, changedFields } = buildMetadataPatch(file, input);
@@ -3098,11 +3115,12 @@ export async function buildOrganizeFilesResult(api, input = {}) {
     }
     const file = resolveLibraryFile(snapshot.files, identifier, { storageRoot: api.storageRoot });
     if (!file) {
-      missing.push(identifier);
+      const publicIdentifier = buildPublicFileIdentifier(identifier, api.storageRoot);
+      missing.push(publicIdentifier);
       planned.push({
         status: "missing",
-        reason: `文件未找到: ${identifier}`,
-        source: { identifier },
+        reason: `文件未找到: ${publicIdentifier}`,
+        source: { identifier: publicIdentifier },
         target: null
       });
       continue;
@@ -3322,11 +3340,12 @@ export async function buildTrashFilesResult(api, input = {}) {
     }
     const file = resolveLibraryFile(snapshot.files, identifier, { storageRoot: api.storageRoot });
     if (!file) {
-      missing.push(identifier);
+      const publicIdentifier = buildPublicFileIdentifier(identifier, api.storageRoot);
+      missing.push(publicIdentifier);
       planned.push({
         status: "missing",
-        reason: `文件未找到: ${identifier}`,
-        source: { identifier },
+        reason: `文件未找到: ${publicIdentifier}`,
+        source: { identifier: publicIdentifier },
         target: null
       });
       continue;
