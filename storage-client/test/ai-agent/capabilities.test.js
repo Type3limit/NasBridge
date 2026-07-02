@@ -191,7 +191,12 @@ test("health cache uses isolated local dependencies and caches the second snapsh
         assert.doesNotMatch(checks.get("qq-music-cookie").detail, /uin=o123456|skey=fake/);
         assert.equal(checks.get("bilibili-auth").status, "ok");
         assert.equal(checks.get("bot-queue").status, "ok");
-        assert.match(formatHealthReport(first), /AI Agent/);
+        const firstReport = formatHealthReport(first);
+        assert.match(firstReport, /AI Agent/);
+        assert.match(firstReport, /NAS 文件访问: STORAGE_ROOT；可读写；/);
+        assert.match(firstReport, /文件访问：root=STORAGE_ROOT · exists=true · readable=true · writable=true · indexedFiles=1 · dirs=0 · indexSource=dependency/);
+        assert.match(firstReport, /访问边界：storageRootOnly=true · allowRawTextRead=true · allowBinaryRead=false · rawAbsolutePathExposed=false · writeRequiresConfirmation=true/);
+        assert.equal(firstReport.includes(root), false);
       });
     } finally {
       await music.close();
@@ -283,6 +288,12 @@ test("storage health scans NAS root and reports hidden directory exclusions", as
         assert.equal(storageCheck.fileAccess.skippedDirectories, 2);
         assert.equal(storageCheck.fileAccess.allowBinaryRead, false);
         assert.equal(storageCheck.fileAccess.rawAbsolutePathExposed, false);
+        assert.match(storageCheck.detail, /^STORAGE_ROOT；可读写；/);
+        assert.equal(storageCheck.detail.includes(storageRoot), false);
+        const report = formatHealthReport(health);
+        assert.match(report, /文件访问：root=STORAGE_ROOT · exists=true · readable=true · writable=true · indexedFiles=1 · dirs=0 · indexSource=scan/);
+        assert.match(report, /hiddenDirsExcluded=\d+ · skippedDirs=2/);
+        assert.equal(report.includes(storageRoot), false);
       });
     } finally {
       await music.close();

@@ -7,6 +7,7 @@ import { buildFileAccessPolicy, loadLibrarySnapshot } from "../tools/libraryFile
 
 const healthCache = new Map();
 const DEFAULT_HEALTH_CACHE_TTL_MS = 60_000;
+const PUBLIC_STORAGE_ROOT_LABEL = "STORAGE_ROOT";
 
 function clampInteger(value, min, max) {
   const numeric = Number(value);
@@ -349,10 +350,12 @@ async function checkBotQueue(api = {}) {
 }
 
 async function checkStorage(api = {}) {
+  const storageRootConfigured = Boolean(String(api.storageRoot || "").trim());
+  const storageRootLabel = storageRootConfigured ? PUBLIC_STORAGE_ROOT_LABEL : "未配置";
   const access = await directoryAccess(api.storageRoot || "");
   const policy = buildFileAccessPolicy(api);
   const baseFileAccess = {
-    rootConfigured: Boolean(String(api.storageRoot || "").trim()),
+    rootConfigured: storageRootConfigured,
     exists: access.exists,
     readable: access.readable,
     writable: access.writable,
@@ -379,7 +382,7 @@ async function checkStorage(api = {}) {
       id: "storage-root",
       label: "NAS 文件访问",
       status: "error",
-      detail: `${api.storageRoot || "未配置"}；${access.detail}`,
+      detail: `${storageRootLabel}；${access.detail}`,
       policy: healthPolicy,
       fileAccess: baseFileAccess
     };
@@ -416,7 +419,7 @@ async function checkStorage(api = {}) {
       id: "storage-root",
       label: "NAS 文件访问",
       status: "warn",
-      detail: `${api.storageRoot}；${access.detail}；索引读取失败：${error?.message || error}`,
+      detail: `${storageRootLabel}；${access.detail}；索引读取失败：${error?.message || error}`,
       policy: healthPolicy,
       fileAccess
     };
@@ -425,7 +428,7 @@ async function checkStorage(api = {}) {
     id: "storage-root",
     label: "NAS 文件访问",
     status: access.writable ? "ok" : "warn",
-    detail: `${api.storageRoot}；${access.detail}；${snapshotDetail}`,
+    detail: `${storageRootLabel}；${access.detail}；${snapshotDetail}`,
     policy: healthPolicy,
     fileAccess
   };
@@ -702,15 +705,78 @@ export async function collectAiAgentHealthCached(api = {}, options = {}) {
   };
 }
 
+function formatHealthTimestamp(value = "") {
+  const normalized = String(value || "").trim();
+  return normalized ? normalized.replace("T", " ").slice(0, 19) : "";
+}
+
+function formatStorageFileAccessReport(check = {}) {
+  if (check?.id !== "storage-root") {
+    return [];
+  }
+  const fileAccess = check.fileAccess && typeof check.fileAccess === "object" ? check.fileAccess : {};
+  const policy = check.policy && typeof check.policy === "object" ? check.policy : {};
+  const accessParts = [
+    `root=${fileAccess.rootConfigured === true ? PUBLIC_STORAGE_ROOT_LABEL : "未配置"}`,
+    typeof fileAccess.exists === "boolean" ? `exists=${fileAccess.exists}` : "",
+    typeof fileAccess.readable === "boolean" ? `readable=${fileAccess.readable}` : "",
+    typeof fileAccess.writable === "boolean" ? `writable=${fileAccess.writable}` : ""
+  ].filter(Boolean);
+  if (Number.isFinite(Number(fileAccess.files))) {
+    accessParts.push(`indexedFiles=${Number(fileAccess.files)}`);
+  }
+  if (Number.isFinite(Number(fileAccess.directories))) {
+    accessParts.push(`dirs=${Number(fileAccess.directories)}`);
+  }
+  if (String(fileAccess.indexSource || "").trim()) {
+    accessParts.push(`indexSource=${String(fileAccess.indexSource).trim()}`);
+  }
+  const indexedAt = formatHealthTimestamp(fileAccess.indexedAt);
+  if (indexedAt) {
+    accessParts.push(`indexedAt=${indexedAt}`);
+  }
+  const latestFileUpdatedAt = formatHealthTimestamp(fileAccess.latestFileUpdatedAt);
+  if (latestFileUpdatedAt) {
+    accessParts.push(`latestFile=${latestFileUpdatedAt}`);
+  }
+  if (Number.isFinite(Number(fileAccess.hiddenDirsExcluded))) {
+    accessParts.push(`hiddenDirsExcluded=${Number(fileAccess.hiddenDirsExcluded)}`);
+  }
+  if (Number.isFinite(Number(fileAccess.skippedDirectories)) && Number(fileAccess.skippedDirectories) > 0) {
+    accessParts.push(`skippedDirs=${Number(fileAccess.skippedDirectories)}`);
+  }
+
+  const boundaryParts = [
+    `storageRootOnly=${fileAccess.storageRootOnly ?? policy.storageRootOnly ?? "unknown"}`,
+    `allowRawTextRead=${policy.allowRawTextRead ?? "unknown"}`,
+    `allowBinaryRead=${fileAccess.allowBinaryRead ?? policy.allowBinaryRead ?? "unknown"}`,
+    `rawAbsolutePathExposed=${fileAccess.rawAbsolutePathExposed ?? policy.rawAbsolutePathExposed ?? "unknown"}`,
+    `writeRequiresConfirmation=${fileAccess.writeRequiresConfirmation ?? policy.writeRequiresConfirmation ?? "unknown"}`
+  ];
+  return [
+    `  文件访问：${accessParts.join(" · ")}`,
+    `  访问边界：${boundaryParts.join(" · ")}`
+  ];
+}
+
+function redactHealthReportText(value = "") {
+  return String(value || "")
+    .replace(/[A-Za-z]:[\\/][^\s；,，]+/g, "[local-path]")
+    .replace(/\\\\[^\s；,，]+/g, "[network-path]")
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted]")
+    .replace(/sk-[A-Za-z0-9_-]{8,}/gi, "sk-[redacted]");
+}
+
 export function formatHealthReport(health = {}) {
   const lines = [
     `AI Agent 健康状态：${health.overall || "unknown"}`,
-    `检查时间：${String(health.generatedAt || "").replace("T", " ").slice(0, 19)}`,
+    `检查时间：${formatHealthTimestamp(health.generatedAt)}`,
     ""
   ];
   for (const check of Array.isArray(health.checks) ? health.checks : []) {
-    lines.push(`- [${check.status}] ${check.label}: ${check.detail}`);
-    const repairHint = String(check.repairHint || getHealthRepairHint(check) || "").trim();
+    lines.push(`- [${check.status}] ${check.label}: ${redactHealthReportText(check.detail)}`);
+    lines.push(...formatStorageFileAccessReport(check));
+    const repairHint = redactHealthReportText(String(check.repairHint || getHealthRepairHint(check) || "").trim());
     if (repairHint) {
       lines.push(`  建议：${repairHint}`);
     }
