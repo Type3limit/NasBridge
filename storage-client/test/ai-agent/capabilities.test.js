@@ -373,6 +373,8 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(summary, /organize_files/);
   assert.match(summary, /Recommended task workflows/);
   assert.match(summary, /media-summary: search_library_files -> read_media_summary -> invoke_video_analyze -> get_bot_job_status/);
+  assert.match(summary, /hasAiSummary=false/);
+  assert.match(summary, /hasSubtitle=false/);
   assert.match(summary, /document-read: search_library_files -> diagnose_file_access -> read_text_excerpt -> analyze_file_content/);
   assert.match(summary, /file-access-diagnostic: explain_file_access -> search_library_files -> diagnose_file_access/);
   assert.match(summary, /download-into-library: search_bilibili_video -> invoke_bilibili_downloader -> invoke_ytdlp_downloader -> search_yyets_show -> download_yyets_episodes/);
@@ -383,6 +385,7 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(report, /video\.analyze/);
   assert.match(report, /常用工作流/);
   assert.match(report, /media-summary · Summarize NAS video\/audio: search_library_files -> read_media_summary -> invoke_video_analyze -> get_bot_job_status/);
+  assert.match(report, /hasAiSummary=false/);
   assert.match(report, /failure-diagnostic · Diagnose bot or agent failure: get_bot_job_status -> read_agent_trace -> read_bot_job_log/);
   assert.match(report, /建议\(Whisper\): 配置 WHISPER_CPP_PATH 和 WHISPER_MODEL_PATH/);
 

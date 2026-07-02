@@ -16,6 +16,7 @@ test("video summary prompts include file search and invoke_video_analyze workflo
   assert.match(prompt, /search_library_files/);
   assert.match(prompt, /read_media_summary/);
   assert.match(prompt, /invoke_video_analyze/);
+  assert.match(prompt, /hasAiSummary=false/);
   assert.doesNotMatch(prompt, /analyze_storage_video/);
 });
 

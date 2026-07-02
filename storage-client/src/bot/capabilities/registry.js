@@ -170,7 +170,7 @@ const CAPABILITY_WORKFLOWS = [
     id: "media-summary",
     title: "Summarize NAS video/audio",
     tools: ["search_library_files", "read_media_summary", "invoke_video_analyze", "get_bot_job_status"],
-    guidance: "先定位 fileId，再复用已有 aiSummary/subtitle；没有摘要时启动 invoke_video_analyze，长任务返回 jobId/status/trace 命令。"
+    guidance: "先定位 fileId；用户说没总结/无摘要时 search_library_files 带 hasAiSummary=false，没字幕/未转写时带 hasSubtitle=false；再复用已有 aiSummary/subtitle，没有摘要时启动 invoke_video_analyze，长任务返回 jobId/status/trace 命令。"
   },
   {
     id: "document-read",
