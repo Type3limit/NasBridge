@@ -7,6 +7,7 @@ export const MAX_LIBRARY_DETAIL_FILES = 20;
 export const MAX_SUBTITLE_INLINE_CHARS = 50_000;
 export const MAX_TEXT_EXCERPT_CHARS = 20_000;
 export const MAX_TEXT_EXCERPT_READ_BYTES = 512_000;
+export const MAX_METADATA_UPDATE_FILES = 10;
 
 const SUBTITLE_EXTS = new Set([".srt", ".ass", ".vtt", ".sub", ".ssa"]);
 const RAW_TEXT_EXTS = new Set([
@@ -90,6 +91,20 @@ function normalizeTags(tags) {
   return Array.isArray(tags)
     ? tags.map((item) => String(item || "").trim()).filter(Boolean)
     : [];
+}
+
+function dedupeTags(tags = []) {
+  const seen = new Set();
+  const result = [];
+  for (const tag of normalizeTags(tags)) {
+    const key = tag.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(tag);
+  }
+  return result;
 }
 
 function normalizeFileRecord(file = {}, clientId = "") {
@@ -404,6 +419,45 @@ function buildContentAccessHints(file = {}) {
   };
 }
 
+function buildTagsPatch(currentTags = [], input = {}) {
+  const hasReplaceTags = Array.isArray(input.tags);
+  const addTags = dedupeTags(input.addTags || []);
+  const removeTags = new Set(dedupeTags(input.removeTags || []).map((item) => item.toLowerCase()));
+  if (!hasReplaceTags && !addTags.length && !removeTags.size) {
+    return null;
+  }
+  const base = hasReplaceTags ? dedupeTags(input.tags) : dedupeTags(currentTags);
+  const merged = [];
+  const seen = new Set();
+  for (const tag of [...base, ...addTags]) {
+    const key = tag.toLowerCase();
+    if (removeTags.has(key) || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(tag);
+  }
+  return merged;
+}
+
+function buildMetadataPatch(file = {}, input = {}) {
+  const patch = {};
+  const changedFields = [];
+  const nextTags = buildTagsPatch(file.tags || [], input);
+  if (nextTags) {
+    patch.tags = nextTags;
+    changedFields.push("tags");
+  }
+  if (Object.prototype.hasOwnProperty.call(input, "aiSummary")) {
+    patch.aiSummary = String(input.aiSummary || "").trim();
+    changedFields.push("aiSummary");
+  } else if (input.clearAiSummary === true) {
+    patch.aiSummary = "";
+    changedFields.push("aiSummary");
+  }
+  return { patch, changedFields };
+}
+
 export async function buildLibraryListResult(api, input = {}) {
   const snapshot = await loadLibrarySnapshot(api);
   const offset = clampInteger(input.offset || 0, 0, Number.MAX_SAFE_INTEGER);
@@ -639,7 +693,7 @@ export async function buildFileAccessExplanation(api, input = {}) {
       "未经确认的删除、移动、重命名、批量覆盖"
     ],
     detail: kind === "tools"
-      ? ["list_storage_files", "search_library_files", "read_file_metadata", "get_storage_file_details", "read_text_excerpt", "read_media_summary", "analyze_storage_video"]
+      ? ["list_storage_files", "search_library_files", "read_file_metadata", "get_storage_file_details", "read_text_excerpt", "read_media_summary", "update_file_metadata", "analyze_storage_video"]
       : []
   };
 }
@@ -701,6 +755,75 @@ export async function buildLibraryDetailsResult(api, input = {}) {
     count: files.length,
     missing,
     files
+  };
+}
+
+export async function buildUpdateFileMetadataResult(api, input = {}) {
+  const dryRun = input.dryRun === true;
+  if (!dryRun && typeof api?.dependencies?.upsertFileMeta !== "function") {
+    throw new Error("upsertFileMeta dependency is unavailable");
+  }
+  const snapshot = await loadLibrarySnapshot(api);
+  const identifiers = [...new Set(collectFileIdentifiers(input))].slice(0, MAX_METADATA_UPDATE_FILES);
+  if (!identifiers.length) {
+    throw new Error("fileIds or paths is required");
+  }
+  if ((Array.isArray(input.fileIds) || Array.isArray(input.paths)) && identifiers.length > 1 && input.confirmed !== true) {
+    throw new Error("批量写入 metadata 需要用户确认，请说明影响范围后以 confirmed=true 调用。");
+  }
+  const results = [];
+  const missing = [];
+  for (const identifier of identifiers) {
+    const file = resolveLibraryFile(snapshot.files, identifier);
+    if (!file) {
+      missing.push(identifier);
+      continue;
+    }
+    const { patch, changedFields } = buildMetadataPatch(file, input);
+    if (!changedFields.length) {
+      results.push({
+        fileId: file.id,
+        path: file.relativePath,
+        status: "skipped",
+        reason: "no supported metadata changes",
+        before: {
+          tags: file.tags || [],
+          aiSummaryAvailable: Boolean(file.aiSummaryAvailable)
+        },
+        patch: {}
+      });
+      continue;
+    }
+    if (!dryRun) {
+      await api.dependencies.upsertFileMeta(file.id, patch);
+    }
+    results.push({
+      fileId: file.id,
+      path: file.relativePath,
+      name: file.name,
+      status: dryRun ? "dry-run" : "updated",
+      changedFields,
+      before: {
+        tags: file.tags || [],
+        aiSummaryAvailable: Boolean(file.aiSummaryAvailable),
+        aiSummaryLength: String(file.aiSummary || "").length
+      },
+      patch,
+      audit: {
+        riskLevel: "medium",
+        operation: "update_file_metadata",
+        dryRun,
+        confirmed: input.confirmed === true,
+        storageRootOnly: true
+      }
+    });
+  }
+  return {
+    generatedAt: new Date().toISOString(),
+    dryRun,
+    count: results.length,
+    missing,
+    results
   };
 }
 

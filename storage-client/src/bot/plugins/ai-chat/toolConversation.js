@@ -84,6 +84,13 @@ export function getAiToolProgress(toolName = "", round = 0) {
       percent: 45 + offset
     };
   }
+  if (normalized === "update_file_metadata") {
+    return {
+      phase: "tool-update-file-metadata",
+      label: safeRound > 0 ? `继续写入文件 metadata（第 ${safeRound + 1} 轮）` : "写入 NAS 文件 metadata",
+      percent: 48 + offset
+    };
+  }
   if (normalized === "explain_file_access") {
     return {
       phase: "tool-explain-file-access",

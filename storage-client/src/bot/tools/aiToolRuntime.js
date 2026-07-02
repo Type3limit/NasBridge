@@ -10,6 +10,7 @@ import { MAX_AGENT_TRACE_EVENTS, MAX_JOB_LOG_BYTES, MAX_JOB_STATUS_LIMIT, buildA
 import {
   MAX_LIBRARY_DETAIL_FILES,
   MAX_LIBRARY_LIST_LIMIT,
+  MAX_METADATA_UPDATE_FILES,
   MAX_TEXT_EXCERPT_CHARS,
   buildFileAccessExplanation,
   buildLibraryDetailsResult,
@@ -17,6 +18,7 @@ import {
   buildLibraryMetadataResult,
   buildMediaSummaryResult,
   buildTextExcerptResult,
+  buildUpdateFileMetadataResult,
   loadLibrarySnapshot,
   readSubtitleForFile,
   resolveLibraryFile
@@ -577,6 +579,26 @@ export function getAiToolDefinitions() {
       }
     },
     {
+      name: "update_file_metadata",
+      description: "受控写入 NAS 文件 metadata，仅支持 tags 和 aiSummary。单文件可直接执行并返回审计；批量写入必须先向用户确认并传 confirmed=true。设置 dryRun=true 可预览变更。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          fileId: { type: "string", description: "单个文件 ID" },
+          fileIds: { type: "array", items: { type: "string" }, maxItems: MAX_METADATA_UPDATE_FILES },
+          path: { type: "string", description: "单个相对路径" },
+          paths: { type: "array", items: { type: "string" }, maxItems: MAX_METADATA_UPDATE_FILES },
+          tags: { type: "array", items: { type: "string" }, description: "替换为这组标签" },
+          addTags: { type: "array", items: { type: "string" }, description: "追加标签，不会重复" },
+          removeTags: { type: "array", items: { type: "string" }, description: "移除标签，大小写不敏感" },
+          aiSummary: { type: "string", description: "写入/覆盖 AI 摘要" },
+          clearAiSummary: { type: "boolean", description: "清空 AI 摘要" },
+          dryRun: { type: "boolean", description: "只预览不写入，默认 false" },
+          confirmed: { type: "boolean", description: "批量写入前必须由用户确认" }
+        }
+      }
+    },
+    {
       name: "explain_file_access",
       description: "说明 AI 当前对 NAS 文件库能访问什么、不能访问什么、读写风险边界和可用工具。用户询问权限/可访问性时调用。",
       inputSchema: {
@@ -825,6 +847,11 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
   if (name === "read_media_summary") {
     await api.emitProgress({ phase: "tool-read-media-summary", label: "读取媒体派生摘要", percent: 45 });
     return safeJson(await buildMediaSummaryResult(api, input));
+  }
+
+  if (name === "update_file_metadata") {
+    await api.emitProgress({ phase: "tool-update-file-metadata", label: "写入 NAS 文件 metadata", percent: 48 });
+    return safeJson(await buildUpdateFileMetadataResult(api, input));
   }
 
   if (name === "explain_file_access") {
