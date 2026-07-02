@@ -170,7 +170,7 @@ const CAPABILITY_WORKFLOWS = [
     id: "media-summary",
     title: "Summarize NAS video/audio",
     tools: ["search_library_files", "read_media_summary", "invoke_video_analyze", "get_bot_job_status"],
-    guidance: "先定位 fileId；用户说没总结/无摘要时 search_library_files 带 hasAiSummary=false，没字幕/未转写时带 hasSubtitle=false；再复用已有 aiSummary/subtitle，没有摘要时启动 invoke_video_analyze，长任务返回 jobId/status/trace 命令。"
+    guidance: "先定位 fileId；用户说没总结/无摘要时 search_library_files 带 hasAiSummary=false，没字幕/未转写时带 hasSubtitle=false；再复用已有 aiSummary/subtitle，没有摘要时启动 invoke_video_analyze；长任务可用 waitUntilPhase=transcribe/running 等到可见阶段后返回 jobId/status/phase/trace 命令。"
   },
   {
     id: "document-read",
@@ -200,7 +200,7 @@ const CAPABILITY_WORKFLOWS = [
     id: "download-into-library",
     title: "Download into NAS library",
     tools: ["search_bilibili_video", "invoke_bilibili_downloader", "invoke_ytdlp_downloader", "search_yyets_show", "download_yyets_episodes"],
-    guidance: "B 站先 search_bilibili_video 再下载；明确 URL 用对应 downloader；剧集资源先 search_yyets_show 再 download_yyets_episodes。"
+    guidance: "B 站先 search_bilibili_video 再下载；明确 URL 用对应 downloader；下载类长任务可用 waitUntilPhase=download/running 等到开始下载后返回；剧集资源先 search_yyets_show 再 download_yyets_episodes。"
   },
   {
     id: "failure-diagnostic",

@@ -17,6 +17,8 @@ test("video summary prompts include file search and invoke_video_analyze workflo
   assert.match(prompt, /read_media_summary/);
   assert.match(prompt, /invoke_video_analyze/);
   assert.match(prompt, /hasAiSummary=false/);
+  assert.match(prompt, /waitUntilPhase=transcribe|waitUntilPhase/);
+  assert.match(prompt, /status\/phase/);
   assert.doesNotMatch(prompt, /analyze_storage_video/);
 });
 
@@ -40,6 +42,8 @@ test("download prompts include concrete downloader adapters", () => {
   assert.match(prompt, /invoke_bilibili_downloader/);
   assert.match(prompt, /invoke_torrent_downloader/);
   assert.match(prompt, /invoke_aria2_downloader/);
+  assert.match(prompt, /waitUntilPhase=download/);
+  assert.match(prompt, /status\/phase/);
 });
 
 test("diagnostic prompts require job status and agent trace tools", () => {
@@ -64,4 +68,5 @@ test("includeAll exposes every preset with the always-on operating rules first",
   assert.match(prompt, /explain_file_access/);
   assert.match(prompt, /diagnose_file_access/);
   assert.match(prompt, /High risk|高风险|confirmed=true/);
+  assert.match(prompt, /waitUntilPhase/);
 });

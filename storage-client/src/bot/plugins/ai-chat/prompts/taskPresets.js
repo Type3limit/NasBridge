@@ -14,7 +14,7 @@ const ALWAYS_ON_GUIDANCE = {
     "先用最小只读工具确认事实，再选择写入、下载或长任务工具。",
     "需要文件内容时先拿 fileId/relativePath；不要编造绝对路径或声称读取了未通过工具读取的内容。",
     "具体文件能否读取/分析不确定时，先调用 diagnose_file_access，根据 layers、blockers 和 nextActions 选择下一步工具。",
-    "长任务提交后必须在回答里给出 botId、jobId、当前 status 和下一步可用的 get_bot_job_status/read_agent_trace/read_bot_job_log。",
+    "长任务优先用 waitUntilPhase 等到 running/transcribe/download 等可见阶段后再回答；回答里必须给出 botId、jobId、当前 status/phase 和下一步可用的 get_bot_job_status/read_agent_trace/read_bot_job_log。",
     "工具不可用或 health degraded 时，先解释具体依赖项，再给可恢复步骤。"
   ]
 };
@@ -36,7 +36,7 @@ const TASK_PRESETS = [
     triggers: [/视频|音频|字幕|转写|总结|摘要|tag|标签|video|audio|subtitle|summary/i],
     lines: [
       "先搜索文件，再用 read_media_summary 检查 aiSummary/subtitle 是否已有，并读取时长、分辨率、音轨等 probe 信息。用户说“没总结/没有摘要”时搜索参数要带 hasAiSummary=false；用户说“没字幕/未转写”时带 hasSubtitle=false。",
-      "没有摘要时调用 invoke_video_analyze；长视频默认 waitForCompletion=false，返回 jobId 后让用户可追踪。",
+      "没有摘要时调用 invoke_video_analyze；长视频默认 waitForCompletion=false，可设置 waitUntilPhase=transcribe 或 running 等到任务真正开始后返回 jobId/status/phase。",
       "打标签用 invoke_video_tag；批量标签必须先说明影响范围并取得 confirmed=true。"
     ]
   },
@@ -76,6 +76,7 @@ const TASK_PRESETS = [
     lines: [
       "Bilibili 搜索下载：先 search_bilibili_video，再 invoke_bilibili_downloader；已有明确 BV/URL 可直接调用 invoke_bilibili_downloader。",
       "YouTube/X/普通视频页用 invoke_ytdlp_downloader；magnet/.torrent 用 invoke_torrent_downloader 或 invoke_aria2_downloader；HTTP/ed2k 优先 invoke_aria2_downloader。",
+      "下载类长任务可设置 waitUntilPhase=download 或 running 等到任务开始下载后返回；回答里给 jobId、status/phase、保存目录和追踪命令。",
       "剧集/电影资源搜索用 search_yyets_show，再 download_yyets_episodes；下载任务通常后台执行，回答里给 jobId 和保存目录。"
     ]
   },
