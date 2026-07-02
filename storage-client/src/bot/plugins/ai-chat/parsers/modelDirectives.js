@@ -14,6 +14,18 @@ export function normalizeModelFilter(rawValue = "") {
   return "all";
 }
 
+function parseModelListOptions(rawValue = "") {
+  const tokens = String(rawValue || "").trim().split(/\s+/).filter(Boolean);
+  const refreshAliases = new Set(["refresh", "reload", "force", "刷新", "重新获取"]);
+  const refresh = tokens.some((token) => refreshAliases.has(token.toLowerCase()));
+  const filterToken = tokens.find((token) => !refreshAliases.has(token.toLowerCase())) || "";
+  return Object.fromEntries(Object.entries({
+    type: "list-models",
+    filter: normalizeModelFilter(filterToken),
+    refresh: refresh ? true : null
+  }).filter(([, value]) => value !== null));
+}
+
 export function parseModelDirective(rawPrompt = "") {
   const prompt = String(rawPrompt || "").trim();
   if (!prompt) {
@@ -75,16 +87,13 @@ export function parseModelDirective(rawPrompt = "") {
     };
   }
 
-  const listCommand = prompt.match(/^\/(?:models|model\s+list)(?:\s+([^\s]+))?\s*$/i);
+  const listCommand = prompt.match(/^\/(?:models|model\s+list)(?:\s+([\s\S]+?))?\s*$/i);
   if (listCommand) {
     return {
       prompt: "",
       modelOverride: "",
       inspectOnly: false,
-      command: {
-        type: "list-models",
-        filter: normalizeModelFilter(listCommand[1] || "")
-      }
+      command: parseModelListOptions(listCommand[1] || "")
     };
   }
 

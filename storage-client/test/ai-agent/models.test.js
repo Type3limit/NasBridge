@@ -77,6 +77,21 @@ test("model directive parser recognizes model commands and filters", () => {
     type: "list-models",
     filter: "tool-calls"
   });
+  assert.deepEqual(parseModelDirective("/models refresh").command, {
+    type: "list-models",
+    filter: "all",
+    refresh: true
+  });
+  assert.deepEqual(parseModelDirective("/models tool-calls refresh").command, {
+    type: "list-models",
+    filter: "tool-calls",
+    refresh: true
+  });
+  assert.deepEqual(parseModelDirective("/model list 刷新 vision").command, {
+    type: "list-models",
+    filter: "vision",
+    refresh: true
+  });
   assert.deepEqual(parseModelDirective("/trace botjob_demo").command, {
     type: "trace",
     jobId: "botjob_demo"

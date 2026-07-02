@@ -965,6 +965,7 @@ export async function handleAiChatCommandRoute(state = {}) {
 
     if (modelDirective.command.type === "list-models") {
       const filter = normalizeModelFilter(modelDirective.command.filter || "all");
+      const refreshed = modelDirective.command.refresh === true;
       const result = await listAvailableModels({ signal: api.signal });
       const displayedModels = sortModelsForDisplay(filterModelsByCapability(result.models, filter));
       const nextSettings = {
@@ -981,11 +982,11 @@ export async function handleAiChatCommandRoute(state = {}) {
       return {
         result: {
           chatReply: await api.publishChatReply({
-            text: body,
-            card: { type: "ai-answer", status: "succeeded", title: "AI 可用模型列表", subtitle: withSessionSubtitle(`${getModelFilterLabel(filter)} · 共 ${displayedModels.length} 个模型`, activeSession), body, badges: providerBadges, modelChoices }
+            text: refreshed ? `已刷新模型列表。\n\n${body}` : body,
+            card: { type: "ai-answer", status: "succeeded", title: refreshed ? "AI 模型列表已刷新" : "AI 可用模型列表", subtitle: withSessionSubtitle(`${refreshed ? "刷新 · " : ""}${getModelFilterLabel(filter)} · 共 ${displayedModels.length} 个模型`, activeSession), body, badges: providerBadges, modelChoices }
           }),
           importedFiles: [],
-          artifacts: [{ type: "model-list", count: displayedModels.length, filter }]
+          artifacts: [{ type: "model-list", count: displayedModels.length, filter, refreshed }]
         }
       };
     }

@@ -347,7 +347,8 @@ test("models command refresh migrates display names to executable model refs", a
           modelDirective: {
             command: {
               type: "list-models",
-              filter: "all"
+              filter: "all",
+              refresh: true
             }
           },
           modelSettings: {
@@ -363,7 +364,10 @@ test("models command refresh migrates display names to executable model refs", a
       assert.equal(settings.multimodalModel, "openai::gpt-4.1-2025-04-14");
       assert.equal(settings.lastListedModels.length, 2);
       assert.equal(result.result.artifacts[0].type, "model-list");
-      assert.equal(replies[0].card.title, "AI 可用模型列表");
+      assert.equal(result.result.artifacts[0].refreshed, true);
+      assert.equal(replies[0].card.title, "AI 模型列表已刷新");
+      assert.match(replies[0].card.subtitle, /刷新/);
+      assert.match(replies[0].text, /已刷新模型列表/);
       assert.equal(replies[0].card.status, "succeeded");
     });
   } finally {
