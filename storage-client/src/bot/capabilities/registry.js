@@ -86,6 +86,36 @@ const TOOL_HEALTH_CHECKS = {
   download_yyets_episodes: ["storage-root"]
 };
 
+const CAPABILITY_EXAMPLES = {
+  "video.analyze": ["总结这个视频并保存摘要"],
+  "video.tag": ["给这个视频生成标签"],
+  "music.control": ["播放周杰伦的晴天", "暂停音乐", "查看队列"],
+  "bilibili.downloader": ["去 B 站找教程并下载入库"],
+  search_library_files: ["找最近下载的视频", "查 Movies 目录里没有摘要的 mp4"],
+  analyze_file_content: ["分析这个 NAS 文件"],
+  analyze_storage_video: ["总结这个视频"],
+  read_media_summary: ["读取这个视频已有摘要和字幕状态"],
+  update_file_metadata: ["给这个文件添加标签"],
+  organize_files: ["把这几个文件移动到整理目录"],
+  invoke_music_control: ["点歌 晴天", "下一首"],
+  search_web: ["联网查询最新资料"],
+  get_bot_job_status: ["刚才任务为什么失败了"]
+};
+
+const PROMPT_CORE_CAPABILITY_IDS = [
+  "search_library_files",
+  "analyze_file_content",
+  "analyze_storage_video",
+  "tag_storage_video",
+  "invoke_music_control",
+  "search_web",
+  "import_bilibili_video",
+  "download_yyets_episodes",
+  "organize_files",
+  "get_bot_job_status",
+  "read_agent_trace"
+];
+
 function normalizeRiskLevel(value = "low") {
   return ["low", "medium", "high"].includes(value) ? value : "low";
 }
@@ -104,7 +134,7 @@ export function buildCapabilityDescriptors(api = {}) {
     executionMode: BOT_EXECUTION_MODES[bot.botId] || "async-job",
     requiresConfirmation: BOT_RISK_LEVELS[bot.botId] === "high",
     healthChecks: BOT_HEALTH_CHECKS[bot.botId] || ["storage-root"],
-    examples: []
+    examples: CAPABILITY_EXAMPLES[bot.botId] || []
   })).filter((item) => item.id);
 
   const toolCapabilities = getAiToolDefinitions().map((tool) => ({
@@ -119,10 +149,24 @@ export function buildCapabilityDescriptors(api = {}) {
     executionMode: ["analyze_file_content", "analyze_storage_video", "import_bilibili_video", "download_yyets_episodes"].includes(tool.name) ? "async-job" : "sync",
     requiresConfirmation: TOOL_RISK_LEVELS[tool.name] === "high",
     healthChecks: TOOL_HEALTH_CHECKS[tool.name] || [],
-    examples: []
+    examples: CAPABILITY_EXAMPLES[tool.name] || []
   })).filter((item) => item.id);
 
   return [...botCapabilities, ...toolCapabilities];
+}
+
+function summarizeCheckForPrompt(check = {}) {
+  const label = String(check?.label || check?.id || "unknown").trim();
+  const status = String(check?.status || "unknown").trim();
+  const detail = String(check?.detail || "").trim();
+  if (!detail) {
+    return `${label}=${status}`;
+  }
+  const compactDetail = detail
+    .replace(/[A-Za-z]:[\\/][^\s；,，]+/g, "[local-path]")
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted]")
+    .slice(0, 120);
+  return `${label}=${status} (${compactDetail})`;
 }
 
 export function summarizeCapabilityAvailability(descriptor = {}, health = {}) {
@@ -167,5 +211,36 @@ export function formatCapabilityReport(descriptors = [], health = {}) {
       }
     }
   }
+  return lines.join("\n");
+}
+
+export function formatCapabilityPromptSummary(descriptors = [], health = {}, options = {}) {
+  const maxItems = Math.max(4, Math.min(16, Number(options.maxItems || 11) || 11));
+  const checks = Array.isArray(health.checks) ? health.checks : [];
+  const nonOkChecks = checks.filter((check) => check.status && check.status !== "ok");
+  const byId = new Map((Array.isArray(descriptors) ? descriptors : []).map((item) => [item.id, item]));
+  const selected = PROMPT_CORE_CAPABILITY_IDS
+    .map((id) => byId.get(id))
+    .filter(Boolean)
+    .slice(0, maxItems);
+
+  const lines = [
+    `Agent health snapshot: overall=${health.overall || "unknown"}${health.cached === true ? " (cached)" : ""}.`
+  ];
+  if (nonOkChecks.length) {
+    lines.push(`Unavailable or degraded checks: ${nonOkChecks.map(summarizeCheckForPrompt).join("; ")}.`);
+  } else {
+    lines.push("Core checks are ok; still verify tool results instead of assuming success.");
+  }
+
+  if (selected.length) {
+    lines.push("Core capabilities available to consider:");
+    for (const item of selected) {
+      const availability = summarizeCapabilityAvailability(item, health);
+      const examples = Array.isArray(item.examples) && item.examples.length ? ` examples=${item.examples.slice(0, 2).join(" / ")}` : "";
+      lines.push(`- ${item.id}: status=${availability.status}, risk=${item.riskLevel}, mode=${item.executionMode}.${examples}`);
+    }
+  }
+  lines.push("Use unavailable/degraded capability details to explain blockers before starting dependent jobs. High risk actions require explicit confirmation.");
   return lines.join("\n");
 }

@@ -4,6 +4,8 @@ import { buildSessionHistoryMessages, formatAiSessionLabel, readAiSessionMessage
 import { MAX_CONTEXT_MESSAGES, MAX_RECENT_MESSAGES, MAX_SESSION_CONTEXT_MESSAGES } from "../../plugins/ai-chat/constants.js";
 import { readRecentChatHistory } from "../../tools/chatHistory.js";
 import { buildRealtimeContextText } from "../../tools/realtimeContext.js";
+import { collectAiAgentHealthCached } from "../../capabilities/health.js";
+import { buildCapabilityDescriptors, formatCapabilityPromptSummary } from "../../capabilities/registry.js";
 
 export async function handleAiChatPrepareContextRoute(state = {}) {
   const prepared = state.prepared || {};
@@ -17,6 +19,21 @@ export async function handleAiChatPrepareContextRoute(state = {}) {
   const recoveryGuidance = prepared.recoveryGuidance || null;
 
   api.throwIfCancelled();
+  let healthSnapshot = null;
+  let capabilityPromptSummary = "";
+  try {
+    healthSnapshot = await collectAiAgentHealthCached(api, {
+      modelSettings: prepared.modelSettings || {},
+      lightweight: true,
+      signal: api.signal
+    });
+    const descriptors = buildCapabilityDescriptors(api);
+    capabilityPromptSummary = formatCapabilityPromptSummary(descriptors, healthSnapshot);
+    await api.appendLog(`agent health snapshot: overall=${healthSnapshot.overall || "unknown"} cached=${healthSnapshot.cached === true}`);
+  } catch (error) {
+    await api.appendLog(`agent health snapshot failed: ${String(error?.message || error || "unknown error").trim()}`);
+    capabilityPromptSummary = "Agent health snapshot unavailable; if a tool fails, explain the dependency error from the tool result instead of guessing.";
+  }
   const recentMessages = await readRecentChatHistory({
     storageRoot: api.storageRoot,
     historyPath: context.chat.historyPath,
@@ -39,6 +56,7 @@ export async function handleAiChatPrepareContextRoute(state = {}) {
   const systemPrompt = [
     "你是 NAS 聊天室里的 AI 助手。",
     buildRealtimeContextText(),
+    capabilityPromptSummary,
     "你的回答默认使用简体中文，直接、简洁、可信。",
     "优先结合最近聊天上下文回答；如果信息不足，要明确指出。",
     "如果用户要求总结，先给结论，再给要点。",
@@ -73,6 +91,8 @@ export async function handleAiChatPrepareContextRoute(state = {}) {
       ...prepared,
       recentMessages,
       combinedHistoryMessages,
+      healthSnapshot,
+      capabilityPromptSummary,
       systemPrompt
     }
   };

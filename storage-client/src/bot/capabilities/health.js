@@ -4,6 +4,39 @@ import { getEffectiveMultimodalModel, getEffectiveTextModel } from "../plugins/a
 import { listAvailableModels, parseModelRef } from "../tools/llmClient.js";
 import { loadLibrarySnapshot } from "../tools/libraryFiles.js";
 
+const healthCache = new Map();
+const DEFAULT_HEALTH_CACHE_TTL_MS = 60_000;
+
+function clampInteger(value, min, max) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return min;
+  }
+  return Math.max(min, Math.min(max, Math.floor(numeric)));
+}
+
+function getHealthCacheTtlMs(options = {}) {
+  if (Number.isFinite(Number(options.ttlMs))) {
+    return clampInteger(options.ttlMs, 0, 10 * 60_000);
+  }
+  return clampInteger(process.env.AI_AGENT_HEALTH_CACHE_TTL_MS || DEFAULT_HEALTH_CACHE_TTL_MS, 0, 10 * 60_000);
+}
+
+function buildHealthCacheKey(api = {}, options = {}) {
+  const modelSettings = options.modelSettings || {};
+  return [
+    options.lightweight === true ? "lightweight" : "full",
+    String(api.storageRoot || "").trim(),
+    String(api.clientId || "").trim(),
+    getEffectiveTextModel(modelSettings),
+    getEffectiveMultimodalModel(modelSettings),
+    String(process.env.MUSIC_LIB_BRIDGE_URL || "").trim(),
+    String(process.env.WHISPER_CPP_PATH || "").trim(),
+    String(process.env.WHISPER_MODEL_PATH || "").trim(),
+    String(process.env.YT_DLP_PATH || "").trim()
+  ].join("|");
+}
+
 function isPathLike(value = "") {
   return /[\\/]/.test(String(value || "")) || path.isAbsolute(String(value || ""));
 }
@@ -150,6 +183,36 @@ async function checkAiModels(modelSettings = {}, signal = null) {
   }
 }
 
+async function checkAiModelsLightweight(modelSettings = {}) {
+  const textModel = getEffectiveTextModel(modelSettings);
+  const visionModel = getEffectiveMultimodalModel(modelSettings);
+  if (!textModel) {
+    return { id: "ai-model", label: "AI 模型", status: "error", detail: "未配置文本模型" };
+  }
+  const cachedModels = Array.isArray(modelSettings.lastListedModels) ? modelSettings.lastListedModels : [];
+  if (!cachedModels.length) {
+    return {
+      id: "ai-model",
+      label: "AI 模型",
+      status: "warn",
+      detail: `未缓存 /models 列表；当前文本模型=${parseModelRef(textModel).modelId || textModel}`
+    };
+  }
+  const modelIds = new Set(cachedModels.map((item) => String(item?.id || "").trim()).filter(Boolean));
+  const textOk = modelIds.has(textModel);
+  const visionOk = !visionModel || visionModel === textModel || modelIds.has(visionModel);
+  const textStatus = textOk ? "文本模型在最近 /models 缓存中" : `文本模型未出现在最近 /models 缓存：${textModel}`;
+  const visionStatus = !visionModel || visionModel === textModel
+    ? ""
+    : (visionOk ? `；看图模型在缓存中：${visionModel}` : `；看图模型未出现在缓存：${visionModel}`);
+  return {
+    id: "ai-model",
+    label: "AI 模型",
+    status: textOk && visionOk ? "ok" : "warn",
+    detail: `${textStatus}${visionStatus}；cachedModels=${cachedModels.length}`
+  };
+}
+
 async function checkWhisper() {
   const exePath = String(process.env.WHISPER_CPP_PATH || "").trim();
   const modelPath = String(process.env.WHISPER_MODEL_PATH || "").trim();
@@ -176,7 +239,9 @@ function computeOverallStatus(checks = []) {
 
 export async function collectAiAgentHealth(api = {}, options = {}) {
   const checks = [];
-  checks.push(await checkAiModels(options.modelSettings || {}, options.signal || api.signal || null));
+  checks.push(options.lightweight === true
+    ? await checkAiModelsLightweight(options.modelSettings || {})
+    : await checkAiModels(options.modelSettings || {}, options.signal || api.signal || null));
   checks.push(await checkStorage(api));
   checks.push(await checkCommandOrPath("ffmpeg", "ffmpeg", api.dependencies?.ffmpegPath || process.env.FFMPEG_PATH || "ffmpeg"));
   checks.push(await checkCommandOrPath("ffprobe", "ffprobe", api.dependencies?.ffprobePath || process.env.FFPROBE_PATH || "ffprobe"));
@@ -187,6 +252,33 @@ export async function collectAiAgentHealth(api = {}, options = {}) {
     generatedAt: new Date().toISOString(),
     overall: computeOverallStatus(checks),
     checks
+  };
+}
+
+export async function collectAiAgentHealthCached(api = {}, options = {}) {
+  if (options.force === true) {
+    return collectAiAgentHealth(api, options);
+  }
+  const ttlMs = getHealthCacheTtlMs(options);
+  if (ttlMs <= 0) {
+    return collectAiAgentHealth(api, options);
+  }
+  const cacheKey = buildHealthCacheKey(api, options);
+  const cached = healthCache.get(cacheKey);
+  const now = Date.now();
+  if (cached && now - cached.cachedAt < ttlMs) {
+    return {
+      ...cached.health,
+      cached: true,
+      cacheAgeMs: now - cached.cachedAt
+    };
+  }
+  const health = await collectAiAgentHealth(api, options);
+  healthCache.set(cacheKey, { cachedAt: now, health });
+  return {
+    ...health,
+    cached: false,
+    cacheAgeMs: 0
   };
 }
 
