@@ -11,7 +11,8 @@ import {
 } from "../../src/bot/capabilities/registry.js";
 import {
   collectAiAgentHealthCached,
-  formatHealthReport
+  formatHealthReport,
+  getHealthRepairHint
 } from "../../src/bot/capabilities/health.js";
 
 async function withTempDir(fn) {
@@ -257,6 +258,46 @@ test("storage health scans NAS root and reports hidden directory exclusions", as
       await music.close();
     }
   });
+});
+
+test("health report includes repair hints for degraded checks", () => {
+  const health = {
+    overall: "warn",
+    generatedAt: "2026-07-02T00:00:00.000Z",
+    checks: [
+      {
+        id: "ai-model",
+        label: "AI 模型",
+        status: "warn",
+        detail: "文本模型未出现在 /models：openai::bad-model"
+      },
+      {
+        id: "whisper",
+        label: "Whisper",
+        status: "warn",
+        detail: "WHISPER_CPP_PATH 或 WHISPER_MODEL_PATH 未配置"
+      },
+      {
+        id: "music-bridge",
+        label: "music-lib-bridge",
+        status: "error",
+        detail: "不可达：fetch failed"
+      },
+      {
+        id: "storage-root",
+        label: "NAS 文件访问",
+        status: "ok",
+        detail: "可读写"
+      }
+    ]
+  };
+
+  const report = formatHealthReport(health);
+  assert.match(report, /建议：运行 @ai \/models 刷新模型列表/);
+  assert.match(report, /建议：配置 WHISPER_CPP_PATH 和 WHISPER_MODEL_PATH/);
+  assert.match(report, /建议：启动 music-lib-bridge/);
+  assert.doesNotMatch(report, /NAS 文件访问: 可读写\n  建议/);
+  assert.match(getHealthRepairHint("qq-music-cookie"), /QQ_COOKIE/);
 });
 
 test("capability descriptors expose core NAS tools, risk, and redacted prompt health", () => {

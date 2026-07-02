@@ -1,5 +1,6 @@
 import { executeAiToolCall, getAiToolDefinitions } from "../../tools/aiToolRuntime.js";
 import { buildCapabilityDescriptors, summarizeCapabilityExecutionReadiness } from "../../capabilities/registry.js";
+import { getHealthRepairHint } from "../../capabilities/health.js";
 import { invokeTextModel, parseModelRef } from "../../tools/llmClient.js";
 
 const MAX_TOOL_ROUND_OFFSET = 8;
@@ -332,29 +333,6 @@ function redactLocalPaths(value = "") {
     .replace(/\\\\[^\\/\s；,，]+[\\/][^\s；,，]+/g, "[network-path]");
 }
 
-function buildHealthRepairHint(checkId = "") {
-  const normalized = String(checkId || "").trim();
-  if (normalized === "whisper") {
-    return "配置 WHISPER_CPP_PATH 和 WHISPER_MODEL_PATH 后再启动视频/音频转录分析。";
-  }
-  if (normalized === "ffmpeg" || normalized === "ffprobe") {
-    return "配置 FFMPEG_PATH/FFPROBE_PATH，或确认 ffmpeg/ffprobe 在 PATH 中可执行。";
-  }
-  if (normalized === "music-bridge") {
-    return "先启动 music-lib-bridge，再重试音乐控制工具。";
-  }
-  if (normalized === "storage-root") {
-    return "检查 STORAGE_ROOT 是否存在且 storage-client 有读写权限。";
-  }
-  if (normalized === "ai-model") {
-    return "运行 @ai /models 刷新模型列表，并用 @ai /model use 选择可用模型。";
-  }
-  if (normalized === "yt-dlp") {
-    return "配置 YT_DLP_PATH，或确认 yt-dlp 在 PATH 中可执行。";
-  }
-  return "先运行 @ai /health 查看依赖状态，修复对应项后再重试。";
-}
-
 function buildToolExecutionPreflightResult(toolCall = {}, api = {}, healthSnapshot = null) {
   if (!healthSnapshot || !Array.isArray(healthSnapshot.checks) || !healthSnapshot.checks.length) {
     return null;
@@ -383,7 +361,7 @@ function buildToolExecutionPreflightResult(toolCall = {}, api = {}, healthSnapsh
       status: String(blocker.status || readiness.status || "error").trim(),
       detail: redactLocalPaths(blocker.detail || readiness.detail || "")
     },
-    nextAction: buildHealthRepairHint(blocker.id)
+    nextAction: getHealthRepairHint(blocker) || "先运行 @ai /health 查看依赖状态，修复对应项后再重试。"
   };
 }
 

@@ -569,6 +569,55 @@ function computeOverallStatus(checks = []) {
   return "ok";
 }
 
+export function getHealthRepairHint(checkOrId = "") {
+  const id = typeof checkOrId === "string"
+    ? String(checkOrId || "").trim()
+    : String(checkOrId?.id || "").trim();
+  const status = typeof checkOrId === "string" ? "" : String(checkOrId?.status || "").trim();
+  if (!id || status === "ok") {
+    return "";
+  }
+  if (id === "ai-model") {
+    return "运行 @ai /models 刷新模型列表，再用 @ai /model use <序号> 选择列表里真实可请求的模型。";
+  }
+  if (id === "ai-tool-call") {
+    return "如果模型不支持原生 tool-call 会自动使用 JSON plan fallback；若判断失败，先运行 @ai /models 刷新模型能力缓存。";
+  }
+  if (id === "storage-root") {
+    return "检查 STORAGE_ROOT 是否存在、storage-client 是否有读写权限，并确认索引扫描能访问该目录。";
+  }
+  if (id === "document-text") {
+    return "如需稳定读取 PDF，配置 PDF_TO_TEXT_PATH/PDFTOTEXT_PATH/POPPLER_PDFTOTEXT_PATH 指向 pdftotext；Office Open XML 会走内置抽取。";
+  }
+  if (id === "ffmpeg" || id === "ffprobe") {
+    return "配置 FFMPEG_PATH/FFPROBE_PATH，或把 ffmpeg/ffprobe 放到 PATH 中，视频封面、转码和转录前置处理依赖它们。";
+  }
+  if (id === "whisper") {
+    return "配置 WHISPER_CPP_PATH 和 WHISPER_MODEL_PATH 后重启 storage-client，再启动视频/音频转录分析。";
+  }
+  if (id === "yt-dlp") {
+    return "配置 YT_DLP_PATH，或把 yt-dlp 放到 PATH 中，Bilibili/YouTube 等下载入库依赖它。";
+  }
+  if (id === "music-bridge") {
+    return "启动 music-lib-bridge，并确认 MUSIC_LIB_BRIDGE_URL 指向它的 /health 服务。";
+  }
+  if (id === "qq-music-cookie") {
+    return "重新登录或刷新 QQ_COOKIE；若启用自动续期，确认 QQ_COOKIE_AUTO_REFRESH=1 且刷新脚本能连接浏览器。";
+  }
+  if (id === "bilibili-auth") {
+    return "配置 BOT_BILIBILI_COOKIE_HEADER/BOT_BILIBILI_COOKIE_FILE，或通过 Bilibili 登录流程生成 cookie 文件。";
+  }
+  if (id === "bot-queue") {
+    return "运行 @ai /jobs 查看排队和失败任务；必要时等待当前任务完成，或按 job 日志处理卡住/失败的任务。";
+  }
+  return "运行 @ai /health 查看完整依赖状态，修复对应项后再重试。";
+}
+
+function annotateHealthCheck(check = {}) {
+  const repairHint = getHealthRepairHint(check);
+  return repairHint ? { ...check, repairHint } : check;
+}
+
 export async function collectAiAgentHealth(api = {}, options = {}) {
   const checks = [];
   const aiModelResult = options.lightweight === true
@@ -586,10 +635,11 @@ export async function collectAiAgentHealth(api = {}, options = {}) {
   checks.push(await checkQqMusicCookie());
   checks.push(await checkBilibiliAuth(api));
   checks.push(await checkBotQueue(api));
+  const annotatedChecks = checks.map(annotateHealthCheck);
   return {
     generatedAt: new Date().toISOString(),
-    overall: computeOverallStatus(checks),
-    checks
+    overall: computeOverallStatus(annotatedChecks),
+    checks: annotatedChecks
   };
 }
 
@@ -628,6 +678,10 @@ export function formatHealthReport(health = {}) {
   ];
   for (const check of Array.isArray(health.checks) ? health.checks : []) {
     lines.push(`- [${check.status}] ${check.label}: ${check.detail}`);
+    const repairHint = String(check.repairHint || getHealthRepairHint(check) || "").trim();
+    if (repairHint) {
+      lines.push(`  建议：${repairHint}`);
+    }
   }
   lines.push("");
   lines.push("说明：error 会阻止相关能力；warn 表示可尝试但可能降级或失败。密钥和 cookie 不会显示在这里。");
