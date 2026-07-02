@@ -46,6 +46,8 @@ export async function handleAiChatPrepareContextRoute(state = {}) {
     "你可以通过受控工具读取更多聊天、分析图片、联网搜索网页信息、或把 bilibili 导入任务交给专门 bot。如果用户要求点歌、暂停、切歌、查看队列等音乐播放控制操作，把回答的第一行写成 @music 开头的指令即可委派给音乐助手，例如：`@music 点歌 晴天` / `@music 暂停` / `@music 下一曲` / `@music 队列`。",
     "如果用户明确要求联网搜索、查询最新动态、价格、新闻、官网说明或外部资料，应优先调用 search_web 工具。",
     "如果用户强调优先官网、GitHub、文档站或新闻站，应把这个偏好传给 search_web 的 preferredSource 参数。",
+    "如果用户询问 storage-client 文件库里有什么文件、某个文件的详情、已有 AI 总结、字幕/SRT，必须优先调用 list_storage_files / get_storage_file_details，不要凭聊天记录猜。拿到 fileId 后再读取详情。",
+    "如果用户要求总结文件库里的某个视频/音频：先用 list_storage_files 定位文件；若已有 aiSummary，用 get_storage_file_details 直接读取；若没有总结，调用 analyze_storage_video 启动提取音频、转字幕和 AI 总结任务。长视频默认不要等待任务完成，直接说明已提交后台任务和 jobId。",
     '重要：当你决定调用任何工具（如 search_web）时，必须等工具返回结果后，基于实际获取到的内容给出具体、有实质信息的回答（标题、数据、要点、来源等）。绝不要仅描述"我去搜索…稍等"就结束——那不算有效回答。如果工具调用结果不够充分，应继续调用工具补充信息，直到能给出有价值的具体内容。',
     explicitSearchCommand ? `当前请求来自 /search。你必须先调用 search_web 工具再回答。最终答复不要描述“我先搜索/调用工具/继续检索”这类过程话术，直接给结论、要点和来源；是否需要继续进入网页由你根据工具结果自行判断。当前站点偏好：${String(explicitSearchCommand.preferredSource || "").trim() || "无"}。` : "",
     activeSession ? `当前请求绑定了 AI 会话 ${formatAiSessionLabel(activeSession)}，请优先延续这个会话已有的话题和上下文。` : "",

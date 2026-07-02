@@ -1,5 +1,68 @@
 import { invokeMultimodalModelStream, invokeTextModelStream } from "../../tools/llmClient.js";
 
+const CJK_PATTERN = /[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]/g;
+
+function estimateTextTokens(value = "") {
+  const text = String(value || "");
+  if (!text) {
+    return 0;
+  }
+  const cjkCount = (text.match(CJK_PATTERN) || []).length;
+  const nonCjkText = text.replace(CJK_PATTERN, "");
+  return Math.max(1, Math.ceil(cjkCount + nonCjkText.length / 4));
+}
+
+function estimateContentTokens(content) {
+  if (typeof content === "string") {
+    return estimateTextTokens(content);
+  }
+  if (Array.isArray(content)) {
+    return content.reduce((sum, item) => {
+      if (typeof item === "string") {
+        return sum + estimateTextTokens(item);
+      }
+      if (item?.type === "text") {
+        return sum + estimateTextTokens(item.text || "");
+      }
+      if (item?.type === "image_url") {
+        return sum + 256;
+      }
+      return sum + estimateTextTokens(JSON.stringify(item || ""));
+    }, 0);
+  }
+  if (content && typeof content === "object") {
+    return estimateTextTokens(JSON.stringify(content));
+  }
+  return 0;
+}
+
+function estimateMessagesTokens(messages = []) {
+  const total = (Array.isArray(messages) ? messages : []).reduce((sum, message) => {
+    if (!message?.role) {
+      return sum;
+    }
+    const toolCallTokens = Array.isArray(message.tool_calls)
+      ? estimateTextTokens(JSON.stringify(message.tool_calls))
+      : 0;
+    return sum + 4 + estimateContentTokens(message.content) + toolCallTokens;
+  }, 2);
+  return Math.max(0, Math.ceil(total));
+}
+
+function buildUsageStats({ usage, messages, outputText, elapsedSec }) {
+  const hasPromptTokens = usage?.prompt_tokens != null;
+  const hasCompletionTokens = usage?.completion_tokens != null;
+  const promptTokens = hasPromptTokens ? usage.prompt_tokens : estimateMessagesTokens(messages);
+  const completionTokens = hasCompletionTokens ? usage.completion_tokens : estimateTextTokens(outputText);
+  const tokensPerSecond = elapsedSec > 0.5 && completionTokens > 0 ? Math.round(completionTokens / elapsedSec) : null;
+  return {
+    promptTokens,
+    promptTokensEstimated: !hasPromptTokens,
+    tokensPerSecond,
+    tokensPerSecondEstimated: tokensPerSecond != null && !hasCompletionTokens
+  };
+}
+
 async function flushStreamingDraft({ latestText, latestPublishedAt, minPublishIntervalMs, force = false, api, replyMessageId, card }) {
   if (!String(latestText || "").trim()) {
     return latestPublishedAt;
@@ -73,14 +136,18 @@ export async function streamFinalAnswer({ planningMessages, api, replyMessageId,
     replyMessageId,
     card: runningCard
   });
-  const completionTokens = streamResult.usage?.completion_tokens || 0;
   const genElapsedSec = firstChunkAt > 0 ? (Date.now() - firstChunkAt) / 1000 : 0;
-  const tokensPerSecond = genElapsedSec > 0.5 && completionTokens > 0 ? Math.round(completionTokens / genElapsedSec) : null;
+  const usageStats = buildUsageStats({
+    usage: streamResult.usage,
+    messages: messagesForAnswer,
+    outputText: streamResult.text || latestText,
+    elapsedSec: genElapsedSec
+  });
   return {
     answer: String(streamResult.text || latestText || "").trim(),
     model: streamResult.model || "",
     usage: streamResult.usage || null,
-    tokensPerSecond
+    ...usageStats
   };
 }
 
@@ -134,13 +201,28 @@ export async function streamVisionAnswer({ systemPrompt, visionPrompt, historyMe
     replyMessageId,
     card: runningCard
   });
-  const completionTokens = streamResult.usage?.completion_tokens || 0;
   const genElapsedSec = firstChunkAt > 0 ? (Date.now() - firstChunkAt) / 1000 : 0;
-  const tokensPerSecond = genElapsedSec > 0.5 && completionTokens > 0 ? Math.round(completionTokens / genElapsedSec) : null;
+  const estimatedMessages = [
+    ...(systemPrompt ? [{ role: "system", content: String(systemPrompt) }] : []),
+    ...(Array.isArray(historyMessages) ? historyMessages.filter((message) => message?.role && message?.content) : []),
+    {
+      role: "user",
+      content: [
+        { type: "text", text: String(visionPrompt || "") },
+        ...(Array.isArray(imageInputs) ? imageInputs : []).map((image) => ({ type: "image_url", image_url: { url: image?.dataUrl || "", detail: image?.detail || "auto" } }))
+      ]
+    }
+  ];
+  const usageStats = buildUsageStats({
+    usage: streamResult.usage,
+    messages: estimatedMessages,
+    outputText: streamResult.text || latestText,
+    elapsedSec: genElapsedSec
+  });
   return {
     answer: String(streamResult.text || latestText || "").trim(),
     model: streamResult.model || "",
     usage: streamResult.usage || null,
-    tokensPerSecond
+    ...usageStats
   };
 }

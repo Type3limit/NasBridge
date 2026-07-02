@@ -23,6 +23,8 @@ export async function readAiModelSettings(appDataRoot = "") {
       lastListedModels: Array.isArray(parsed?.lastListedModels)
         ? parsed.lastListedModels.map((item) => ({
             id: String(item?.id || "").trim(),
+            modelId: String(item?.modelId || item?.id || "").trim(),
+            provider: String(item?.provider || "").trim(),
             name: String(item?.name || item?.id || "").trim(),
             vendor: String(item?.vendor || "").trim(),
             preview: item?.preview === true,
@@ -51,6 +53,8 @@ export async function writeAiModelSettings(appDataRoot = "", settings = {}) {
       lastListedModels: Array.isArray(settings?.lastListedModels)
         ? settings.lastListedModels.map((item) => ({
             id: String(item?.id || "").trim(),
+            modelId: String(item?.modelId || item?.id || "").trim(),
+            provider: String(item?.provider || "").trim(),
             name: String(item?.name || item?.id || "").trim(),
             vendor: String(item?.vendor || "").trim(),
             preview: item?.preview === true,

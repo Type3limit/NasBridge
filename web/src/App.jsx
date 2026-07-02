@@ -572,6 +572,8 @@ async function getHlsPlaybackSupport() {
   }
 }
 
+import GlobalStarMapBackground from "./components/GlobalStarMapBackground";
+
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem("nas_token") || "");
   const [user, setUser] = useState(null);
@@ -4186,7 +4188,7 @@ export default function App() {
 
   if (!token || !user) {
     return (
-      <div className="page authPage">
+      <div className="page authPage" style={{ background: "transparent" }}>
         {renderToastViewport()}
         <div className="authLayout authExperience">
           <section className="surfaceCard authShowcase">
@@ -4341,6 +4343,17 @@ export default function App() {
               </div>
             </div>
           </Card>
+        </div>
+        <div style={{position:"fixed",bottom:0,left:0,right:0,textAlign:"center",padding:"3px 0",fontSize:"12px",color:"rgba(255,255,255,0.4)",background:"rgba(0,0,0,0.35)",backdropFilter:"blur(4px)",zIndex:9999,pointerEvents:"none",display:"flex",justifyContent:"center",alignItems:"center",gap:"16px"}}>
+          <a href="https://beian.miit.gov.cn/" rel="noreferrer" target="_blank"
+             style={{color:"rgba(255,255,255,0.4)",textDecoration:"none",pointerEvents:"auto"}}>
+            ICP备30177262049410112号
+          </a>
+          <a href="https://beian.mps.gov.cn/#/query/webSearch?code=51015602001732" rel="noreferrer" target="_blank"
+             style={{display:"inline-flex",alignItems:"center",gap:"4px",color:"rgba(255,255,255,0.4)",textDecoration:"none",pointerEvents:"auto"}}>
+            <img src="https://beian.mps.gov.cn/img/logo01.dd7ff50e.png" style={{height:"14px",verticalAlign:"middle"}} alt="公安备案图标" />
+            川公网安备51015602001732号
+          </a>
         </div>
       </div>
     );
@@ -5290,7 +5303,11 @@ export default function App() {
         {renderDialogs()}
 
       </div>
-      <div style={{position:"fixed",bottom:0,left:0,right:0,textAlign:"center",padding:"3px 0",fontSize:"12px",color:"#888",background:"rgba(0,0,0,0.6)",backdropFilter:"blur(4px)",zIndex:9999,pointerEvents:"none"}}>
+      <div style={{position:"fixed",bottom:0,left:0,right:0,textAlign:"center",padding:"3px 0",fontSize:"12px",color:"#888",background:"rgba(0,0,0,0.6)",backdropFilter:"blur(4px)",zIndex:9999,pointerEvents:"none",display:"flex",justifyContent:"center",alignItems:"center",gap:"16px"}}>
+        <a href="https://beian.miit.gov.cn/" rel="noreferrer" target="_blank"
+           style={{color:"#888",textDecoration:"none",pointerEvents:"auto"}}>
+          ICP备30177262049410112号
+        </a>
         <a href="https://beian.mps.gov.cn/#/query/webSearch?code=51015602001732" rel="noreferrer" target="_blank"
            style={{display:"inline-flex",alignItems:"center",gap:"4px",color:"#888",textDecoration:"none",pointerEvents:"auto"}}>
           <img src="https://beian.mps.gov.cn/img/logo01.dd7ff50e.png" style={{height:"14px",verticalAlign:"middle"}} alt="公安备案图标" />

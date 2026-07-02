@@ -152,6 +152,12 @@ npm run deploy:stop:linux
         - `COPILOT_MODEL=你在 /v1/models 里看到的模型 id`
         - `COPILOT_API_KEY=dummy`（如代理未要求真实 token，可直接用默认值）
       - 如果所选模型支持看图，再额外设置 `COPILOT_MULTIMODAL_MODEL`
+      - 也支持直接接 OpenAI 兼容的讯飞 Maas：
+        - `AI_PROVIDER=xunfei`
+        - `XUNFEI_BASE_URL=https://maas-coding-api.cn-huabei-1.xf-yun.com/v2`
+        - `XUNFEI_MODEL=astron-code-latest`
+        - `XUNFEI_API_KEY=你的讯飞 Maas 密钥`
+      - 讯飞 provider 会优先尝试 `/models`；如果接口未提供模型目录，会回退到内置候选模型并显示为 `讯飞Maas`
       - Playwright 现在改为通用配置，bilibili 下载和 AI 联网搜索共用一组变量
         - `PLAYWRIGHT_EXECUTABLE_PATH=`：可选，指定系统 Chrome / Edge 路径
         - `PLAYWRIGHT_HEADLESS=1`：默认无头模式；排查页面时可设为 `0`

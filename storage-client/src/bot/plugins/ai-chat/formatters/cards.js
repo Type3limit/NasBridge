@@ -4,12 +4,14 @@ import { getMatchedSourceLabel, getSearchPreferenceLabel } from "../utils/search
 
 export function createAnswerCard(answer, model, mode = "text", session = null, stats = null) {
   const modelPart = model ? `模型: ${model}` : "";
+  const contextValue = stats?.promptTokensEstimated === true ? `≈${stats.promptTokens}` : stats?.promptTokens;
+  const speedValue = stats?.tokensPerSecondEstimated === true ? `≈${stats.tokensPerSecond}` : stats?.tokensPerSecond;
   const contextPart = stats?.promptTokens != null
     ? stats.contextLimit != null
-      ? `上下文 ${stats.promptTokens}/${stats.contextLimit}`
-      : `上下文 ${stats.promptTokens} tokens`
+      ? `上下文 ${contextValue}/${stats.contextLimit}`
+      : `上下文 ${contextValue} tokens`
     : "";
-  const toksPart = stats?.tokensPerSecond != null ? `${stats.tokensPerSecond} tok/s` : "";
+  const toksPart = stats?.tokensPerSecond != null ? `${speedValue} tok/s` : "";
   const subtitleBase = [modelPart, contextPart, toksPart].filter(Boolean).join(" · ");
   return {
     type: mode === "multimodal" ? "image-analysis" : "ai-answer",

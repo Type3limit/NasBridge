@@ -40,6 +40,20 @@ function readEnv(names = []) {
   return "";
 }
 
+function readPositiveIntegerEnv(names = []) {
+  for (const name of names) {
+    const rawValue = String(process.env[name] || "").trim().replace(/,/g, "");
+    if (!rawValue) {
+      continue;
+    }
+    const value = Number.parseInt(rawValue, 10);
+    if (Number.isSafeInteger(value) && value > 0) {
+      return value;
+    }
+  }
+  return null;
+}
+
 const XUNFEI_PROVIDER_IDS = new Set(["xunfei", "xfyun", "xf-maas", "xunfei-maas", "maas"]);
 const XUNFEI_DEFAULT_BASE_URL = "https://maas-coding-api.cn-huabei-1.xf-yun.com/v2";
 const XUNFEI_DEFAULT_TEXT_MODEL = "astron-code-latest";
@@ -292,6 +306,23 @@ function getModel(mode = "text", provider = "") {
   return "";
 }
 
+function getConfiguredContextLimit(provider = "") {
+  const selectedProvider = normalizeProviderName(provider) || getConfiguredProvider();
+  if (selectedProvider === "copilot") {
+    return readPositiveIntegerEnv(["COPILOT_CONTEXT_LIMIT", "AI_CONTEXT_LIMIT"]);
+  }
+  if (selectedProvider === "xunfei") {
+    return readPositiveIntegerEnv(["XUNFEI_CONTEXT_LIMIT", "XFYUN_CONTEXT_LIMIT", "AI_CONTEXT_LIMIT"]);
+  }
+  if (selectedProvider === "ark") {
+    return readPositiveIntegerEnv(["ARK_CONTEXT_LIMIT", "AI_CONTEXT_LIMIT"]);
+  }
+  if (selectedProvider === "openai") {
+    return readPositiveIntegerEnv(["OPENAI_CONTEXT_LIMIT", "AI_CONTEXT_LIMIT"]);
+  }
+  return readPositiveIntegerEnv(["AI_CONTEXT_LIMIT"]);
+}
+
 export function getDefaultTextModelName() {
   const provider = getConfiguredProvider();
   const modelId = getModel("text", provider);
@@ -299,7 +330,12 @@ export function getDefaultTextModelName() {
 }
 
 export function getModelContextLimit(modelRef = "") {
-  const modelId = String(parseModelRef(String(modelRef || "")).modelId || modelRef || "").toLowerCase();
+  const parsed = parseModelRef(String(modelRef || ""));
+  const configuredLimit = getConfiguredContextLimit(parsed.provider);
+  if (configuredLimit != null) {
+    return configuredLimit;
+  }
+  const modelId = String(parsed.modelId || modelRef || "").toLowerCase();
   for (const [pattern, limit] of MODEL_CONTEXT_LIMITS) {
     if (pattern.test(modelId)) {
       return limit;

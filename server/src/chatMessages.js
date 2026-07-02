@@ -43,6 +43,34 @@ export function sanitizeMessageCard(rawCard) {
     return null;
   }
   const progress = Number.isFinite(card.progress) ? Math.max(0, Math.min(100, Number(card.progress))) : null;
+  const badges = Array.isArray(card.badges)
+    ? card.badges.slice(0, 24).map((badge) => {
+        if (typeof badge === "string") {
+          return {
+            label: String(badge || "").slice(0, 80),
+            color: "informative",
+            appearance: "tint"
+          };
+        }
+        return {
+          label: String(badge?.label || "").slice(0, 80),
+          color: String(badge?.color || "informative").slice(0, 24),
+          appearance: String(badge?.appearance || "tint").slice(0, 24)
+        };
+      }).filter((badge) => badge.label)
+    : [];
+  const modelChoices = Array.isArray(card.modelChoices)
+    ? card.modelChoices.slice(0, 256).map((choice) => ({
+        index: Math.max(0, Number(choice?.index || 0)),
+        label: String(choice?.label || "").slice(0, 160),
+        command: String(choice?.command || "").slice(0, 160),
+        provider: String(choice?.provider || "").slice(0, 80),
+        modelId: String(choice?.modelId || "").slice(0, 160),
+        title: String(choice?.title || "").slice(0, 500),
+        isTextDefault: choice?.isTextDefault === true,
+        isVisionDefault: choice?.isVisionDefault === true
+      })).filter((choice) => choice.label && choice.command)
+    : [];
   const actions = Array.isArray(card.actions)
     ? card.actions.slice(0, 6).map((action) => ({
         type: String(action?.type || "").slice(0, 32),
@@ -67,6 +95,8 @@ export function sanitizeMessageCard(rawCard) {
     mediaAttachmentId: String(card.mediaAttachmentId || "").slice(0, 160),
     sourceLabel: String(card.sourceLabel || "").slice(0, 300),
     sourceUrl: String(card.sourceUrl || "").slice(0, 500),
+    badges,
+    modelChoices,
     graphState: card.graphState && typeof card.graphState === "object" ? card.graphState : null,
     actions
   };

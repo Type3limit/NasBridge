@@ -503,6 +503,34 @@ function normalizeMessage(message) {
           title: String(message.card.title || ""),
           subtitle: String(message.card.subtitle || ""),
           body: String(message.card.body || ""),
+          badges: Array.isArray(message.card.badges)
+            ? message.card.badges.map((badge) => {
+                if (typeof badge === "string") {
+                  return {
+                    label: String(badge || "").trim(),
+                    color: "informative",
+                    appearance: "tint"
+                  };
+                }
+                return {
+                  label: String(badge?.label || "").trim(),
+                  color: String(badge?.color || "informative").trim(),
+                  appearance: String(badge?.appearance || "tint").trim()
+                };
+              }).filter((badge) => badge.label)
+            : [],
+          modelChoices: Array.isArray(message.card.modelChoices)
+            ? message.card.modelChoices.map((choice) => ({
+                index: Math.max(0, Number(choice?.index || 0)),
+                label: String(choice?.label || "").trim(),
+                command: String(choice?.command || "").trim(),
+                provider: String(choice?.provider || "").trim(),
+                modelId: String(choice?.modelId || "").trim(),
+                title: String(choice?.title || "").trim(),
+                isTextDefault: choice?.isTextDefault === true,
+                isVisionDefault: choice?.isVisionDefault === true
+              })).filter((choice) => choice.label && choice.command)
+            : [],
           progress: Number.isFinite(message.card.progress) ? Math.max(0, Math.min(100, Number(message.card.progress))) : null,
           imageUrl: String(message.card.imageUrl || ""),
           imageFit: String(message.card.imageFit || "cover"),
@@ -543,6 +571,56 @@ function normalizeMessage(message) {
       avatarFileId: String(message?.author?.avatarFileId || "")
     }
   };
+}
+
+function toChoiceToken(value = "") {
+  const normalized = String(value || "").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  return normalized || "unknown";
+}
+
+function getModelChoiceProviderLabel(provider = "") {
+  const normalized = toChoiceToken(provider);
+  if (normalized === "copilot") {
+    return "GitHub Copilot";
+  }
+  if (normalized === "xunfei" || normalized === "xfyun") {
+    return "讯飞Maas";
+  }
+  if (normalized === "ark") {
+    return "Ark";
+  }
+  if (normalized === "openai") {
+    return "OpenAI Compatible";
+  }
+  return String(provider || "未标记 provider").trim() || "未标记 provider";
+}
+
+function groupModelChoicesByProvider(choices = []) {
+  const groups = [];
+  const groupMap = new Map();
+  for (const choice of Array.isArray(choices) ? choices : []) {
+    const key = toChoiceToken(choice?.provider || "");
+    if (!groupMap.has(key)) {
+      const group = {
+        key,
+        label: getModelChoiceProviderLabel(choice?.provider || ""),
+        choices: [],
+        hasTextDefault: false,
+        hasVisionDefault: false
+      };
+      groups.push(group);
+      groupMap.set(key, group);
+    }
+    const targetGroup = groupMap.get(key);
+    targetGroup.choices.push(choice);
+    if (choice?.isTextDefault) {
+      targetGroup.hasTextDefault = true;
+    }
+    if (choice?.isVisionDefault) {
+      targetGroup.hasVisionDefault = true;
+    }
+  }
+  return groups;
 }
 
 function mergeMessages(existing, incoming) {
@@ -866,6 +944,7 @@ export default function ChatRoom({
   const [botCatalog, setBotCatalog] = useState([]);
   const [loadingBotCatalog, setLoadingBotCatalog] = useState(false);
   const [composerCursor, setComposerCursor] = useState(0);
+  const [modelChoiceGroupState, setModelChoiceGroupState] = useState({});
   const [botMentionStyle, setBotMentionStyle] = useState({});
   const [activeBotMentionIndex, setActiveBotMentionIndex] = useState(0);
   const [dismissedBotMentionKey, setDismissedBotMentionKey] = useState("");
@@ -1899,6 +1978,8 @@ export default function ChatRoom({
       && message.card.graphState
       && typeof message.card.graphState === "object"
       && ["queued", "running"].includes(cardStatus);
+    const modelChoices = Array.isArray(message.card.modelChoices) ? message.card.modelChoices : [];
+    const modelChoiceGroups = groupModelChoicesByProvider(modelChoices);
     return (
       <div className={`chatDynamicCard status-${cardStatus || "info"}`}>
         {message.card.imageUrl ? <img className={`chatDynamicCardCover fit-${String(message.card.imageFit || "cover")}`} src={message.card.imageUrl} alt={message.card.imageAlt || message.card.title || "封面"} referrerPolicy="no-referrer" /> : null}
@@ -1909,6 +1990,61 @@ export default function ChatRoom({
               <Text>{message.card.title || message.author.displayName}</Text>
             </div>
             {message.card.subtitle ? <Caption1>{message.card.subtitle}</Caption1> : null}
+            {message.card.badges?.length ? (
+              <div className="chatDynamicCardBadges">
+                {message.card.badges.map((badge, index) => (
+                  <Badge key={`${badge.label}:${index}`} appearance={badge.appearance || "tint"} color={badge.color || "informative"} size="small">
+                    {badge.label}
+                  </Badge>
+                ))}
+              </div>
+            ) : null}
+            {modelChoices.length ? (
+              <div className="chatModelChoiceSection">
+                <Caption1>点击模型标签，会自动把切换命令写入输入框。</Caption1>
+                <div className="chatModelChoiceGroups">
+                  {modelChoiceGroups.map((group, groupIndex) => {
+                    const defaultOpen = group.hasTextDefault || group.hasVisionDefault || groupIndex === 0;
+                    const open = isModelChoiceGroupOpen(message.id, group.key, defaultOpen);
+                    return (
+                      <section key={`${message.id}:provider-group:${group.key}`} className={`chatModelChoiceGroup provider-${group.key}${open ? " open" : ""}`}>
+                        <button
+                          type="button"
+                          className="chatModelChoiceGroupToggle"
+                          aria-expanded={open}
+                          onClick={() => toggleModelChoiceGroup(message.id, group.key, defaultOpen)}
+                        >
+                          <span className="chatModelChoiceGroupTitle">
+                            <span className="chatModelChoiceGroupChevron" aria-hidden="true" />
+                            <span>{group.label}</span>
+                          </span>
+                          <span className="chatModelChoiceGroupMeta">
+                            {group.hasTextDefault ? <span className="chatModelChoiceGroupFlag">文本默认</span> : null}
+                            {group.hasVisionDefault ? <span className="chatModelChoiceGroupFlag">看图默认</span> : null}
+                            <span className="chatModelChoiceGroupCount">{group.choices.length}</span>
+                          </span>
+                        </button>
+                        {open ? (
+                          <div className="chatModelChoiceGrid">
+                            {group.choices.map((choice) => (
+                              <button
+                                key={`${message.id}:model-choice:${choice.index}:${choice.command}`}
+                                type="button"
+                                className={`chatModelChoiceButton provider-${toChoiceToken(choice.provider)}${choice.isTextDefault ? " is-text-default" : ""}${choice.isVisionDefault ? " is-vision-default" : ""}`}
+                                title={choice.title || choice.command}
+                                onClick={() => handleModelChoiceClick(choice)}
+                              >
+                                {choice.label}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                      </section>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
             {showStarMap
               ? <AiStarMapCard graphState={message.card.graphState} elapsedText={elapsedText} subtitle={message.card.subtitle} detailBody={cardBody} />
               : cardBody ? <MarkdownBlock className="chatMarkdownBlock chatDynamicMarkdown" text={cardBody} /> : null}
@@ -2146,6 +2282,56 @@ export default function ChatRoom({
       input.focus();
       const caret = start + nextValue.length;
       input.setSelectionRange(caret, caret);
+    });
+  }
+
+  function fillComposerWithCommand(value) {
+    const command = String(value || "").trim();
+    if (!command) {
+      return;
+    }
+    setDraft(command);
+    setComposerCursor(command.length);
+    setComposerError("");
+    requestAnimationFrame(() => {
+      const input = composerInputRef.current;
+      input?.focus();
+      input?.setSelectionRange(command.length, command.length);
+    });
+  }
+
+  function handleModelChoiceClick(choice) {
+    const command = String(choice?.command || "").trim();
+    if (!command) {
+      return;
+    }
+    fillComposerWithCommand(command);
+    setMessage?.(`已写入 ${command}，回车即可发送`, "success");
+  }
+
+  function isModelChoiceGroupOpen(messageId, groupKey, defaultOpen = false) {
+    const messageState = modelChoiceGroupState[messageId];
+    if (!messageState || typeof messageState[groupKey] !== "boolean") {
+      return defaultOpen;
+    }
+    return messageState[groupKey];
+  }
+
+  function toggleModelChoiceGroup(messageId, groupKey, defaultOpen = false) {
+    setModelChoiceGroupState((prev) => {
+      const messageState = prev[messageId] && typeof prev[messageId] === "object"
+        ? prev[messageId]
+        : {};
+      const current = typeof messageState[groupKey] === "boolean"
+        ? messageState[groupKey]
+        : defaultOpen;
+      return {
+        ...prev,
+        [messageId]: {
+          ...messageState,
+          [groupKey]: !current
+        }
+      };
     });
   }
 

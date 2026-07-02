@@ -12,6 +12,7 @@ export function createAiChatPlugin() {
     permissions: {
       readChatHistory: true,
       readChatAttachments: true,
+      readLibrary: true,
       llm: true,
       multimodal: true,
       replyChat: true,

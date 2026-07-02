@@ -35,6 +35,27 @@ export function getAiToolProgress(toolName = "", round = 0) {
       percent: 46 + offset
     };
   }
+  if (normalized === "list_storage_files") {
+    return {
+      phase: "tool-list-storage-files",
+      label: safeRound > 0 ? `继续检索存储文件（第 ${safeRound + 1} 轮）` : "检索存储文件列表",
+      percent: 42 + offset
+    };
+  }
+  if (normalized === "get_storage_file_details") {
+    return {
+      phase: "tool-get-storage-file-details",
+      label: safeRound > 0 ? `继续读取文件详情（第 ${safeRound + 1} 轮）` : "读取存储文件详情",
+      percent: 44 + offset
+    };
+  }
+  if (normalized === "analyze_storage_video") {
+    return {
+      phase: "tool-analyze-storage-video",
+      label: safeRound > 0 ? `继续提交视频总结任务（第 ${safeRound + 1} 轮）` : "提交视频转录与总结任务",
+      percent: 48 + offset
+    };
+  }
   if (normalized === "import_bilibili_video") {
     return {
       phase: "tool-import-bilibili-video",

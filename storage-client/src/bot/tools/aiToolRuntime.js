@@ -6,6 +6,15 @@ import { invokeMultimodalModel, invokeTextModel } from "./llmClient.js";
 import { fetchWebPageSummary, getSourcePreferenceLabel, normalizeSourcePreference, searchWeb } from "./httpFetch.js";
 import { buildRealtimeContextText } from "./realtimeContext.js";
 import { searchYYeTsShows, getYYeTsResource, extractEpisodeMagnets, sanitizeShowName } from "./yyetsApi.js";
+import {
+  MAX_LIBRARY_DETAIL_FILES,
+  MAX_LIBRARY_LIST_LIMIT,
+  buildLibraryDetailsResult,
+  buildLibraryListResult,
+  loadLibrarySnapshot,
+  readSubtitleForFile,
+  resolveLibraryFile
+} from "./libraryFiles.js";
 
 const MAX_HISTORY_LIMIT = 60;
 const MAX_IMAGE_TOOL_LIMIT = 3;
@@ -27,6 +36,45 @@ function clamp(value, min, max) {
     return min;
   }
   return Math.max(min, Math.min(max, Math.floor(numeric)));
+}
+
+async function waitForDelegatedBotJob(api, jobId, options = {}) {
+  const timeoutMs = clamp(options.timeoutSeconds || 600, 5, 600) * 1000;
+  const pollIntervalMs = clamp(options.pollIntervalMs || 3000, 500, 10_000);
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    api.throwIfCancelled?.();
+    if (Date.now() > deadline) {
+      throw new Error(`等待任务 ${jobId} 完成超时`);
+    }
+    const job = await api.getJob(jobId);
+    if (!job) {
+      throw new Error(`任务不存在: ${jobId}`);
+    }
+    if (["succeeded", "failed", "cancelled", "expired"].includes(job.status)) {
+      return job;
+    }
+    await new Promise((resolve, reject) => {
+      let onAbort = null;
+      const cleanup = () => {
+        clearTimeout(timer);
+        if (api.signal && onAbort) {
+          api.signal.removeEventListener("abort", onAbort);
+        }
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        resolve();
+      }, pollIntervalMs);
+      if (api.signal) {
+        onAbort = () => {
+          cleanup();
+          reject(Object.assign(new Error("job cancelled"), { name: "AbortError" }));
+        };
+        api.signal.addEventListener("abort", onAbort, { once: true });
+      }
+    });
+  }
 }
 
 function compactMessageText(message = {}) {
@@ -364,6 +412,59 @@ export function getAiToolDefinitions() {
       }
     },
     {
+      name: "list_storage_files",
+      description: "读取当前 storage-client 本地文件库列表。可按关键词、目录、类型、MIME、是否已有 AI 总结或字幕筛选。需要知道库里有哪些文件时先调用它，再用返回的 fileId 调详情工具。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "按文件名、路径、标签或总结内容模糊搜索" },
+          kind: { type: "string", enum: ["all", "video", "audio", "image", "document", "subtitle"] },
+          pathPrefix: { type: "string", description: "目录前缀，例如 Movies/ 或 Bilibili/教程" },
+          mimePrefix: { type: "string", description: "MIME 前缀，例如 video/、audio/、image/" },
+          hasAiSummary: { type: "boolean", description: "只看已有/没有 AI 总结的文件" },
+          hasSubtitle: { type: "boolean", description: "只看已有/没有字幕 sidecar 的文件" },
+          includeSubtitles: { type: "boolean", description: "是否把 .srt/.vtt 等字幕文件本身也列出来，默认 false" },
+          limit: { type: "integer", minimum: 1, maximum: MAX_LIBRARY_LIST_LIMIT },
+          offset: { type: "integer", minimum: 0 },
+          sortBy: { type: "string", enum: ["updatedAt", "createdAt", "name", "path", "size", "mimeType"] },
+          sortDirection: { type: "string", enum: ["asc", "desc"] }
+        }
+      }
+    },
+    {
+      name: "get_storage_file_details",
+      description: "批量读取 storage-client 文件详情。可直接返回已有 AI 总结，也可读取对应字幕 sidecar（.srt/.vtt/.ass 等）的文本内容。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          fileId: { type: "string", description: "单个文件 ID" },
+          fileIds: { type: "array", items: { type: "string" }, maxItems: MAX_LIBRARY_DETAIL_FILES, description: "多个文件 ID" },
+          path: { type: "string", description: "单个相对路径" },
+          paths: { type: "array", items: { type: "string" }, maxItems: MAX_LIBRARY_DETAIL_FILES, description: "多个相对路径" },
+          includeSummary: { type: "boolean", description: "是否包含 aiSummary，默认 true" },
+          includeSubtitle: { type: "boolean", description: "是否内联读取字幕文本，默认 false" },
+          includeSrt: { type: "boolean", description: "includeSubtitle 的别名" },
+          subtitleMaxChars: { type: "integer", minimum: 1, maximum: 50000, description: "字幕内联最大字符数" }
+        }
+      }
+    },
+    {
+      name: "analyze_storage_video",
+      description: "对 storage-client 中没有总结的视频/音频文件启动 video.analyze：提取音频、Whisper 转字幕、生成 AI 总结并保存到文件元数据。已有总结时默认直接返回总结；设置 force=true 可重新总结。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          fileId: { type: "string", description: "文件 ID，优先使用 list_storage_files 返回的 fileId" },
+          path: { type: "string", description: "相对路径（与 fileId 二选一）" },
+          filePath: { type: "string", description: "相对路径别名" },
+          force: { type: "boolean", description: "已有总结时是否重新跑总结，默认 false" },
+          includeSubtitle: { type: "boolean", description: "已有总结时是否同时返回字幕文本，默认 false" },
+          waitForCompletion: { type: "boolean", description: "是否等待任务完成再返回。长视频建议 false，默认 false" },
+          timeoutSeconds: { type: "integer", minimum: 5, maximum: 600 }
+        }
+      }
+    },
+    {
       name: "import_bilibili_video",
       description: "把一个或多个 bilibili 链接/BV 号交给 bilibili.downloader 批量下载并入库。需要同时下载多个视频时，把所有 source 放入 sources 数组一次调用，不要多次单独调用。通常应先用 search_bilibili_video 找到具体视频链接，再调用这个工具。",
       inputSchema: {
@@ -498,6 +599,106 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
       imageCount: imageInputs.length,
       model: result.model || "",
       analysis: String(result.text || "").trim()
+    });
+  }
+
+  if (name === "list_storage_files") {
+    await api.emitProgress({ phase: "tool-list-storage-files", label: "读取存储文件索引", percent: 42 });
+    return safeJson(await buildLibraryListResult(api, input));
+  }
+
+  if (name === "get_storage_file_details") {
+    await api.emitProgress({ phase: "tool-get-storage-file-details", label: "读取文件详情与元数据", percent: 44 });
+    return safeJson(await buildLibraryDetailsResult(api, input));
+  }
+
+  if (name === "analyze_storage_video") {
+    await api.emitProgress({ phase: "tool-analyze-storage-video", label: "定位待分析文件", percent: 46 });
+    const identifier = String(input.fileId || input.path || input.filePath || "").trim();
+    if (!identifier) {
+      throw new Error("fileId or path is required");
+    }
+    const snapshot = await loadLibrarySnapshot(api);
+    const file = resolveLibraryFile(snapshot.files, identifier);
+    if (!file) {
+      throw new Error(`文件未找到: ${identifier}`);
+    }
+
+    if (file.aiSummary && input.force !== true) {
+      const subtitle = input.includeSubtitle === true || input.includeSrt === true
+        ? await readSubtitleForFile(api, file, input.subtitleMaxChars || 12_000)
+        : null;
+      return safeJson({
+        status: "already_summarized",
+        file: {
+          fileId: file.id,
+          path: file.relativePath,
+          name: file.name,
+          mimeType: file.mimeType,
+          subtitleAvailable: Boolean(file.subtitleAvailable),
+          subtitlePath: file.subtitlePath || ""
+        },
+        aiSummary: file.aiSummary,
+        subtitle
+      });
+    }
+
+    const mimeType = String(file.mimeType || "").toLowerCase();
+    if (!mimeType.startsWith("video/") && !mimeType.startsWith("audio/")) {
+      throw new Error(`analyze_storage_video 仅支持视频/音频文件，当前 MIME: ${file.mimeType}`);
+    }
+
+    await api.emitProgress({ phase: "tool-analyze-storage-video", label: "创建视频转录与总结任务", percent: 52 });
+    const delegatedJob = await api.invokeBot({
+      botId: "video.analyze",
+      trigger: {
+        type: "tool-call",
+        rawText: file.relativePath,
+        parsedArgs: {
+          fileId: file.id,
+          filePath: file.relativePath
+        }
+      },
+      options: {
+        delegatedBy: api.botId,
+        parentJobId: api.jobId,
+        toolName: name
+      }
+    });
+
+    if (input.waitForCompletion === true) {
+      await api.emitProgress({ phase: "tool-analyze-storage-video", label: "等待视频总结任务完成", percent: 58 });
+      const completedJob = await waitForDelegatedBotJob(api, delegatedJob.jobId, {
+        timeoutSeconds: input.timeoutSeconds || 600
+      });
+      return safeJson({
+        status: completedJob.status,
+        jobId: completedJob.jobId,
+        file: {
+          fileId: file.id,
+          path: file.relativePath,
+          name: file.name,
+          mimeType: file.mimeType
+        },
+        result: completedJob.result || {},
+        error: completedJob.error || null
+      });
+    }
+
+    return safeJson({
+      status: delegatedJob.status || "queued",
+      delegated: true,
+      botId: "video.analyze",
+      jobId: delegatedJob.jobId || "",
+      file: {
+        fileId: file.id,
+        path: file.relativePath,
+        name: file.name,
+        mimeType: file.mimeType,
+        subtitleAvailable: Boolean(file.subtitleAvailable),
+        subtitlePath: file.subtitlePath || ""
+      },
+      message: "已提交视频转录与 AI 总结任务，完成后会写入文件元数据。"
     });
   }
 

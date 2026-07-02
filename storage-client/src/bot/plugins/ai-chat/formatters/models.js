@@ -68,58 +68,78 @@ export function buildModelUsageText(settings = {}) {
     "- @ai /search 官网 Claude Code 使用方式",
     "临时切换方法：",
     "- @ai /model <模型名> 你的问题",
-    "- @ai --model=<模型名> 你的问题"
+    "- @ai --model=<模型名> 你的问题",
+    "- 跨 provider 显式切换可用 provider::模型名，例如：@ai /model xunfei::astron-code-latest"
   ].join("\n");
 }
 
 export function buildAvailableModelsText(models = [], settings = {}, filter = "all") {
-  const currentTextModel = getEffectiveTextModel(settings) || "";
-  const currentMultimodalModel = getEffectiveMultimodalModel(settings) || "";
   if (!models.length) {
     return [
-      `当前 provider 在“${getModelFilterLabel(filter)}”下没有返回任何模型。`,
-      "你可以直接访问 /v1/models 检查代理是否正常。"
+      `当前已启用 provider 在“${getModelFilterLabel(filter)}”下没有返回任何模型。`,
+      "你可以分别检查各 provider 的 /models 或确认对应代理是否在线。"
     ].join("\n");
   }
-  const lines = [
+  return [
     `筛选: ${getModelFilterLabel(filter)}`,
-    "使用方式: @ai /model use <列表序号>",
-    ""
-  ];
+    "点击下方模型标签后，会自动在输入框写入 @ai /model use <列表序号>。",
+    "如果想手动输入，也可以直接发送：@ai /model use <列表序号>"
+  ].join("\n");
+}
+
+export function buildAvailableModelChoices(models = [], settings = {}) {
+  const currentTextModel = getEffectiveTextModel(settings) || "";
+  const currentMultimodalModel = getEffectiveMultimodalModel(settings) || "";
   let globalIndex = 0;
-  for (const [vendor, vendorModels] of groupModelsByVendor(models)) {
-    lines.push(`【${vendor}】`);
+  const choices = [];
+  for (const [, vendorModels] of groupModelsByVendor(models)) {
     for (const model of vendorModels) {
       globalIndex += 1;
-      const tags = [];
-      if (model.id === currentTextModel) {
-        tags.push("当前文本默认");
-      }
-      if (model.id === currentMultimodalModel) {
-        tags.push("当前看图默认");
-      }
+      const displayId = String(model.modelId || model.id || "").trim() || String(model.id || "").trim();
+      const capabilityFlags = [];
       if (model.toolCalls) {
-        tags.push("tool-calls");
+        capabilityFlags.push("tool-calls");
       }
       if (model.vision) {
-        tags.push("vision");
+        capabilityFlags.push("vision");
       }
       if (model.preview) {
-        tags.push("preview");
+        capabilityFlags.push("preview");
       }
-      const modelLabel = model.name && model.name !== model.id ? `${model.id} (${model.name})` : model.id;
-      lines.push(`${globalIndex}. ${modelLabel}${tags.length ? ` [${tags.join(" | ")}]` : ""}`);
+      const stateFlags = [];
+      if (model.id === currentTextModel) {
+        stateFlags.push("当前文本默认");
+      }
+      if (model.id === currentMultimodalModel) {
+        stateFlags.push("当前看图默认");
+      }
+      choices.push({
+        index: globalIndex,
+        label: `${globalIndex}. ${displayId}`,
+        command: `@ai /model use ${globalIndex}`,
+        provider: String(model.provider || "").trim(),
+        modelId: displayId,
+        isTextDefault: model.id === currentTextModel,
+        isVisionDefault: model.id === currentMultimodalModel,
+        title: [
+          displayId,
+          model.name && model.name !== displayId ? `名称: ${model.name}` : "",
+          model.provider ? `provider: ${model.provider}` : "",
+          stateFlags.join(" · "),
+          capabilityFlags.length ? `能力: ${capabilityFlags.join(" / ")}` : ""
+        ].filter(Boolean).join("\n")
+      });
     }
-    lines.push("");
   }
-  return lines.join("\n").trim();
+  return choices;
 }
 
 export function buildUseListedModelText(selectedModel = {}, nextSettings = {}, filter = "all") {
   return [
     `已切换默认文本模型：${getEffectiveTextModel(nextSettings) || "未配置"}`,
     `当前默认看图模型：${getEffectiveMultimodalModel(nextSettings) || "未配置"}`,
+    selectedModel.provider ? `所选 provider：${selectedModel.provider}` : "",
     `来自最近一次模型列表：${getModelFilterLabel(filter)}`,
     selectedModel.vision ? "该模型支持视觉，已在不覆盖独立看图设置的前提下联动更新。" : "该模型未标记为视觉模型，仅更新文本默认模型。"
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }

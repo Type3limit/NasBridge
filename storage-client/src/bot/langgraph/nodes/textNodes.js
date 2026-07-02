@@ -10,6 +10,14 @@ import { createToolAwarePlanningMessages, executePendingToolCallsRound, invokeTo
 import { MAX_TOOL_ROUNDS } from "../../plugins/ai-chat/constants.js";
 import { getModelContextLimit } from "../../tools/llmClient.js";
 
+function logAutoCompressFailure(api, error) {
+  const message = String(error?.message || error || "unknown error").trim();
+  if (typeof api?.appendLog !== "function") {
+    return;
+  }
+  Promise.resolve(api.appendLog(`AI context auto-compress failed: ${message}`)).catch(() => {});
+}
+
 async function finalizeAiChatTextRoute({ prepared = {}, planningMessages = [], modelResult = null }) {
   const api = prepared.api;
   const context = prepared.context;
@@ -59,9 +67,11 @@ async function finalizeAiChatTextRoute({ prepared = {}, planningMessages = [], m
     activeSession = await appendAiSessionTurn(api.appDataRoot, activeSession, toolAwarePrompt, answer);
   }
   const stats = {
-    promptTokens: streamed.usage?.prompt_tokens ?? null,
+    promptTokens: streamed.promptTokens ?? streamed.usage?.prompt_tokens ?? null,
+    promptTokensEstimated: streamed.promptTokensEstimated === true,
     contextLimit: getModelContextLimit(streamed.model),
-    tokensPerSecond: streamed.tokensPerSecond ?? null
+    tokensPerSecond: streamed.tokensPerSecond ?? null,
+    tokensPerSecondEstimated: streamed.tokensPerSecondEstimated === true
   };
   await emitReplyProgress({ phase: "append-chat-reply", label: "写入最终回复", percent: 96 });
   const chatReply = await api.publishChatReply({
@@ -75,8 +85,8 @@ async function finalizeAiChatTextRoute({ prepared = {}, planningMessages = [], m
       compressAiSessionContext({
         appDataRoot: api.appDataRoot,
         session: activeSession,
-        textModel: defaultTextModel
-      }).catch(() => {});
+        textModel: streamed.model || modelOverride || defaultTextModel
+      }).catch((error) => logAutoCompressFailure(api, error));
     }
   }
   return {

@@ -77,9 +77,11 @@ async function finalizeAiChatVisionRoute({ prepared = {}, imageInputs = [], visi
     activeSession = await appendAiSessionTurn(api.appDataRoot, activeSession, effectivePrompt, answer);
   }
   const stats = {
-    promptTokens: modelResult.usage?.prompt_tokens ?? null,
+    promptTokens: modelResult.promptTokens ?? modelResult.usage?.prompt_tokens ?? null,
+    promptTokensEstimated: modelResult.promptTokensEstimated === true,
     contextLimit: getModelContextLimit(modelResult.model),
-    tokensPerSecond: modelResult.tokensPerSecond ?? null
+    tokensPerSecond: modelResult.tokensPerSecond ?? null,
+    tokensPerSecondEstimated: modelResult.tokensPerSecondEstimated === true
   };
   await emitReplyProgress({ phase: "append-chat-reply", label: "写入最终回复", percent: 96 });
   return {

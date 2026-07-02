@@ -650,6 +650,7 @@ async function ensureBotRuntime() {
     appDataRoot: botAppDataRoot,
     dependencies: {
       syncFiles,
+      listLibraryFiles: listLocalLibraryFilesForBot,
       ffmpegPath,
       ffprobePath,
       getMusicPlayer: ensureGlobalMusicPlayer,
@@ -3077,6 +3078,52 @@ async function syncFiles() {
     body: JSON.stringify({ files, directories })
   });
   logInfo(`File sync completed, files=${files.length}, dirs=${directories.length}`);
+}
+
+async function listLocalLibraryFilesForBot() {
+  const localSnapshot = await scanFiles(storageRoot);
+  const clientId = state.clientId || "";
+  let serverFiles = [];
+  try {
+    const remoteSnapshot = await api("/api/files", { maxAttempts: 1 });
+    serverFiles = Array.isArray(remoteSnapshot?.files)
+      ? remoteSnapshot.files.filter((file) => String(file?.clientId || "") === clientId)
+      : [];
+  } catch (error) {
+    logWarn("bot-library-meta-fetch-failed", error?.message || error);
+  }
+
+  const serverByPath = new Map(serverFiles.map((file) => [String(file?.path || "").replace(/\\/g, "/"), file]));
+  const files = (localSnapshot.files || []).map((file) => {
+    const relativePath = String(file.path || "").replace(/\\/g, "/");
+    const meta = serverByPath.get(relativePath) || {};
+    return {
+      ...file,
+      id: clientId && relativePath ? `${clientId}:${relativePath}` : relativePath,
+      clientId,
+      path: relativePath,
+      relativePath,
+      mimeType: meta.mimeType || file.mimeType,
+      originalMimeType: file.mimeType,
+      aiSummary: meta.aiSummary || null,
+      subtitleCachePath: meta.subtitleCachePath || "",
+      tags: Array.isArray(meta.tags) ? meta.tags : [],
+      columnId: meta.columnId || "",
+      folderPath: meta.folderPath || "",
+      favorite: meta.favorite === true
+    };
+  });
+  const directories = (localSnapshot.directories || []).map((directory) => {
+    const relativePath = String(directory.path || "").replace(/\\/g, "/");
+    return {
+      ...directory,
+      id: clientId && relativePath ? `${clientId}:${relativePath}` : relativePath,
+      clientId,
+      path: relativePath,
+      relativePath
+    };
+  });
+  return { clientId, files, directories };
 }
 
 function buildPc(remotePeerId) {
