@@ -750,6 +750,66 @@ test("tools command route publishes structured capability artifact", async () =>
   }
 });
 
+test("file access command route publishes NAS access policy without local paths", async () => {
+  const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-access-command-"));
+  const storageRoot = path.join(appDataRoot, "storage");
+  try {
+    await fs.mkdir(path.join(storageRoot, "Docs"), { recursive: true });
+    await fs.writeFile(path.join(storageRoot, "Docs", "readme.txt"), "hello nas agent", "utf8");
+
+    const replies = [];
+    const api = {
+      appDataRoot,
+      storageRoot,
+      signal: null,
+      throwIfCancelled() {},
+      async publishChatReply(payload) {
+        replies.push(payload);
+        return {
+          id: "reply_file_access",
+          text: payload.text,
+          card: payload.card
+        };
+      }
+    };
+
+    const result = await handleAiChatCommandRoute({
+      prepared: {
+        api,
+        modelDirective: {
+          command: {
+            type: "file-access",
+            kind: "summary"
+          }
+        },
+        modelSettings: {}
+      }
+    });
+
+    const artifact = result.result.artifacts[0];
+    const escapedStorageRoot = storageRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    assert.equal(replies[0].card.title, "AI Agent NAS 文件访问");
+    assert.ok(Array.isArray(replies[0].card.badges));
+    assert.equal(artifact.type, "agent-file-access");
+    assert.equal(artifact.storageRoot, "STORAGE_ROOT");
+    assert.equal(artifact.storageRootConfigured, true);
+    assert.ok(Number(artifact.visibleFiles) >= 1);
+    assert.equal(artifact.policy.storageRootOnly, true);
+    assert.equal(artifact.policy.allowBinaryRead, false);
+    assert.equal(artifact.policy.rawAbsolutePathExposed, false);
+    assert.equal(artifact.canAccess.arbitraryLocalPaths, false);
+    assert.equal(artifact.canAccess.storageRootAbsolutePathInput, true);
+    assert.ok(artifact.recommendedFirstSteps.some((step) => step.includes("search_library_files")));
+    assert.match(replies[0].text, /AI Agent NAS 文件访问/);
+    assert.match(replies[0].text, /storageRootOnly=true/);
+    assert.match(replies[0].text, /禁止|二进制|allowBinaryRead=false/);
+    assert.doesNotMatch(JSON.stringify(artifact), new RegExp(escapedStorageRoot));
+    assert.doesNotMatch(replies[0].text, new RegExp(escapedStorageRoot));
+  } finally {
+    await fs.rm(appDataRoot, { recursive: true, force: true });
+  }
+});
+
 test("smoke command route publishes local agent smoke checklist", async () => {
   const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-smoke-command-"));
   const storageRoot = path.join(appDataRoot, "storage");

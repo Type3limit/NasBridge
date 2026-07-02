@@ -98,6 +98,14 @@ test("model directive parser recognizes model commands and filters", () => {
   assert.deepEqual(parseModelDirective("/agent smoke").command, {
     type: "smoke"
   });
+  assert.deepEqual(parseModelDirective("/access").command, {
+    type: "file-access",
+    kind: "summary"
+  });
+  assert.deepEqual(parseModelDirective("/file-access tools").command, {
+    type: "file-access",
+    kind: "tools"
+  });
   assert.deepEqual(parseModelDirective("/trace botjob_demo").command, {
     type: "trace",
     jobId: "botjob_demo"

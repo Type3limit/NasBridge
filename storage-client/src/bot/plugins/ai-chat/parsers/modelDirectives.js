@@ -130,6 +130,19 @@ export function parseModelDirective(rawPrompt = "") {
     };
   }
 
+  const fileAccessCommand = prompt.match(/^\/(?:access|file-access|nas-access|permissions?)(?:\s+(summary|tools))?\s*$/i);
+  if (fileAccessCommand) {
+    return {
+      prompt: "",
+      modelOverride: "",
+      inspectOnly: false,
+      command: {
+        type: "file-access",
+        kind: String(fileAccessCommand[1] || "summary").trim().toLowerCase()
+      }
+    };
+  }
+
   const traceCommand = prompt.match(/^\/(?:trace|timeline|(?:agent|job)\s+trace)(?:\s+([^\s]+))?\s*$/i);
   if (traceCommand) {
     const jobId = String(traceCommand[1] || "").trim();

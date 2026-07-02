@@ -9,6 +9,7 @@ import { isDirectRetryTextToolName } from "../../plugins/ai-chat/recovery.js";
 import { buildCapabilityArtifactSummary, buildCapabilityDescriptors, formatCapabilityReport } from "../../capabilities/registry.js";
 import { collectAiAgentHealth, formatHealthReport } from "../../capabilities/health.js";
 import { buildAgentTraceResult, buildBotJobLogBundle, buildBotJobStatusResult } from "../../tools/botJobStatus.js";
+import { buildFileAccessExplanation } from "../../tools/libraryFiles.js";
 import { getDefaultTextModelName, listAvailableModels, resolveModelReference } from "../../tools/llmClient.js";
 
 const MODEL_PROVIDER_SEPARATOR = "::";
@@ -140,6 +141,72 @@ function buildSmokeStatusBadges(checklist = {}) {
     counts.ok ? createStatusBadge("ok", counts.ok) : null,
     counts.unknown ? createStatusBadge("unknown", counts.unknown) : null
   ].filter(Boolean);
+}
+
+function buildFileAccessStatusBadges(explanation = {}) {
+  const policy = explanation.policy && typeof explanation.policy === "object" ? explanation.policy : {};
+  const currentStatus = explanation.currentStatus && typeof explanation.currentStatus === "object" ? explanation.currentStatus : {};
+  return [
+    createStatusBadge(explanation.status || currentStatus.status || "unknown"),
+    Number.isFinite(Number(explanation.visibleFiles))
+      ? { label: `文件 ${Number(explanation.visibleFiles)}`, color: "informative", appearance: "tint" }
+      : null,
+    Number.isFinite(Number(explanation.visibleDirectories))
+      ? { label: `目录 ${Number(explanation.visibleDirectories)}`, color: "informative", appearance: "tint" }
+      : null,
+    policy.storageRootOnly === true
+      ? { label: "仅 STORAGE_ROOT", color: "success", appearance: "tint" }
+      : null,
+    policy.allowBinaryRead === false
+      ? { label: "禁止二进制原文", color: "subtle", appearance: "tint" }
+      : null
+  ].filter(Boolean);
+}
+
+function formatFileAccessExplanationReport(explanation = {}) {
+  const currentStatus = explanation.currentStatus && typeof explanation.currentStatus === "object" ? explanation.currentStatus : {};
+  const policy = explanation.policy && typeof explanation.policy === "object" ? explanation.policy : {};
+  const counts = explanation.countsByKind && typeof explanation.countsByKind === "object" ? explanation.countsByKind : {};
+  const countParts = Object.entries(counts)
+    .filter(([, count]) => Number(count) > 0)
+    .map(([kind, count]) => `${kind}=${Number(count)}`);
+  const lines = [
+    `AI Agent NAS 文件访问：${explanation.status || currentStatus.status || "unknown"}`,
+    "",
+    explanation.summary || "AI 通过受控工具访问 NAS 文件索引、metadata、摘要、字幕和文本片段。"
+  ];
+  lines.push("");
+  lines.push("当前状态：");
+  lines.push(`- storageRoot=${explanation.storageRootConfigured ? "configured" : "missing"} readable=${currentStatus.readable === true} writable=${currentStatus.writable === true}`);
+  lines.push(`- indexedFiles=${Number(explanation.visibleFiles || 0)} dirs=${Number(explanation.visibleDirectories || 0)}${currentStatus.indexSource ? ` indexSource=${currentStatus.indexSource}` : ""}`);
+  if (currentStatus.indexedAt) {
+    lines.push(`- indexedAt=${currentStatus.indexedAt}`);
+  }
+  if (countParts.length) {
+    lines.push(`- kinds: ${countParts.join(" / ")}`);
+  }
+  lines.push("");
+  lines.push("访问边界：");
+  lines.push(`- storageRootOnly=${policy.storageRootOnly === true}`);
+  lines.push(`- acceptsStorageRootAbsolutePath=${policy.acceptsStorageRootAbsolutePath === true} scope=${policy.absolutePathInputScope || "unknown"}`);
+  lines.push(`- rawAbsolutePathExposed=${policy.rawAbsolutePathExposed === true} allowBinaryRead=${policy.allowBinaryRead === true}`);
+  lines.push(`- writeRequiresConfirmation=${policy.writeRequiresConfirmation === true}`);
+  const firstSteps = Array.isArray(explanation.recommendedFirstSteps) ? explanation.recommendedFirstSteps.slice(0, 6) : [];
+  if (firstSteps.length) {
+    lines.push("");
+    lines.push("推荐工具链：");
+    for (const step of firstSteps) {
+      lines.push(`- ${step}`);
+    }
+  }
+  if (Array.isArray(explanation.blockedLayers) && explanation.blockedLayers.length) {
+    lines.push("");
+    lines.push("不会做：");
+    for (const layer of explanation.blockedLayers.slice(0, 5)) {
+      lines.push(`- ${layer}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 function formatDurationMs(value) {
@@ -882,6 +949,30 @@ export async function handleAiChatCommandRoute(state = {}) {
           }),
           importedFiles: [],
           artifacts: [{ type: "agent-tools", ...artifact, health }]
+        }
+      };
+    }
+
+    if (modelDirective.command.type === "file-access") {
+      const explanation = await buildFileAccessExplanation(api, {
+        kind: modelDirective.command.kind || "summary"
+      });
+      const body = formatFileAccessExplanationReport(explanation);
+      return {
+        result: {
+          chatReply: await api.publishChatReply({
+            text: body,
+            card: {
+              type: "ai-answer",
+              status: explanation.status === "error" ? "failed" : "succeeded",
+              title: "AI Agent NAS 文件访问",
+              subtitle: withSessionSubtitle(`status: ${explanation.status || "unknown"}`, activeSession),
+              body,
+              badges: buildFileAccessStatusBadges(explanation)
+            }
+          }),
+          importedFiles: [],
+          artifacts: [{ type: "agent-file-access", ...explanation }]
         }
       };
     }
