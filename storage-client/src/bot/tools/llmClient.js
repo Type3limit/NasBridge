@@ -131,7 +131,7 @@ function getEnabledProviders() {
   return ordered.length ? ordered : detectedProviders;
 }
 
-function encodeModelRef(provider = "", modelId = "") {
+export function encodeModelRef(provider = "", modelId = "") {
   const normalizedProvider = normalizeProviderName(provider);
   const normalizedModelId = String(modelId || "").trim();
   if (!normalizedProvider || !normalizedModelId) {
@@ -140,7 +140,7 @@ function encodeModelRef(provider = "", modelId = "") {
   return `${normalizedProvider}${MODEL_PROVIDER_SEPARATOR}${normalizedModelId}`;
 }
 
-function parseModelRef(value = "") {
+export function parseModelRef(value = "") {
   const trimmed = String(value || "").trim();
   if (!trimmed) {
     return { provider: "", modelId: "", qualified: false };
@@ -166,6 +166,161 @@ function resolveProviderAndModel(value = "", mode = "text") {
     provider,
     modelId,
     qualified: Boolean(parsed.provider)
+  };
+}
+
+function normalizeModelLookupKey(value = "") {
+  return String(value || "")
+    .normalize("NFKC")
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{Letter}\p{Number}]+/gu, "");
+}
+
+function normalizeListedModel(item = {}) {
+  const provider = normalizeProviderName(item?.provider || parseModelRef(item?.id || "").provider || "");
+  const parsed = parseModelRef(item?.id || "");
+  const modelId = String(item?.modelId || parsed.modelId || item?.id || "").trim();
+  if (!modelId) {
+    return null;
+  }
+  const id = provider ? encodeModelRef(provider, modelId) : String(item?.id || modelId).trim();
+  return {
+    id,
+    modelId,
+    provider,
+    name: String(item?.name || modelId).trim(),
+    vendor: String(item?.vendor || getProviderDisplayName(provider)).trim(),
+    preview: item?.preview === true,
+    toolCalls: item?.toolCalls === true,
+    vision: item?.vision === true
+  };
+}
+
+function mergeModelLists(...lists) {
+  const merged = [];
+  const seen = new Set();
+  for (const list of lists) {
+    for (const item of Array.isArray(list) ? list : []) {
+      const normalized = normalizeListedModel(item);
+      if (!normalized?.id || seen.has(normalized.id)) {
+        continue;
+      }
+      seen.add(normalized.id);
+      merged.push(normalized);
+    }
+  }
+  return merged;
+}
+
+function scoreModelMatch(rawValue = "", model = {}, preferredProvider = "") {
+  const parsed = parseModelRef(rawValue);
+  const raw = String(rawValue || "").trim();
+  const rawLower = raw.toLowerCase();
+  const requestedModel = String(parsed.modelId || raw).trim();
+  const requestedLower = requestedModel.toLowerCase();
+  const requestedKey = normalizeModelLookupKey(requestedModel);
+  const modelId = String(model.modelId || "").trim();
+  const modelName = String(model.name || "").trim();
+  const modelRef = String(model.id || "").trim();
+  const modelProvider = normalizeProviderName(model.provider || parseModelRef(modelRef).provider || "");
+
+  if (parsed.provider && modelProvider && parsed.provider !== modelProvider) {
+    return 0;
+  }
+
+  let score = 0;
+  if (modelRef.toLowerCase() === rawLower) {
+    score = Math.max(score, 120);
+  }
+  if (modelId.toLowerCase() === requestedLower) {
+    score = Math.max(score, 110);
+  }
+  if (modelName.toLowerCase() === requestedLower) {
+    score = Math.max(score, 100);
+  }
+  if (normalizeModelLookupKey(modelId) === requestedKey) {
+    score = Math.max(score, 90);
+  }
+  if (normalizeModelLookupKey(modelName) === requestedKey) {
+    score = Math.max(score, 85);
+  }
+  if (!score) {
+    return 0;
+  }
+  if (preferredProvider && modelProvider === preferredProvider) {
+    score += 5;
+  }
+  if (parsed.qualified) {
+    score += 3;
+  }
+  return score;
+}
+
+export async function resolveModelReference(value = "", options = {}) {
+  const rawValue = String(value || "").trim();
+  if (!rawValue) {
+    return {
+      ok: false,
+      reason: "model is required",
+      modelRef: "",
+      model: null,
+      candidates: []
+    };
+  }
+
+  const parsed = parseModelRef(rawValue);
+  const preferredProvider = normalizeProviderName(options.provider || parsed.provider || getConfiguredProvider());
+  let remoteModels = [];
+  let remoteError = "";
+  if (options.fetchModels !== false) {
+    try {
+      const result = await listAvailableModels({ signal: options.signal });
+      remoteModels = Array.isArray(result.models) ? result.models : [];
+    } catch (error) {
+      remoteError = String(error?.message || error || "").trim();
+    }
+  }
+
+  const models = mergeModelLists(remoteModels, options.cachedModels || []);
+  const scored = models
+    .map((model) => ({
+      model,
+      score: scoreModelMatch(rawValue, model, preferredProvider)
+    }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || String(left.model.id || "").localeCompare(String(right.model.id || "")));
+
+  if (!scored.length) {
+    return {
+      ok: false,
+      reason: remoteError
+        ? `没有找到匹配模型；模型列表刷新失败：${remoteError}`
+        : "没有找到匹配模型，请先执行 @ai /models，或使用 provider::modelId。",
+      modelRef: "",
+      model: null,
+      candidates: []
+    };
+  }
+
+  const topScore = scored[0].score;
+  const tied = scored.filter((item) => item.score === topScore);
+  if (tied.length > 1) {
+    return {
+      ok: false,
+      reason: `模型名称不唯一，请使用完整 provider::modelId。候选：${tied.slice(0, 5).map((item) => item.model.id).join(", ")}`,
+      modelRef: "",
+      model: null,
+      candidates: tied.map((item) => item.model)
+    };
+  }
+
+  return {
+    ok: true,
+    reason: "",
+    modelRef: scored[0].model.id,
+    model: scored[0].model,
+    candidates: scored.map((item) => item.model).slice(0, 5)
   };
 }
 

@@ -88,7 +88,29 @@ export function parseModelDirective(rawPrompt = "") {
     };
   }
 
-  const setAllCommand = prompt.match(/^\/model\s+set-all\s+([^\s]+)\s*$/i);
+  if (/^\/(?:health|doctor|status)\s*$/i.test(prompt)) {
+    return {
+      prompt: "",
+      modelOverride: "",
+      inspectOnly: false,
+      command: {
+        type: "health"
+      }
+    };
+  }
+
+  if (/^\/(?:tools|tool\s+list|capabilities)\s*$/i.test(prompt)) {
+    return {
+      prompt: "",
+      modelOverride: "",
+      inspectOnly: false,
+      command: {
+        type: "list-tools"
+      }
+    };
+  }
+
+  const setAllCommand = prompt.match(/^\/model\s+set-all\s+([\s\S]+?)\s*$/i);
   if (setAllCommand?.[1]) {
     return {
       prompt: "",
@@ -101,7 +123,7 @@ export function parseModelDirective(rawPrompt = "") {
     };
   }
 
-  const setVisionCommand = prompt.match(/^\/model\s+set-vision\s+([^\s]+)\s*$/i);
+  const setVisionCommand = prompt.match(/^\/model\s+set-vision\s+([\s\S]+?)\s*$/i);
   if (setVisionCommand?.[1]) {
     return {
       prompt: "",
@@ -114,7 +136,7 @@ export function parseModelDirective(rawPrompt = "") {
     };
   }
 
-  const setCommand = prompt.match(/^\/model\s+set\s+([^\s]+)\s*$/i);
+  const setCommand = prompt.match(/^\/model\s+set\s+([\s\S]+?)\s*$/i);
   if (setCommand?.[1]) {
     return {
       prompt: "",

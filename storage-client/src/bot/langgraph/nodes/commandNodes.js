@@ -4,7 +4,9 @@ import { withSessionSubtitle } from "../../plugins/ai-chat/parsers/sessionDirect
 import { createAiSession, deleteAiSession, formatAiSessionLabel, listAiSessions, renameAiSession } from "../../plugins/ai-chat/services/aiSessions.js";
 import { compressAiSessionContext } from "../../plugins/ai-chat/services/compressAiSession.js";
 import { getEffectiveMultimodalModel, getEffectiveTextModel, writeAiModelSettings } from "../../plugins/ai-chat/services/modelSettings.js";
-import { getDefaultTextModelName, listAvailableModels } from "../../tools/llmClient.js";
+import { buildCapabilityDescriptors, formatCapabilityReport } from "../../capabilities/registry.js";
+import { collectAiAgentHealth, formatHealthReport } from "../../capabilities/health.js";
+import { getDefaultTextModelName, listAvailableModels, resolveModelReference } from "../../tools/llmClient.js";
 
 const MODEL_PROVIDER_SEPARATOR = "::";
 const PROVIDER_BADGE_META = {
@@ -70,6 +72,20 @@ function buildEffectiveProviderBadges(settings = {}) {
     createProviderBadge(textProvider, "文本"),
     createProviderBadge(visionProvider, "看图")
   ].filter(Boolean);
+}
+
+async function resolveModelForSettings(rawModel = "", modelSettings = {}, api = {}, purpose = "text") {
+  const result = await resolveModelReference(rawModel, {
+    cachedModels: Array.isArray(modelSettings.lastListedModels) ? modelSettings.lastListedModels : [],
+    signal: api.signal
+  });
+  if (!result.ok) {
+    throw new Error(`无法设置${purpose === "vision" ? "看图" : "文本"}模型：${result.reason}`);
+  }
+  return {
+    ...result.model,
+    id: result.modelRef
+  };
 }
 
 export async function handleAiChatCommandRoute(state = {}) {
@@ -171,6 +187,37 @@ export async function handleAiChatCommandRoute(state = {}) {
   }
 
   if (modelDirective.command && modelDirective.command.type !== "explicit-search") {
+    if (modelDirective.command.type === "health") {
+      const health = await collectAiAgentHealth(api, { modelSettings, signal: api.signal });
+      const body = formatHealthReport(health);
+      return {
+        result: {
+          chatReply: await api.publishChatReply({
+            text: body,
+            card: { type: "ai-answer", status: health.overall === "error" ? "failed" : "succeeded", title: "AI Agent 健康检查", subtitle: withSessionSubtitle(`overall: ${health.overall}`, activeSession), body }
+          }),
+          importedFiles: [],
+          artifacts: [{ type: "agent-health", health }]
+        }
+      };
+    }
+
+    if (modelDirective.command.type === "list-tools") {
+      const health = await collectAiAgentHealth(api, { modelSettings, signal: api.signal });
+      const descriptors = buildCapabilityDescriptors(api);
+      const body = formatCapabilityReport(descriptors, health);
+      return {
+        result: {
+          chatReply: await api.publishChatReply({
+            text: body,
+            card: { type: "ai-answer", status: health.overall === "error" ? "failed" : "succeeded", title: "AI Agent 工具列表", subtitle: withSessionSubtitle(`共 ${descriptors.length} 项能力`, activeSession), body }
+          }),
+          importedFiles: [],
+          artifacts: [{ type: "agent-tools", count: descriptors.length, health }]
+        }
+      };
+    }
+
     if (modelDirective.command.type === "compress") {
       if (!activeSession) {
         throw new Error("压缩上下文需要绑定 AI 会话，请使用格式：@ai #会话编号 /compress");
@@ -237,7 +284,8 @@ export async function handleAiChatCommandRoute(state = {}) {
       if (!Number.isInteger(selectedIndex) || selectedIndex < 1 || selectedIndex > listedModels.length) {
         throw new Error(`列表序号超出范围，请输入 1 到 ${listedModels.length} 之间的数字。`);
       }
-      const selectedModel = listedModels[selectedIndex - 1];
+      const listedModel = listedModels[selectedIndex - 1];
+      const selectedModel = await resolveModelForSettings(listedModel.id || listedModel.modelId || listedModel.name, modelSettings, api);
       const previousTextModel = String(modelSettings.textModel || "").trim() || getDefaultTextModelName() || "";
       const nextSettings = { ...modelSettings, textModel: selectedModel.id, multimodalModel: String(modelSettings.multimodalModel || "").trim() };
       const hasIndependentVisionModel = nextSettings.multimodalModel && nextSettings.multimodalModel !== previousTextModel;
@@ -265,12 +313,15 @@ export async function handleAiChatCommandRoute(state = {}) {
       lastListFilter: String(modelSettings.lastListFilter || "all").trim() || "all"
     };
     if (modelDirective.command.type === "set") {
-      nextSettings.textModel = String(modelDirective.command.model || "").trim();
+      const model = await resolveModelForSettings(modelDirective.command.model, modelSettings, api, "text");
+      nextSettings.textModel = model.id;
     } else if (modelDirective.command.type === "set-vision") {
-      nextSettings.multimodalModel = String(modelDirective.command.model || "").trim();
+      const model = await resolveModelForSettings(modelDirective.command.model, modelSettings, api, "vision");
+      nextSettings.multimodalModel = model.id;
     } else if (modelDirective.command.type === "set-all") {
-      nextSettings.textModel = String(modelDirective.command.model || "").trim();
-      nextSettings.multimodalModel = String(modelDirective.command.model || "").trim();
+      const model = await resolveModelForSettings(modelDirective.command.model, modelSettings, api, "text");
+      nextSettings.textModel = model.id;
+      nextSettings.multimodalModel = model.id;
     } else if (modelDirective.command.type === "reset") {
       nextSettings.textModel = "";
       nextSettings.multimodalModel = "";
