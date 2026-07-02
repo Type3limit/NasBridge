@@ -77,6 +77,12 @@ test("health cache uses isolated local dependencies and caches the second snapsh
     };
     await Promise.all(Object.values(paths).map((filePath) => fs.writeFile(filePath, "stub")));
     await fs.writeFile(path.join(root, "demo.txt"), "hello");
+    const musicBridgeWorkDir = path.join(root, "music-lib-bridge");
+    const appDataRoot = path.join(root, ".nas-bot");
+    await fs.mkdir(musicBridgeWorkDir, { recursive: true });
+    await fs.mkdir(path.join(appDataRoot, "jobs"), { recursive: true });
+    await fs.writeFile(path.join(musicBridgeWorkDir, ".env"), "QQ_COOKIE=uin=o123456; skey=fake\nQQ_COOKIE_AUTO_REFRESH=1\nQQ_COOKIE_REFRESH_INTERVAL_MINUTES=60\n", "utf8");
+    await fs.writeFile(path.join(appDataRoot, "bilibili-cookies.json"), JSON.stringify({ cookies: [{ name: "SESSDATA" }] }), "utf8");
 
     const music = await createMusicHealthServer();
     try {
@@ -84,7 +90,13 @@ test("health cache uses isolated local dependencies and caches the second snapsh
         WHISPER_CPP_PATH: paths.whisper,
         WHISPER_MODEL_PATH: paths.whisperModel,
         YT_DLP_PATH: paths.ytdlp,
-        MUSIC_LIB_BRIDGE_URL: music.url
+        MUSIC_LIB_BRIDGE_URL: music.url,
+        MUSIC_LIB_BRIDGE_WORKDIR: musicBridgeWorkDir,
+        QQ_COOKIE_AUTO_REFRESH: "1",
+        QQ_COOKIE_REFRESH_INTERVAL_MINUTES: "60",
+        BOT_BILIBILI_COOKIE_FILE: "",
+        BOT_BILIBILI_COOKIE_HEADER: "",
+        PLAYWRIGHT_BROWSERS_PATH: path.join(root, "ms-playwright")
       }, async () => {
         const modelSettings = {
           textModel: "openai::deepseek-v4-pro",
@@ -102,6 +114,7 @@ test("health cache uses isolated local dependencies and caches the second snapsh
         };
         const api = {
           storageRoot: root,
+          appDataRoot,
           clientId: "client",
           dependencies: {
             ffmpegPath: paths.ffmpeg,
@@ -138,7 +151,11 @@ test("health cache uses isolated local dependencies and caches the second snapsh
         assert.equal(first.cached, false);
         assert.equal(second.cached, true);
         assert.equal(first.overall, "ok");
-        assert.equal(first.checks.find((check) => check.id === "storage-root").status, "ok");
+        const checks = new Map(first.checks.map((check) => [check.id, check]));
+        assert.equal(checks.get("storage-root").status, "ok");
+        assert.equal(checks.get("qq-music-cookie").status, "ok");
+        assert.equal(checks.get("bilibili-auth").status, "ok");
+        assert.equal(checks.get("bot-queue").status, "ok");
         assert.match(formatHealthReport(first), /AI Agent/);
       });
     } finally {
@@ -166,6 +183,8 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.equal(byId.get("analyze_file_content").riskLevel, "medium");
   assert.equal(byId.get("organize_files").riskLevel, "high");
   assert.equal(byId.get("organize_files").requiresConfirmation, true);
+  assert.deepEqual(byId.get("invoke_music_control").healthChecks, ["music-bridge", "qq-music-cookie"]);
+  assert.ok(byId.get("invoke_bilibili_downloader").healthChecks.includes("bilibili-auth"));
 
   const summary = formatCapabilityPromptSummary(descriptors, {
     overall: "warn",

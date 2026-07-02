@@ -31,6 +31,13 @@ function buildHealthCacheKey(api = {}, options = {}) {
     getEffectiveTextModel(modelSettings),
     getEffectiveMultimodalModel(modelSettings),
     String(process.env.MUSIC_LIB_BRIDGE_URL || "").trim(),
+    String(process.env.MUSIC_LIB_BRIDGE_WORKDIR || "").trim(),
+    String(process.env.QQ_COOKIE || "").trim() ? "qq-env" : "",
+    String(process.env.QQ_COOKIE_AUTO_REFRESH || "").trim(),
+    String(process.env.QQ_COOKIE_REFRESH_INTERVAL_MINUTES || "").trim(),
+    String(process.env.BOT_BILIBILI_COOKIE_FILE || "").trim(),
+    String(process.env.BOT_BILIBILI_COOKIE_HEADER || "").trim() ? "bili-header" : "",
+    String(process.env.PLAYWRIGHT_BROWSERS_PATH || "").trim(),
     String(process.env.WHISPER_CPP_PATH || "").trim(),
     String(process.env.WHISPER_MODEL_PATH || "").trim(),
     String(process.env.YT_DLP_PATH || "").trim()
@@ -52,6 +59,79 @@ async function fileExists(filePath = "") {
   } catch {
     return false;
   }
+}
+
+async function directoryExists(dirPath = "") {
+  const normalized = String(dirPath || "").trim();
+  if (!normalized) {
+    return false;
+  }
+  try {
+    const stat = await fs.promises.stat(normalized);
+    return stat.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function statFile(filePath = "") {
+  const normalized = String(filePath || "").trim();
+  if (!normalized) {
+    return null;
+  }
+  try {
+    const stat = await fs.promises.stat(normalized);
+    return stat.isFile() ? stat : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseDotEnv(raw = "") {
+  const result = {};
+  for (const line of String(raw || "").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+    const index = trimmed.indexOf("=");
+    if (index <= 0) {
+      continue;
+    }
+    const key = trimmed.slice(0, index).trim();
+    let value = trimmed.slice(index + 1).trim();
+    if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    result[key] = value;
+  }
+  return result;
+}
+
+async function readDotEnvFile(filePath = "") {
+  const normalized = String(filePath || "").trim();
+  if (!normalized) {
+    return {};
+  }
+  try {
+    return parseDotEnv(await fs.promises.readFile(normalized, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function formatAgeMs(ms = 0) {
+  const value = Math.max(0, Number(ms) || 0);
+  if (value < 60_000) {
+    return `${Math.round(value / 1000)}s`;
+  }
+  if (value < 60 * 60_000) {
+    return `${Math.round(value / 60_000)}m`;
+  }
+  if (value < 24 * 60 * 60_000) {
+    return `${Math.round(value / (60 * 60_000))}h`;
+  }
+  return `${Math.round(value / (24 * 60 * 60_000))}d`;
 }
 
 async function directoryAccess(dirPath = "") {
@@ -119,6 +199,141 @@ async function checkMusicBridge() {
   } catch (error) {
     return { id: "music-bridge", label: "music-lib-bridge", status: "warn", detail: `不可达：${error?.message || error}` };
   }
+}
+
+async function checkQqMusicCookie() {
+  const workDir = String(process.env.MUSIC_LIB_BRIDGE_WORKDIR || "").trim();
+  const envFile = String(process.env.QQ_COOKIE_ENV_FILE || "").trim()
+    || (workDir ? path.join(workDir, ".env") : "");
+  const envValues = await readDotEnvFile(envFile);
+  const cookieConfigured = Boolean(String(process.env.QQ_COOKIE || envValues.QQ_COOKIE || "").trim());
+  const autoRefresh = String(process.env.QQ_COOKIE_AUTO_REFRESH || envValues.QQ_COOKIE_AUTO_REFRESH || "").trim() || "0";
+  const intervalMinutes = clampInteger(process.env.QQ_COOKIE_REFRESH_INTERVAL_MINUTES || envValues.QQ_COOKIE_REFRESH_INTERVAL_MINUTES || 60, 1, 24 * 60);
+  const stat = await statFile(envFile);
+  const source = process.env.QQ_COOKIE ? "环境变量" : (envFile ? "music-lib-bridge .env" : "未配置");
+  if (!cookieConfigured) {
+    return {
+      id: "qq-music-cookie",
+      label: "QQ 音乐 Cookie",
+      status: "warn",
+      detail: `${source} 未配置 QQ_COOKIE；QQ 音源可能只能使用公开内容`
+    };
+  }
+  if (autoRefresh === "1" && stat) {
+    const ageMs = Date.now() - stat.mtimeMs;
+    const staleMs = intervalMinutes * 2 * 60_000;
+    if (ageMs > staleMs) {
+      return {
+        id: "qq-music-cookie",
+        label: "QQ 音乐 Cookie",
+        status: "warn",
+        detail: `已配置；来源=${source}；最近文件更新时间约 ${formatAgeMs(ageMs)} 前；autoRefresh=1 interval=${intervalMinutes}m`
+      };
+    }
+  }
+  return {
+    id: "qq-music-cookie",
+    label: "QQ 音乐 Cookie",
+    status: "ok",
+    detail: `已配置；来源=${source}；autoRefresh=${autoRefresh || "0"} interval=${intervalMinutes}m`
+  };
+}
+
+async function checkBilibiliAuth(api = {}) {
+  const appDataRoot = path.resolve(api.appDataRoot || path.join(api.storageRoot || process.cwd(), process.env.BOT_APP_DATA_DIR_NAME || ".nas-bot"));
+  const cookieHeader = String(process.env.BOT_BILIBILI_COOKIE_HEADER || "").trim();
+  const cookieFile = String(process.env.BOT_BILIBILI_COOKIE_FILE || "").trim()
+    || path.join(appDataRoot, "bilibili-cookies.json");
+  const authFile = path.join(appDataRoot, "bilibili-auth.json");
+  if (cookieHeader) {
+    return {
+      id: "bilibili-auth",
+      label: "Bilibili 登录",
+      status: "ok",
+      detail: "已配置 cookie header"
+    };
+  }
+  const cookieStat = await statFile(cookieFile);
+  if (cookieStat) {
+    return {
+      id: "bilibili-auth",
+      label: "Bilibili 登录",
+      status: "ok",
+      detail: `cookie 文件已配置；mtime=${cookieStat.mtime.toISOString()}`
+    };
+  }
+  const authStat = await statFile(authFile);
+  const playwrightDir = String(process.env.PLAYWRIGHT_BROWSERS_PATH || "").trim();
+  const playwrightReady = await directoryExists(playwrightDir);
+  if (authStat || playwrightReady) {
+    return {
+      id: "bilibili-auth",
+      label: "Bilibili 登录",
+      status: "warn",
+      detail: `未找到 cookie 文件；${authStat ? "存在登录状态记录；" : ""}${playwrightReady ? "Playwright 浏览器可用于重新登录" : "Playwright 浏览器路径未就绪"}`
+    };
+  }
+  return {
+    id: "bilibili-auth",
+    label: "Bilibili 登录",
+    status: "warn",
+    detail: "未配置 cookie header/cookie 文件；需要高画质或会员内容时可能要求重新登录"
+  };
+}
+
+async function checkBotQueue(api = {}) {
+  const appDataRoot = path.resolve(api.appDataRoot || path.join(api.storageRoot || process.cwd(), process.env.BOT_APP_DATA_DIR_NAME || ".nas-bot"));
+  const jobsDir = path.join(appDataRoot, "jobs");
+  if (!await directoryExists(jobsDir)) {
+    return { id: "bot-queue", label: "Bot 队列", status: "ok", detail: "暂无任务记录" };
+  }
+  let entries = [];
+  try {
+    entries = await fs.promises.readdir(jobsDir, { withFileTypes: true });
+  } catch (error) {
+    return { id: "bot-queue", label: "Bot 队列", status: "warn", detail: `读取任务目录失败：${error?.message || error}` };
+  }
+  const files = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) {
+      continue;
+    }
+    const absolutePath = path.join(jobsDir, entry.name);
+    const stat = await fs.promises.stat(absolutePath).catch(() => null);
+    if (stat) {
+      files.push({ absolutePath, mtimeMs: stat.mtimeMs });
+    }
+  }
+  files.sort((left, right) => right.mtimeMs - left.mtimeMs);
+  const currentJobId = String(api.jobId || "").trim();
+  const counts = { queued: 0, running: 0, failedRecent: 0 };
+  const now = Date.now();
+  for (const file of files.slice(0, 200)) {
+    try {
+      const job = JSON.parse(await fs.promises.readFile(file.absolutePath, "utf8"));
+      if (String(job?.jobId || "").trim() === currentJobId) {
+        continue;
+      }
+      const status = String(job?.status || "").trim();
+      if (status === "queued") {
+        counts.queued += 1;
+      } else if (status === "running") {
+        counts.running += 1;
+      } else if (status === "failed" && now - file.mtimeMs < 60 * 60_000) {
+        counts.failedRecent += 1;
+      }
+    } catch {
+    }
+  }
+  const active = counts.queued + counts.running;
+  const warnActive = clampInteger(process.env.AI_AGENT_QUEUE_WARN_ACTIVE || 3, 1, 100);
+  const status = counts.queued > 0 || active >= warnActive ? "warn" : "ok";
+  return {
+    id: "bot-queue",
+    label: "Bot 队列",
+    status,
+    detail: `running=${counts.running} queued=${counts.queued} failedLastHour=${counts.failedRecent} checked=${Math.min(files.length, 200)}`
+  };
 }
 
 async function checkStorage(api = {}) {
@@ -248,6 +463,9 @@ export async function collectAiAgentHealth(api = {}, options = {}) {
   checks.push(await checkWhisper());
   checks.push(await checkCommandOrPath("yt-dlp", "yt-dlp", process.env.YT_DLP_PATH || "yt-dlp"));
   checks.push(await checkMusicBridge());
+  checks.push(await checkQqMusicCookie());
+  checks.push(await checkBilibiliAuth(api));
+  checks.push(await checkBotQueue(api));
   return {
     generatedAt: new Date().toISOString(),
     overall: computeOverallStatus(checks),
