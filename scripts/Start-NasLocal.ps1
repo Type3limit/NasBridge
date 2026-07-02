@@ -44,7 +44,7 @@ function Start-ServiceTerminal {
 
 Write-Host "[nas-local] repo: $RepoRoot"
 Write-Host "[nas-local] opening visible terminals..."
-Start-ServiceTerminal -Title "NasBridge music-lib" -ScriptPath $MusicScript
+Start-ServiceTerminal -Title "NasBridge-music-lib" -ScriptPath $MusicScript
 Start-Sleep -Seconds ([Math]::Max(0, $StorageDelaySeconds))
-Start-ServiceTerminal -Title "NasBridge storage-client" -ScriptPath $StorageScript
+Start-ServiceTerminal -Title "NasBridge-storage-client" -ScriptPath $StorageScript
 Write-Host "[nas-local] started. Keep the opened terminals visible for logs."
