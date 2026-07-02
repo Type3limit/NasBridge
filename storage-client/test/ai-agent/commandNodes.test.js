@@ -662,6 +662,104 @@ test("trace command route publishes latest agent trace report", async () => {
   }
 });
 
+test("trace command route offers direct retry for recoverable file access tools", async () => {
+  const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-trace-recovery-"));
+  const jobId = "botjob_trace_recoverable";
+  try {
+    const graphRoot = path.join(appDataRoot, "ai-chat-graph");
+    await fs.mkdir(path.join(graphRoot, "executions"), { recursive: true });
+    await fs.mkdir(path.join(graphRoot, "traces"), { recursive: true });
+    await fs.writeFile(path.join(graphRoot, "executions", `${jobId}.json`), JSON.stringify({
+      jobId,
+      botId: "ai.chat",
+      sessionId: 7,
+      status: "failed",
+      route: "textTools",
+      savedAt: "2026-07-02T08:30:00.000Z",
+      traceSummary: {
+        count: 2,
+        lastNode: "textTools",
+        lastStatus: "failed"
+      },
+      result: {},
+      recoveryState: {
+        toolRound: 2,
+        pendingToolNames: ["read_media_summary"],
+        pendingToolCalls: [{
+          id: "call_retry_summary",
+          name: "read_media_summary",
+          input: {
+            fileId: "client:movie.mp4",
+            includeSummary: true
+          }
+        }],
+        planningMessages: [{
+          role: "user",
+          content: "总结这个视频"
+        }]
+      }
+    }), "utf8");
+    await fs.writeFile(path.join(graphRoot, "traces", `${jobId}.jsonl`), `${JSON.stringify({
+      kind: "agent",
+      phase: "plan_next_step",
+      round: 1,
+      status: "tool-requested",
+      detail: {
+        model: "openai::deepseek-v4-pro",
+        pendingTools: [{ id: "call_retry_summary", name: "read_media_summary", reason: "读取已有媒体摘要" }]
+      },
+      outputPreview: "call read_media_summary"
+    })}\n`, "utf8");
+
+    const replies = [];
+    const api = {
+      appDataRoot,
+      signal: null,
+      throwIfCancelled() {},
+      async publishChatReply(payload) {
+        replies.push(payload);
+        return {
+          id: "reply_trace_recoverable",
+          text: payload.text,
+          card: payload.card
+        };
+      }
+    };
+
+    const result = await handleAiChatCommandRoute({
+      prepared: {
+        api,
+        modelDirective: {
+          command: {
+            type: "trace",
+            jobId
+          }
+        },
+        modelSettings: {}
+      }
+    });
+
+    assert.equal(replies[0].card.title, "AI Agent Trace");
+    assert.deepEqual(replies[0].card.actions, [
+      {
+        type: "invoke-bot",
+        label: "重试失败步骤",
+        botId: "ai.chat",
+        rawText: "#7 继续",
+        parsedArgs: {
+          __chatReplyMode: "replace-chat-message"
+        }
+      },
+      { type: "open-bot-log", label: "查看日志", jobId },
+      { type: "retry-bot-job", label: "重新生成", jobId }
+    ]);
+    assert.equal(result.result.artifacts[0].recoveryHint.mode, "text-retry-tools");
+    assert.equal(result.result.artifacts[0].recoveryHint.canContinueDirectly, true);
+  } finally {
+    await fs.rm(appDataRoot, { recursive: true, force: true });
+  }
+});
+
 test("log command route publishes redacted bot job log bundle", async () => {
   const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-log-command-"));
   try {

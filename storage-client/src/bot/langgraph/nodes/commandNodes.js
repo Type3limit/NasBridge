@@ -4,6 +4,7 @@ import { withSessionSubtitle } from "../../plugins/ai-chat/parsers/sessionDirect
 import { createAiSession, deleteAiSession, formatAiSessionLabel, listAiSessions, renameAiSession } from "../../plugins/ai-chat/services/aiSessions.js";
 import { compressAiSessionContext } from "../../plugins/ai-chat/services/compressAiSession.js";
 import { getEffectiveMultimodalModel, getEffectiveTextModel, migrateStoredModelRef, writeAiModelSettings } from "../../plugins/ai-chat/services/modelSettings.js";
+import { isDirectRetryTextToolName } from "../../plugins/ai-chat/recovery.js";
 import { buildCapabilityArtifactSummary, buildCapabilityDescriptors, formatCapabilityReport } from "../../capabilities/registry.js";
 import { collectAiAgentHealth, formatHealthReport } from "../../capabilities/health.js";
 import { buildAgentTraceResult, buildBotJobLogBundle, buildBotJobStatusResult } from "../../tools/botJobStatus.js";
@@ -388,6 +389,71 @@ function buildBotJobTraceAction(job = {}, jobId = "") {
   };
 }
 
+function getTraceRecoverySessionId(trace = {}, activeSession = null) {
+  const activeId = activeSession?.id;
+  if (activeId != null && String(activeId).trim() !== "") {
+    return activeId;
+  }
+  const snapshotId = trace?.snapshot?.sessionId;
+  return snapshotId != null && String(snapshotId).trim() !== "" ? snapshotId : null;
+}
+
+function hasSafeSuggestedTraceRecoveryAction(hint = {}) {
+  return (Array.isArray(hint.suggestedActions) ? hint.suggestedActions : []).some((action) => {
+    const tool = String(action?.tool || "").trim();
+    const input = action?.input && typeof action.input === "object" && !Array.isArray(action.input) ? action.input : {};
+    const riskLevel = String(action?.riskLevel || "low").trim().toLowerCase() || "low";
+    const hasTarget = Boolean(
+      String(input.fileId || input.path || input.filePath || input.query || "").trim()
+      || (Array.isArray(input.fileIds) && input.fileIds.length > 0)
+      || (Array.isArray(input.paths) && input.paths.length > 0)
+    );
+    return tool
+      && isDirectRetryTextToolName(tool)
+      && action?.requiresConfirmation !== true
+      && riskLevel === "low"
+      && hasTarget;
+  });
+}
+
+function buildAgentTraceRecoveryAction(trace = {}, activeSession = null) {
+  const hint = trace?.recoveryHint && typeof trace.recoveryHint === "object" ? trace.recoveryHint : null;
+  if (!hint || hint.requiresUserConfirmation === true || hint.requiresAttachment === true) {
+    return null;
+  }
+  const mode = String(hint.mode || "").trim();
+  if (mode === "awaiting-confirmation" || mode === "vision-require-attachment" || mode === "resume-default") {
+    return null;
+  }
+  const sessionId = getTraceRecoverySessionId(trace, activeSession);
+  if (sessionId == null || String(sessionId).trim() === "") {
+    return null;
+  }
+  const directModes = new Set(["text-retry-tools", "file-access-retry-tools", "file-access-suggested-actions"]);
+  const replanModes = new Set(["text-replan", "cancelled-replan", "failed-replan", "answer-rebuild"]);
+  const isDirectRetry = hint.canContinueDirectly === true || directModes.has(mode) || hasSafeSuggestedTraceRecoveryAction(hint);
+  const isReplan = replanModes.has(mode);
+  if (!isDirectRetry && !isReplan) {
+    return null;
+  }
+  return {
+    type: "invoke-bot",
+    label: isDirectRetry ? "重试失败步骤" : "重新规划",
+    botId: "ai.chat",
+    rawText: `#${sessionId} 继续`,
+    parsedArgs: {
+      __chatReplyMode: "replace-chat-message"
+    }
+  };
+}
+
+function buildAgentTraceCardActions(trace = {}, activeSession = null) {
+  const jobId = String(trace?.jobId || "").trim();
+  const baseActions = buildBotJobCardActions(trace?.snapshot || {}, jobId, { includeTrace: false });
+  const recoveryAction = buildAgentTraceRecoveryAction(trace, activeSession);
+  return recoveryAction ? [recoveryAction, ...baseActions] : baseActions;
+}
+
 function buildBotJobCardActions(job = {}, fallbackJobId = "", options = {}) {
   const jobId = String(job?.jobId || fallbackJobId || "").trim();
   if (!jobId) {
@@ -770,7 +836,7 @@ export async function handleAiChatCommandRoute(state = {}) {
               title: "AI Agent Trace",
               subtitle: withSessionSubtitle(trace.jobId ? `job: ${trace.jobId}` : "没有可用 trace", activeSession),
               body,
-              actions: trace.missing === true ? [] : buildBotJobCardActions(trace.snapshot || {}, trace.jobId || "", { includeTrace: false })
+              actions: trace.missing === true ? [] : buildAgentTraceCardActions(trace, activeSession)
             }
           }),
           importedFiles: [],
