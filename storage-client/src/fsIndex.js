@@ -32,8 +32,13 @@ export function getStorageHiddenDirectoryNames() {
     process.env.AUDIO_STREAM_CACHE_DIR_NAME || ".nas-audio-stream-cache",
     process.env.PROFILE_AVATAR_DIR_NAME || ".nas-user-avatars",
     process.env.CHAT_ROOM_DIR_NAME || ".nas-chat-room",
-    process.env.BOT_APP_DATA_DIR_NAME || ".nas-bot"
+    process.env.BOT_APP_DATA_DIR_NAME || ".nas-bot",
+    getStorageTrashDirectoryName()
   ].filter(Boolean);
+}
+
+export function getStorageTrashDirectoryName() {
+  return process.env.NAS_TRASH_DIR_NAME || process.env.TRASH_DIR_NAME || ".nas-trash";
 }
 
 export async function scanFiles(rootDir) {

@@ -109,6 +109,7 @@ const TOOL_RISK_LEVELS = {
   analyze_file_content: "medium",
   update_file_metadata: "medium",
   organize_files: "high",
+  trash_files: "high",
   explain_file_access: "low",
   get_storage_file_details: "low",
   invoke_video_analyze: "medium",
@@ -255,6 +256,22 @@ const TOOL_OUTPUT_SCHEMAS = {
     },
     additionalProperties: true
   },
+  trash_files: {
+    type: "object",
+    required: ["operation", "actions"],
+    properties: {
+      operation: { type: "string" },
+      riskLevel: { type: "string" },
+      dryRun: { type: "boolean" },
+      requiresConfirmation: { type: "boolean" },
+      blocked: { type: "boolean" },
+      confirmation: { type: "object" },
+      actions: { type: "array", items: { type: "object" } },
+      audit: { type: "object" },
+      ...FILE_ACTION_OUTPUT_FIELDS
+    },
+    additionalProperties: true
+  },
   explain_file_access: {
     type: "object",
     required: ["policy", "summary", "tools"],
@@ -346,6 +363,7 @@ const TOOL_CAPABILITY_TAGS = {
   analyze_file_content: ["file-analysis", "model-inference"],
   update_file_metadata: ["metadata-write"],
   organize_files: ["file-mutation"],
+  trash_files: ["file-mutation", "trash"],
   explain_file_access: ["file-access", "policy-explanation"],
   get_storage_file_details: ["file-metadata", "derived-content"],
   invoke_video_analyze: ["media-analysis", "bot-delegation"],
@@ -379,6 +397,7 @@ const TOOL_PERMISSIONS = {
   analyze_file_content: ["ai:model:invoke", "storage:content:read", "bot:invoke"],
   update_file_metadata: ["storage:metadata:write"],
   organize_files: ["storage:file:move", "storage:file:rename"],
+  trash_files: ["storage:file:move", "storage:file:trash"],
   explain_file_access: ["storage:policy:read"],
   get_storage_file_details: ["storage:metadata:read", "storage:derived:read"],
   invoke_video_analyze: ["bot:invoke", "ai:model:invoke", "storage:content:read", "storage:metadata:write"],
@@ -412,6 +431,7 @@ const TOOL_HEALTH_CHECKS = {
   analyze_file_content: ["ai-model", "storage-root", "document-text"],
   update_file_metadata: ["storage-root"],
   organize_files: ["storage-root"],
+  trash_files: ["storage-root"],
   explain_file_access: ["storage-root"],
   get_storage_file_details: ["storage-root"],
   invoke_video_analyze: ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root", "bot-queue"],
@@ -462,6 +482,7 @@ const CAPABILITY_EXAMPLES = {
   read_media_summary: ["读取这个视频已有摘要、字幕状态、时长和分辨率"],
   update_file_metadata: ["给这个文件添加标签", "给这个文件写一条备注"],
   organize_files: ["把这几个文件移动到整理目录"],
+  trash_files: ["把这些临时文件移入回收站"],
   invoke_music_control: ["点歌 晴天", "下一首"],
   invoke_bilibili_downloader: ["下载这个 B 站视频"],
   invoke_ytdlp_downloader: ["下载这个 YouTube 视频"],
@@ -496,6 +517,7 @@ const PROMPT_CORE_CAPABILITY_IDS = [
   "search_yyets_show",
   "download_yyets_episodes",
   "organize_files",
+  "trash_files",
   "get_bot_job_status",
   "read_agent_trace",
   "read_bot_job_log"
@@ -523,8 +545,8 @@ const CAPABILITY_WORKFLOWS = [
   {
     id: "organize-files",
     title: "Organize NAS files",
-    tools: ["search_library_files", "read_file_metadata", "organize_files"],
-    guidance: "先搜索和读取 metadata，organize_files 默认 dry-run；移动/重命名必须取得明确确认后才 confirmed=true。"
+    tools: ["search_library_files", "read_file_metadata", "organize_files", "trash_files"],
+    guidance: "先搜索和读取 metadata；organize_files/trash_files 默认 dry-run；移动、重命名、移入回收站必须取得明确确认后才 confirmed=true。trash_files 只移动到隐藏回收站，不做永久删除。"
   },
   {
     id: "music-playback",

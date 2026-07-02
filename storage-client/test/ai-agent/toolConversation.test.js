@@ -799,6 +799,48 @@ test("tool execution blocks model-supplied confirmed=true without user confirmat
   assert.deepEqual(api.toolEvents[0].resultSummary.confirmation.impact.changedFields, ["tags"]);
 });
 
+test("tool execution blocks model-supplied trash confirmation", async () => {
+  const api = createFakeApi();
+
+  const observedMessages = await executePendingToolCallsRound({
+    pendingToolCalls: [
+      {
+        id: "call_trash_confirmed_without_user",
+        name: "trash_files",
+        input: { fileId: "client:tmp.txt", confirmed: true, dryRun: false }
+      }
+    ],
+    planningMessages: [
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call_trash_confirmed_without_user",
+            type: "function",
+            function: {
+              name: "trash_files",
+              arguments: JSON.stringify({ fileId: "client:tmp.txt", confirmed: true, dryRun: false })
+            }
+          }
+        ]
+      }
+    ],
+    recentMessages: [],
+    context: { chat: {}, attachments: [] },
+    api,
+    round: 0
+  });
+
+  const observation = observedMessages.at(-1);
+  assert.equal(observation.role, "tool");
+  assert.match(observation.content, /confirmation_required/);
+  assert.equal(api.toolEvents[0].status, "blocked");
+  assert.equal(api.toolEvents[0].resultSummary.capability.id, "trash_files");
+  assert.equal(api.toolEvents[0].resultSummary.capability.riskLevel, "high");
+  assert.deepEqual(api.toolEvents[0].resultSummary.confirmation.impact.changedFields, ["path"]);
+});
+
 test("tool execution allows confirmed=true only from authorized recovery", async () => {
   const api = createFakeApi();
   let invoked = false;

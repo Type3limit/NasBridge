@@ -179,7 +179,7 @@ function buildJsonFallbackSystemPrompt(tools = [], allowToolCalls = true) {
       : "当前已达到工具轮数上限，只能输出 final_answer。",
     "如果已经能回答用户，输出 {\"action\":\"final_answer\",\"answer\":\"...\"}。",
     "arguments 必须是 JSON object，字段必须符合工具 inputSchema。一次只调用一个工具。",
-    "安全规则：不要在 JSON plan 中自行设置 confirmed=true 来执行写入、移动、重命名、覆盖或批量修改；必须先 dryRun/预览影响范围，或用 final_answer 请求用户明确确认。",
+    "安全规则：不要在 JSON plan 中自行设置 confirmed=true 来执行写入、移动、重命名、移入回收站、覆盖或批量修改；必须先 dryRun/预览影响范围，或用 final_answer 请求用户明确确认。",
     "读取 NAS 文件时只使用 fileId 或相对路径；不要编造或输出本机绝对路径。遇到文件访问不确定，先调用 diagnose_file_access。",
     "可用工具：",
     JSON.stringify(toolCatalog, null, 2),
@@ -710,7 +710,7 @@ function countConfirmationTargets(input = {}) {
 }
 
 function inferConfirmationChangedFields(toolName = "", input = {}) {
-  if (toolName === "organize_files") {
+  if (toolName === "organize_files" || toolName === "trash_files") {
     return ["path"];
   }
   if (toolName === "update_file_metadata") {
@@ -749,7 +749,7 @@ function buildToolConfirmationGateResult(toolCall = {}, api = {}) {
       required: true,
       operation: toolName,
       riskLevel,
-      reason: "模型不能自行确认会写入、移动、重命名或批量修改 NAS 文件的操作；必须先展示影响范围并等待用户明确确认。",
+      reason: "模型不能自行确认会写入、移动、重命名、移入回收站或批量修改 NAS 文件的操作；必须先展示影响范围并等待用户明确确认。",
       impact: {
         targetFileCount: countConfirmationTargets(input),
         changedFields: inferConfirmationChangedFields(toolName, input)
@@ -1262,6 +1262,13 @@ export function getAiToolProgress(toolName = "", round = 0) {
     return {
       phase: "tool-organize-files",
       label: safeRound > 0 ? `继续预览 NAS 文件整理（第 ${safeRound + 1} 轮）` : "预览 NAS 文件整理",
+      percent: 48 + offset
+    };
+  }
+  if (normalized === "trash_files") {
+    return {
+      phase: "tool-trash-files",
+      label: safeRound > 0 ? `继续预览移入回收站（第 ${safeRound + 1} 轮）` : "预览移入 NAS 回收站",
       percent: 48 + offset
     };
   }

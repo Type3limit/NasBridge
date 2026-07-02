@@ -442,6 +442,8 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.equal(byId.get("analyze_file_content").riskLevel, "medium");
   assert.equal(byId.get("organize_files").riskLevel, "high");
   assert.equal(byId.get("organize_files").requiresConfirmation, true);
+  assert.equal(byId.get("trash_files").riskLevel, "high");
+  assert.equal(byId.get("trash_files").requiresConfirmation, true);
   assert.ok(byId.get("ai.chat").healthChecks.includes("ai-tool-call"));
   assert.ok(byId.get("video.analyze").healthChecks.includes("bot-queue"));
   assert.ok(byId.get("read_text_excerpt").healthChecks.includes("document-text"));
@@ -457,6 +459,8 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.ok(byId.get("update_file_metadata").permissions.includes("storage:metadata:write"));
   assert.ok(byId.get("organize_files").capabilities.includes("file-mutation"));
   assert.ok(byId.get("organize_files").permissions.includes("storage:file:move"));
+  assert.ok(byId.get("trash_files").capabilities.includes("trash"));
+  assert.ok(byId.get("trash_files").permissions.includes("storage:file:trash"));
   assert.ok(byId.get("invoke_bilibili_downloader").permissions.includes("network:download"));
   assert.deepEqual(byId.get("search_library_files").outputSchema.required, ["total", "files"]);
   assert.ok(byId.get("search_library_files").outputSchema.properties.actionPlan);
@@ -467,6 +471,8 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.ok(byId.get("explain_file_access").outputSchema.properties.toolIds);
   assert.deepEqual(byId.get("update_file_metadata").outputSchema.required, ["operation", "results"]);
   assert.ok(byId.get("update_file_metadata").outputSchema.properties.confirmation);
+  assert.deepEqual(byId.get("trash_files").outputSchema.required, ["operation", "actions"]);
+  assert.ok(byId.get("trash_files").outputSchema.properties.audit);
   assert.deepEqual(byId.get("invoke_bilibili_downloader").outputSchema.required, ["status", "botId", "jobId"]);
   assert.ok(byId.get("invoke_bilibili_downloader").outputSchema.properties.tracking);
   assert.ok(byId.get("video.analyze").outputSchema.properties.jobId);
@@ -550,12 +556,14 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(summary, /explain_file_access/);
   assert.match(summary, /read_bot_job_log/);
   assert.match(summary, /organize_files/);
+  assert.match(summary, /trash_files/);
   assert.match(summary, /invoke_bilibili_downloader/);
   assert.match(summary, /invoke_torrent_downloader/);
   assert.match(summary, /invoke_aria2_downloader/);
   assert.match(summary, /perms=storage:index:read/);
   assert.match(summary, /caps=file-mutation/);
   assert.match(summary, /perms=storage:file:move\/storage:file:rename/);
+  assert.match(summary, /perms=storage:file:move\/storage:file:trash/);
   assert.match(summary, /perms=bot:invoke\/network:download\/storage:file:write/);
   assert.match(summary, /returns=total\/files/);
   assert.match(summary, /returns=operation\/actions/);
@@ -567,6 +575,8 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(summary, /waitUntilPhase=transcribe\/running/);
   assert.match(summary, /document-read: search_library_files -> diagnose_file_access -> read_text_excerpt -> analyze_file_content/);
   assert.match(summary, /file-access-diagnostic: explain_file_access -> search_library_files -> diagnose_file_access/);
+  assert.match(summary, /organize-files: search_library_files -> read_file_metadata -> organize_files -> trash_files/);
+  assert.match(summary, /隐藏回收站/);
   assert.match(summary, /download-into-library: search_bilibili_video -> invoke_bilibili_downloader -> invoke_ytdlp_downloader -> invoke_torrent_downloader -> invoke_aria2_downloader -> search_yyets_show -> download_yyets_episodes/);
   assert.match(summary, /waitUntilPhase=download\/running/);
   assert.match(summary, /magnet\/torrent 选 invoke_torrent_downloader/);
@@ -598,6 +608,7 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(report, /perms=storage:content:read/);
   assert.match(report, /caps=file-mutation/);
   assert.match(report, /perms=storage:file:move, storage:file:rename/);
+  assert.match(report, /perms=storage:file:move, storage:file:trash/);
   assert.match(report, /returns=operation, actions/);
   assert.match(report, /returns=status, botId, jobId/);
   assert.match(report, /常用工作流/);

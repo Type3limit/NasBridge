@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { getStorageHiddenDirectoryNames, safeJoin, scanFiles } from "../../fsIndex.js";
+import { getStorageHiddenDirectoryNames, getStorageTrashDirectoryName, safeJoin, scanFiles } from "../../fsIndex.js";
 import { extractDocumentTextExcerpt, isExtractableDocumentPath } from "./documentText.js";
 import { probeMediaFile } from "./mediaProbe.js";
 
@@ -868,6 +868,15 @@ function buildGenericFileAccessActionPlan() {
       riskLevel: "high",
       requiresConfirmation: true,
       contentLayer: "file-mutation"
+    }),
+    buildAccessAction({
+      id: "trash-files",
+      tool: "trash_files",
+      input: { dryRun: true },
+      reason: "用户明确要求删除时，只能先预览移入隐藏回收站，确认后才执行。",
+      riskLevel: "high",
+      requiresConfirmation: true,
+      contentLayer: "file-mutation"
     })
   ];
 }
@@ -1384,6 +1393,13 @@ const FILE_ACCESS_TOOL_SUMMARIES = [
     riskLevel: "high",
     requiresConfirmation: true,
     summary: "在 STORAGE_ROOT 内移动或重命名文件；必须先 dry-run，再确认执行。"
+  },
+  {
+    id: "trash_files",
+    contentLayer: "file-mutation",
+    riskLevel: "high",
+    requiresConfirmation: true,
+    summary: "把文件移动到 STORAGE_ROOT 内隐藏回收站；必须先 dry-run，再确认执行。"
   },
   {
     id: "explain_file_access",
@@ -2076,7 +2092,7 @@ export async function buildFileAccessExplanation(api, input = {}) {
       "任意绝对路径读取",
       "STORAGE_ROOT 外文件",
       "二进制原文直接塞进模型上下文",
-      "未经确认的删除、移动、重命名、批量覆盖"
+      "未经确认的移入回收站、移动、重命名、批量覆盖"
     ],
     recommendedFirstSteps: [
       "找文件: search_library_files/list_storage_files -> read_file_metadata",
@@ -2085,7 +2101,8 @@ export async function buildFileAccessExplanation(api, input = {}) {
       "读取媒体摘要或技术信息: read_media_summary",
       "生成视频/音频字幕和摘要: invoke_video_analyze 或 analyze_file_content(startAnalysis=true)",
       "写标签/摘要/备注: update_file_metadata；批量或覆盖前先确认",
-      "移动/重命名: organize_files dryRun=true -> 用户确认 -> confirmed=true dryRun=false"
+      "移动/重命名: organize_files dryRun=true -> 用户确认 -> confirmed=true dryRun=false",
+      "删除/清理: trash_files dryRun=true -> 用户确认 -> 移入隐藏回收站，不做永久删除"
     ],
     tools: buildFileAccessToolSummaries(),
     toolIds: FILE_ACCESS_TOOL_IDS,
@@ -2303,8 +2320,8 @@ export async function buildDiagnoseFileAccessResult(api, input = {}) {
         label: "File Mutation",
         available: pathSafe && !hiddenDirectory,
         riskLevel: "high",
-        tools: ["organize_files"],
-        detail: "移动/重命名必须先 dry-run 预览，并在用户确认后执行。"
+        tools: ["organize_files", "trash_files"],
+        detail: "移动、重命名、移入回收站必须先 dry-run 预览，并在用户确认后执行。"
       })
     ],
     blockers,
@@ -2692,6 +2709,170 @@ function buildOrganizeActionPlan({
   return actions;
 }
 
+function collectTrashActionInputs(input = {}) {
+  if (Array.isArray(input.actions) && input.actions.length) {
+    return input.actions.slice(0, MAX_FILE_ORGANIZE_ACTIONS).map((action) => ({
+      identifier: String(action?.fileId || action?.path || action?.filePath || "").trim(),
+      trashPath: action?.trashPath || action?.targetPath || action?.to
+    }));
+  }
+  return [...new Set(collectFileIdentifiers(input))]
+    .slice(0, MAX_FILE_ORGANIZE_ACTIONS)
+    .map((identifier) => ({ identifier, trashPath: "" }));
+}
+
+function formatTrashDate(value = "") {
+  const parsed = Date.parse(String(value || "").trim());
+  const date = Number.isFinite(parsed) ? new Date(parsed) : new Date();
+  return date.toISOString().slice(0, 10).replace(/-/g, "");
+}
+
+function isInsideTrashDirectory(relativePath = "") {
+  const trashDir = getStorageTrashDirectoryName();
+  const first = normalizeRelativePath(relativePath).split("/").filter(Boolean)[0] || "";
+  return first === trashDir;
+}
+
+function appendRelativePathSuffix(relativePath = "", suffix = "") {
+  const normalized = normalizeRelativePath(relativePath);
+  const parts = normalized.split("/").filter(Boolean);
+  const fileName = parts.pop() || "";
+  const ext = path.extname(fileName);
+  const base = ext ? fileName.slice(0, -ext.length) : fileName;
+  return [...parts, `${base}${suffix}${ext}`].join("/");
+}
+
+function buildTrashTargetPath(api = {}, file = {}, action = {}, input = {}, reservedTargets = new Set()) {
+  const explicit = normalizeRelativePath(action.trashPath || "");
+  if (explicit) {
+    const targetPath = assertSafeMutationRelativePath(explicit);
+    if (!isInsideTrashDirectory(targetPath)) {
+      throw new Error(`trashPath must stay inside ${getStorageTrashDirectoryName()}`);
+    }
+    return targetPath;
+  }
+
+  const dateSegment = formatTrashDate(input.trashDate || input.now);
+  const baseTarget = assertSafeMutationRelativePath(`${getStorageTrashDirectoryName()}/${dateSegment}/${file.relativePath}`);
+  let targetPath = baseTarget;
+  let suffix = 1;
+  while (reservedTargets.has(targetPath.toLowerCase()) || fs.existsSync(safeJoin(api.storageRoot, targetPath))) {
+    targetPath = appendRelativePathSuffix(baseTarget, `-${suffix}`);
+    suffix += 1;
+  }
+  reservedTargets.add(targetPath.toLowerCase());
+  return targetPath;
+}
+
+function buildTrashExecutionInput(executable = [], extra = {}) {
+  return {
+    actions: (Array.isArray(executable) ? executable : []).map((item) => ({
+      fileId: String(item?.source?.fileId || "").trim(),
+      trashPath: String(item?.target?.path || "").trim()
+    })).filter((item) => item.fileId && item.trashPath),
+    ...extra
+  };
+}
+
+function buildTrashNextActions({
+  dryRun = true,
+  requiresConfirmation = false,
+  blockers = [],
+  executable = [],
+  results = [],
+  missing = []
+} = {}) {
+  if (blockers.length) {
+    return [
+      `存在 ${blockers.length} 个移入回收站阻塞项（缺失、隐藏目录、非法目标或冲突），本次没有执行文件变更。`,
+      executable.length
+        ? "先修复 blockers 后重新 dry-run；不要在存在阻塞项时执行部分移入回收站。"
+        : "先调用 search_library_files 重新定位文件，或修正 trashPath 后再预览。"
+    ];
+  }
+  if (requiresConfirmation) {
+    return [
+      `已生成 ${executable.length} 个文件的移入回收站预览，本次没有执行文件变更。`,
+      "先向用户展示 confirmation.impact 和 actions；用户明确确认后，再通过会话恢复链路执行 confirmed=true、dryRun=false。"
+    ];
+  }
+  if (dryRun && executable.length) {
+    return [
+      `已生成 ${executable.length} 个文件的移入回收站预览，本次没有执行文件变更。`,
+      "移入回收站是高风险文件操作；展示原路径和回收站路径，用户确认后才可调用 trash_files confirmed=true dryRun=false。"
+    ];
+  }
+  const trashedCount = results.filter((item) => item.status === "trashed").length;
+  if (trashedCount) {
+    return [
+      `已把 ${trashedCount} 个文件移动到 ${getStorageTrashDirectoryName()} 隐藏回收站，没有永久删除。`,
+      "如果误操作，可在 storage root 内从隐藏回收站按 target.path 手动移回 source.path；索引刷新后原文件将不再出现在普通搜索结果。"
+    ];
+  }
+  if (missing.length) {
+    return [`未找到 ${missing.length} 个文件；先调用 search_library_files 重新定位候选文件，再 dry-run 移入回收站。`];
+  }
+  return ["没有可执行的移入回收站动作；请提供 fileIds、paths 或 actions。"];
+}
+
+function buildTrashActionPlan({
+  dryRun = true,
+  requiresConfirmation = false,
+  blockers = [],
+  executable = [],
+  results = [],
+  missing = []
+} = {}) {
+  const actions = [];
+  if (blockers.length) {
+    actions.push(buildAccessAction({
+      id: "repair-trash-preview",
+      tool: "trash_files",
+      input: { dryRun: true },
+      reason: "修复缺失文件、隐藏目录、非法回收站路径或目标冲突后重新 dry-run；不要在存在阻塞项时移动文件。",
+      riskLevel: "high",
+      requiresConfirmation: true,
+      blocked: true,
+      blockerIds: blockers.map((item, index) => `trash-${item.status || "blocked"}-${index + 1}`),
+      contentLayer: "file-mutation"
+    }));
+    if (missing.length) {
+      actions.push(buildAccessAction({
+        id: "relocate-trash-missing-files",
+        tool: "search_library_files",
+        input: { limit: 10 },
+        reason: "存在未找到的源文件；重新搜索索引后再生成移入回收站预览。",
+        contentLayer: "index"
+      }));
+    }
+    return actions;
+  }
+  if ((requiresConfirmation || dryRun) && executable.length) {
+    actions.push(buildAccessAction({
+      id: "await-trash-confirmation",
+      tool: "trash_files",
+      input: buildTrashExecutionInput(executable, { confirmed: true, dryRun: false }),
+      reason: "移入回收站属于高风险操作；用户明确确认目标路径后才可由会话恢复链路执行。",
+      riskLevel: "high",
+      requiresConfirmation: true,
+      blocked: true,
+      contentLayer: "file-mutation"
+    }));
+    return actions;
+  }
+  const trashed = results.filter((item) => item.status === "trashed");
+  if (trashed.length) {
+    actions.push(buildAccessAction({
+      id: "verify-trash-removed-from-index",
+      tool: "search_library_files",
+      input: { limit: Math.min(MAX_LIBRARY_LIST_LIMIT, Math.max(10, trashed.length)) },
+      reason: "索引刷新后确认这些文件不再出现在普通 NAS 文件搜索结果中。",
+      contentLayer: "index"
+    }));
+  }
+  return actions;
+}
+
 export async function buildUpdateFileMetadataResult(api, input = {}) {
   const snapshot = await loadLibrarySnapshot(api);
   const identifiers = [...new Set(collectFileIdentifiers(input))].slice(0, MAX_METADATA_UPDATE_FILES);
@@ -3028,6 +3209,220 @@ export async function buildOrganizeFilesResult(api, input = {}) {
       storageRootOnly: true,
       absolutePathsExposed: false,
       overwrite: input.overwrite === true
+    }
+  };
+}
+
+export async function buildTrashFilesResult(api, input = {}) {
+  const actionInputs = collectTrashActionInputs(input);
+  if (!actionInputs.length) {
+    throw new Error("fileIds、paths 或 actions 至少需要一个");
+  }
+
+  const snapshot = await loadLibrarySnapshot(api);
+  const confirmed = input.confirmed === true;
+  const requestedDryRun = input.dryRun !== false;
+  const dryRun = requestedDryRun || !confirmed;
+  const missing = [];
+  const planned = [];
+  const reservedTargets = new Set();
+
+  for (const action of actionInputs) {
+    const identifier = String(action.identifier || "").trim();
+    if (!identifier) {
+      planned.push({
+        status: "invalid",
+        reason: "fileId or path is required",
+        source: null,
+        target: null
+      });
+      continue;
+    }
+    const file = resolveLibraryFile(snapshot.files, identifier);
+    if (!file) {
+      missing.push(identifier);
+      planned.push({
+        status: "missing",
+        reason: `文件未找到: ${identifier}`,
+        source: { identifier },
+        target: null
+      });
+      continue;
+    }
+
+    let targetPath = "";
+    try {
+      if (isHiddenRelativePath(file.relativePath)) {
+        throw new Error("source file is inside a hidden/system NAS directory");
+      }
+      safeJoin(api.storageRoot, file.relativePath);
+      targetPath = buildTrashTargetPath(api, file, action, input, reservedTargets);
+      safeJoin(api.storageRoot, targetPath);
+    } catch (error) {
+      planned.push({
+        status: "invalid",
+        reason: String(error?.message || error),
+        source: {
+          fileId: file.id,
+          path: file.relativePath,
+          name: file.name
+        },
+        target: { path: targetPath || "" }
+      });
+      continue;
+    }
+
+    const targetAbs = safeJoin(api.storageRoot, targetPath);
+    const targetExists = fs.existsSync(targetAbs);
+    planned.push({
+      status: targetExists ? "conflict" : "ready",
+      reason: targetExists ? "trash target already exists; dry-run again to choose a unique trashPath" : "",
+      source: {
+        fileId: file.id,
+        path: file.relativePath,
+        name: file.name,
+        size: file.size,
+        mimeType: file.mimeType,
+        tags: file.tags || [],
+        aiSummaryAvailable: Boolean(file.aiSummaryAvailable),
+        notesAvailable: Boolean(String(file.notes || "").trim())
+      },
+      target: {
+        path: targetPath,
+        fileId: file.clientId && targetPath ? `${file.clientId}:${targetPath}` : targetPath,
+        trashDirectory: getStorageTrashDirectoryName(),
+        permanentDelete: false,
+        exists: targetExists
+      },
+      restoreHint: {
+        originalPath: file.relativePath,
+        trashPath: targetPath
+      }
+    });
+  }
+
+  const targetCounts = new Map();
+  for (const item of planned) {
+    const key = String(item?.target?.path || "").toLowerCase();
+    if (key) {
+      targetCounts.set(key, (targetCounts.get(key) || 0) + 1);
+    }
+  }
+  for (const item of planned) {
+    const key = String(item?.target?.path || "").toLowerCase();
+    if (key && targetCounts.get(key) > 1 && item.status === "ready") {
+      item.status = "conflict";
+      item.reason = "multiple actions target the same trashPath";
+    }
+  }
+
+  const blockers = planned.filter((item) => ["invalid", "missing", "conflict"].includes(item.status));
+  const executable = planned.filter((item) => item.status === "ready");
+  const confirmationRequired = !requestedDryRun && !confirmed;
+  if (dryRun || blockers.length) {
+    const requiresConfirmation = confirmationRequired || executable.length > 0;
+    return {
+      generatedAt: new Date().toISOString(),
+      operation: "trash_files",
+      riskLevel: "high",
+      dryRun: true,
+      confirmed,
+      requiresConfirmation,
+      blocked: blockers.length > 0 || confirmationRequired,
+      blockedReason: blockers.length
+        ? "存在缺失文件、隐藏目录、非法回收站路径或目标冲突，未执行任何文件变更。"
+        : (confirmationRequired ? "移入回收站属于高风险文件操作，需要用户确认并以 confirmed=true、dryRun=false 再次调用。" : ""),
+      count: planned.length,
+      executableCount: executable.length,
+      missing,
+      nextActions: buildTrashNextActions({
+        dryRun: true,
+        requiresConfirmation,
+        blockers,
+        executable,
+        results: [],
+        missing
+      }),
+      actionPlan: buildTrashActionPlan({
+        dryRun: true,
+        requiresConfirmation,
+        blockers,
+        executable,
+        results: [],
+        missing
+      }),
+      confirmation: requiresConfirmation
+        ? buildSafetyConfirmation({
+            operation: "trash_files",
+            riskLevel: "high",
+            reason: `文件会被移动到 ${getStorageTrashDirectoryName()} 隐藏回收站；不会永久删除，但普通索引将不再显示这些文件。`,
+            targetFileCount: executable.length,
+            changedFields: ["path"],
+            files: executable,
+            recoverability: "可在 storage root 内按 restoreHint.trashPath 手动移回 restoreHint.originalPath；如果原路径已被占用，需要人工处理冲突。",
+            estimatedDuration: estimateSmallBatchDuration(executable.length),
+            confirmWith: {
+              ...buildTrashExecutionInput(executable),
+              confirmed: true,
+              dryRun: false
+            }
+          })
+        : null,
+      actions: planned.map((item) => ({
+        ...item,
+        status: item.status === "ready" ? "dry-run" : item.status
+      }))
+    };
+  }
+
+  const results = [];
+  for (const item of executable) {
+    const sourceAbs = safeJoin(api.storageRoot, item.source.path);
+    const targetAbs = safeJoin(api.storageRoot, item.target.path);
+    await fs.promises.mkdir(path.dirname(targetAbs), { recursive: true });
+    await fs.promises.rename(sourceAbs, targetAbs);
+    results.push({
+      ...item,
+      status: "trashed",
+      target: {
+        ...item.target,
+        exists: true
+      }
+    });
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    operation: "trash_files",
+    riskLevel: "high",
+    dryRun: false,
+    confirmed: true,
+    requiresConfirmation: false,
+    blocked: false,
+    count: results.length,
+    missing,
+    actions: results,
+    nextActions: buildTrashNextActions({
+      dryRun: false,
+      requiresConfirmation: false,
+      blockers: [],
+      executable: [],
+      results,
+      missing
+    }),
+    actionPlan: buildTrashActionPlan({
+      dryRun: false,
+      requiresConfirmation: false,
+      blockers: [],
+      executable: [],
+      results,
+      missing
+    }),
+    audit: {
+      storageRootOnly: true,
+      absolutePathsExposed: false,
+      permanentDelete: false,
+      trashDirectory: getStorageTrashDirectoryName()
     }
   };
 }

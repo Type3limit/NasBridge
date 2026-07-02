@@ -16,6 +16,7 @@ import {
   buildMediaSummaryResult,
   buildOrganizeFilesResult,
   buildTextExcerptResult,
+  buildTrashFilesResult,
   buildUpdateFileMetadataResult
 } from "../../src/bot/tools/libraryFiles.js";
 
@@ -370,6 +371,7 @@ test("file access explanation exposes policy boundaries and tool list", async ()
     assert.equal(result.policy.storageRootConfigured, true);
     assert.ok(result.policy.hiddenDirs.includes(".nas-bot"));
     assert.ok(result.policy.hiddenDirectories.includes(".nas-bot"));
+    assert.ok(result.policy.hiddenDirs.includes(".nas-trash"));
     assert.equal(result.policy.maxInlineTextChars, 20_000);
     assert.equal(result.policy.allowRawTextRead, true);
     assert.equal(result.policy.allowBinaryRead, false);
@@ -390,20 +392,25 @@ test("file access explanation exposes policy boundaries and tool list", async ()
     assert.ok(result.toolIds.includes("search_library_files"));
     assert.ok(result.toolIds.includes("read_text_excerpt"));
     assert.ok(result.toolIds.includes("organize_files"));
+    assert.ok(result.toolIds.includes("trash_files"));
     const toolsById = new Map(result.tools.map((tool) => [tool.id, tool]));
     assert.equal(toolsById.get("search_library_files")?.contentLayer, "index");
     assert.equal(toolsById.get("read_media_summary")?.riskLevel, "low");
     assert.equal(toolsById.get("update_file_metadata")?.requiresConfirmation, true);
     assert.equal(toolsById.get("organize_files")?.riskLevel, "high");
     assert.equal(toolsById.get("organize_files")?.requiresConfirmation, true);
+    assert.equal(toolsById.get("trash_files")?.riskLevel, "high");
+    assert.equal(toolsById.get("trash_files")?.requiresConfirmation, true);
     assert.ok(result.detail.includes("search_library_files"));
     assert.ok(result.detail.includes("diagnose_file_access"));
     assert.ok(result.detail.includes("organize_files"));
+    assert.ok(result.detail.includes("trash_files"));
     assert.ok(result.actionPlan.some((action) => action.tool === "search_library_files" && action.contentLayer === "index"));
     assert.ok(result.actionPlan.some((action) => action.tool === "read_text_excerpt" && action.contentLayer === "excerpt"));
     const organizeAction = result.actionPlan.find((action) => action.tool === "organize_files");
     assert.equal(organizeAction.riskLevel, "high");
     assert.equal(organizeAction.requiresConfirmation, true);
+    assert.equal(result.actionPlan.find((action) => action.tool === "trash_files")?.requiresConfirmation, true);
     assert.doesNotMatch(JSON.stringify(result), new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
   });
 });
@@ -446,6 +453,7 @@ test("diagnose_file_access explains concrete file layers without exposing absolu
     assert.equal(result.contentAccess.subtitleAvailable, true);
     assert.equal(result.contentAccess.analyzeMode, "media");
     assert.ok(result.layers.find((layer) => layer.id === "excerpt")?.available);
+    assert.ok(result.layers.find((layer) => layer.id === "file-mutation")?.tools.includes("trash_files"));
     assert.ok(result.recommendedTools.includes("read_text_excerpt"));
     assert.ok(result.recommendedTools.includes("read_media_summary"));
     assert.ok(result.recommendedTools.includes("invoke_video_analyze"));
@@ -783,6 +791,84 @@ test("organize_files blocks unsafe targets and requires confirmation for real mo
     assert.equal(needsConfirmation.actionPlan[0].input.dryRun, false);
     assert.equal(needsConfirmation.actionPlan[0].input.actions[0].targetPath, "organized/video.mp4");
     assert.equal(fsSync.existsSync(path.join(root, sourceRelative)), true);
+  });
+});
+
+test("trash_files previews and moves files into hidden storage trash after confirmation", async () => {
+  await withTempDir(async (root) => {
+    const sourceRelative = "downloads/delete-me.txt";
+    await fs.mkdir(path.join(root, "downloads"), { recursive: true });
+    await fs.writeFile(path.join(root, sourceRelative), "temporary", "utf8");
+    await fs.mkdir(path.join(root, ".nas-trash", "20260703"), { recursive: true });
+    await fs.writeFile(path.join(root, ".nas-trash", "20260703", "existing.txt"), "old", "utf8");
+    const api = createApi(root, [
+      {
+        id: `client:${sourceRelative}`,
+        clientId: "client",
+        path: sourceRelative,
+        name: "delete-me.txt",
+        size: 9,
+        mimeType: "text/plain",
+        updatedAt: "2026-07-03T00:00:00.000Z",
+        tags: ["tmp"],
+        notes: "safe to trash"
+      }
+    ]);
+
+    const defaultPreview = await buildTrashFilesResult(api, {
+      path: sourceRelative,
+      now: "2026-07-03T12:00:00.000Z"
+    });
+
+    assert.equal(defaultPreview.operation, "trash_files");
+    assert.equal(defaultPreview.riskLevel, "high");
+    assert.equal(defaultPreview.dryRun, true);
+    assert.equal(defaultPreview.requiresConfirmation, true);
+    assert.equal(defaultPreview.confirmation.operation, "trash_files");
+    assert.equal(defaultPreview.confirmation.impact.targetFileCount, 1);
+    assert.deepEqual(defaultPreview.confirmation.impact.changedFields, ["path"]);
+    assert.equal(defaultPreview.actions[0].status, "dry-run");
+    assert.equal(defaultPreview.actions[0].target.path, ".nas-trash/20260703/downloads/delete-me.txt");
+    assert.equal(defaultPreview.actions[0].target.permanentDelete, false);
+    assert.equal(defaultPreview.actionPlan[0].tool, "trash_files");
+    assert.equal(defaultPreview.actionPlan[0].blocked, true);
+    assert.equal(defaultPreview.actionPlan[0].input.confirmed, true);
+    assert.equal(defaultPreview.actionPlan[0].input.dryRun, false);
+    assert.equal(defaultPreview.actionPlan[0].input.actions[0].trashPath, ".nas-trash/20260703/downloads/delete-me.txt");
+    assert.equal(defaultPreview.confirmation.confirmWith.actions[0].trashPath, ".nas-trash/20260703/downloads/delete-me.txt");
+    assert.match(defaultPreview.nextActions[0], /预览/);
+    assert.equal(fsSync.existsSync(path.join(root, sourceRelative)), true);
+
+    const blocked = await buildTrashFilesResult(api, {
+      path: sourceRelative,
+      dryRun: false
+    });
+    assert.equal(blocked.blocked, true);
+    assert.equal(blocked.requiresConfirmation, true);
+    assert.equal(fsSync.existsSync(path.join(root, sourceRelative)), true);
+
+    const executed = await buildTrashFilesResult(api, {
+      actions: defaultPreview.actionPlan[0].input.actions,
+      dryRun: false,
+      confirmed: true
+    });
+
+    assert.equal(executed.blocked, false);
+    assert.equal(executed.dryRun, false);
+    assert.equal(executed.actions[0].status, "trashed");
+    assert.equal(executed.actions[0].target.permanentDelete, false);
+    assert.equal(executed.audit.storageRootOnly, true);
+    assert.equal(executed.audit.permanentDelete, false);
+    assert.equal(executed.audit.trashDirectory, ".nas-trash");
+    assert.match(executed.nextActions[0], /隐藏回收站/);
+    assert.equal(fsSync.existsSync(path.join(root, sourceRelative)), false);
+    assert.equal(fsSync.existsSync(path.join(root, ".nas-trash", "20260703", "downloads", "delete-me.txt")), true);
+
+    const scanned = await buildLibraryListResult({
+      storageRoot: root,
+      clientId: "client"
+    }, { limit: 20 });
+    assert.equal(scanned.total, 0);
   });
 });
 

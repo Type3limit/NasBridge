@@ -24,6 +24,7 @@ import {
   buildMediaSummaryResult,
   buildOrganizeFilesResult,
   buildTextExcerptResult,
+  buildTrashFilesResult,
   buildUpdateFileMetadataResult,
   isDocumentTextExtractable,
   loadLibrarySnapshot,
@@ -1207,6 +1208,34 @@ export function getAiToolDefinitions() {
       }
     },
     {
+      name: "trash_files",
+      description: "高风险 NAS 文件清理工具：把文件移动到 storage root 内的隐藏回收站，不做永久删除。默认只 dry-run 预览；实际执行必须 confirmed=true 且 dryRun=false。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          fileId: { type: "string", description: "单个文件 ID" },
+          fileIds: { type: "array", items: { type: "string" }, maxItems: MAX_FILE_ORGANIZE_ACTIONS },
+          path: { type: "string", description: "单个相对路径" },
+          paths: { type: "array", items: { type: "string" }, maxItems: MAX_FILE_ORGANIZE_ACTIONS },
+          actions: {
+            type: "array",
+            maxItems: MAX_FILE_ORGANIZE_ACTIONS,
+            items: {
+              type: "object",
+              properties: {
+                fileId: { type: "string" },
+                path: { type: "string" },
+                trashPath: { type: "string", description: "预览返回的隐藏回收站相对路径；确认执行时应原样带回" }
+              }
+            },
+            description: "批量移入回收站时为每个文件指定目标；通常使用 dry-run/actionPlan 返回的 actions"
+          },
+          dryRun: { type: "boolean", description: "是否只预览，默认 true" },
+          confirmed: { type: "boolean", description: "高风险实际执行必须为 true" }
+        }
+      }
+    },
+    {
       name: "explain_file_access",
       description: "说明 AI 当前对 NAS 文件库能访问什么、不能访问什么、读写风险边界和可用工具。用户询问权限/可访问性时调用。",
       inputSchema: {
@@ -1523,6 +1552,11 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
   if (name === "organize_files") {
     await api.emitProgress({ phase: "tool-organize-files", label: "预览 NAS 文件整理操作", percent: 48 });
     return safeJson(await buildOrganizeFilesResult(api, input));
+  }
+
+  if (name === "trash_files") {
+    await api.emitProgress({ phase: "tool-trash-files", label: "预览 NAS 文件移入回收站", percent: 48 });
+    return safeJson(await buildTrashFilesResult(api, input));
   }
 
   if (name === "explain_file_access") {

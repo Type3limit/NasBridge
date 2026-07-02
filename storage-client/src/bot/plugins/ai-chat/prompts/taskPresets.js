@@ -53,11 +53,11 @@ const TASK_PRESETS = [
   {
     id: "metadata-and-organization",
     title: "Update metadata or organize files",
-    triggers: [/标签|整理|移动|重命名|归类|metadata|organize|move|rename/i],
+    triggers: [/标签|整理|移动|重命名|归类|删除|清理|metadata|organize|move|rename|delete|trash/i],
     lines: [
       "单文件 tags/aiSummary/notes 使用 update_file_metadata，并记录审计结果。",
       "批量 metadata 写入前说明文件数量、字段变化和影响范围，取得 confirmed=true。",
-      "移动/重命名只能用 organize_files；先 dryRun=true 展示预览，用户确认后才 dryRun=false confirmed=true。"
+      "移动/重命名只能用 organize_files；删除/清理只能用 trash_files 移入隐藏回收站，不做永久删除；都要先 dryRun=true 展示预览，用户确认后才 dryRun=false confirmed=true。"
     ]
   },
   {

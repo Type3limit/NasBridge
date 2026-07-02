@@ -70,3 +70,16 @@ test("includeAll exposes every preset with the always-on operating rules first",
   assert.match(prompt, /High risk|高风险|confirmed=true/);
   assert.match(prompt, /waitUntilPhase/);
 });
+
+test("cleanup prompts route deletes through trash_files", () => {
+  const prompt = buildNasAgentTaskPresetPrompt({
+    prompt: "清理这些临时文件，删除前先让我确认"
+  });
+
+  assert.match(prompt, /Update metadata or organize files/);
+  assert.match(prompt, /trash_files/);
+  assert.match(prompt, /隐藏回收站/);
+  assert.match(prompt, /不做永久删除/);
+  assert.match(prompt, /dryRun=true/);
+  assert.match(prompt, /confirmed=true/);
+});
