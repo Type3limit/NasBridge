@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { BotJobStore } from "../../src/bot/jobStore.js";
-import { buildAgentTraceResult, buildBotJobLogBundle } from "../../src/bot/tools/botJobStatus.js";
+import { buildAgentTraceResult, buildBotJobLogBundle, buildBotJobStatusResult } from "../../src/bot/tools/botJobStatus.js";
 
 async function createTempAppDataRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-job-status-"));
@@ -118,6 +118,47 @@ test("bot job log bundle includes redacted log, agent trace, and delegated child
   assert.equal(bundle.agentTrace.events[0].input.fileId, "file_1");
   assert.equal(bundle.agentTrace.events[0].resultSummary.jobId, "botjob_child");
   assert.equal(bundle.agentTrace.events[0].resultSummary.jobRefs[0].botId, "video.analyze");
+});
+
+test("bot job status includes delegated child jobs for an explicit parent job", async () => {
+  const appDataRoot = await createTempAppDataRoot();
+  const store = new BotJobStore({ rootDir: appDataRoot });
+  await store.save(createJob("botjob_parent", {
+    status: "running",
+    phase: "textTools"
+  }));
+  await store.save(createJob("botjob_child", {
+    botId: "video.analyze",
+    status: "running",
+    phase: "transcribe",
+    progress: {
+      label: "Whisper transcribing",
+      percent: 38,
+      details: null
+    },
+    options: {
+      delegatedBy: "ai.chat",
+      parentJobId: "botjob_parent",
+      toolName: "invoke_video_analyze"
+    }
+  }));
+  await store.waitForPendingWrite("botjob_parent");
+  await store.waitForPendingWrite("botjob_child");
+
+  const status = await buildBotJobStatusResult({
+    appDataRoot,
+    getJob: (jobId) => store.get(jobId)
+  }, {
+    jobId: "botjob_parent"
+  });
+
+  assert.equal(status.count, 1);
+  assert.equal(status.jobs[0].jobId, "botjob_parent");
+  assert.equal(status.jobs[0].childJobCount, 1);
+  assert.equal(status.jobs[0].childJobStatusCounts.running, 1);
+  assert.equal(status.jobs[0].childJobs[0].jobId, "botjob_child");
+  assert.equal(status.jobs[0].childJobs[0].botId, "video.analyze");
+  assert.equal(status.jobs[0].childJobs[0].progress.label, "Whisper transcribing");
 });
 
 test("agent trace result exposes pending confirmation summary", async () => {

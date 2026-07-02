@@ -9,7 +9,7 @@ import { fetchWebPageSummary, getSourcePreferenceLabel, normalizeSourcePreferenc
 import { executeDelegatedBotToolCall, getDelegatedBotToolDefinitions, isDelegatedBotToolName } from "./botToolAdapter.js";
 import { buildRealtimeContextText } from "./realtimeContext.js";
 import { searchYYeTsShows, getYYeTsResource, extractEpisodeMagnets, sanitizeShowName } from "./yyetsApi.js";
-import { MAX_AGENT_TRACE_EVENTS, MAX_JOB_LOG_BYTES, MAX_JOB_STATUS_LIMIT, buildAgentTraceResult, buildBotJobStatusResult } from "./botJobStatus.js";
+import { MAX_AGENT_TRACE_EVENTS, MAX_CHILD_JOB_SUMMARY_LIMIT, MAX_JOB_LOG_BYTES, MAX_JOB_STATUS_LIMIT, buildAgentTraceResult, buildBotJobStatusResult } from "./botJobStatus.js";
 import {
   MAX_FILE_ORGANIZE_ACTIONS,
   MAX_LIBRARY_DETAIL_FILES,
@@ -771,7 +771,9 @@ export function getAiToolDefinitions() {
           includeLog: { type: "boolean", description: "是否返回尾部日志，默认 false" },
           logMaxBytes: { type: "integer", minimum: 1024, maximum: MAX_JOB_LOG_BYTES },
           includeTrace: { type: "boolean", description: "是否同时读取 ai.chat trace，默认 false" },
-          maxTraceEvents: { type: "integer", minimum: 1, maximum: MAX_AGENT_TRACE_EVENTS }
+          maxTraceEvents: { type: "integer", minimum: 1, maximum: MAX_AGENT_TRACE_EVENTS },
+          includeChildJobs: { type: "boolean", description: "是否返回委派子任务；明确 jobId 时默认 true，最近任务列表默认 false" },
+          childJobLimit: { type: "integer", minimum: 1, maximum: MAX_CHILD_JOB_SUMMARY_LIMIT }
         }
       }
     },

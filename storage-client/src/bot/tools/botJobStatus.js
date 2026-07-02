@@ -121,6 +121,15 @@ function summarizeJob(job = {}) {
   };
 }
 
+function summarizeStatusCounts(jobs = []) {
+  const counts = {};
+  for (const job of Array.isArray(jobs) ? jobs : []) {
+    const status = String(job?.status || "unknown").trim() || "unknown";
+    counts[status] = (counts[status] || 0) + 1;
+  }
+  return counts;
+}
+
 async function readJsonFile(filePath = "") {
   try {
     const raw = await fs.promises.readFile(filePath, "utf8");
@@ -320,9 +329,13 @@ export async function buildBotJobStatusResult(api = {}, input = {}) {
     input.jobId
   ].map((item) => String(item || "").trim()).filter(Boolean);
   const jobIds = explicitJobIds.length ? [...new Set(explicitJobIds)].slice(0, MAX_JOB_STATUS_LIMIT) : await listRecentJobIds(appDataRoot, limit);
-  const store = new BotJobStore({ rootDir: appDataRoot });
+  const store = input.store instanceof BotJobStore ? input.store : new BotJobStore({ rootDir: appDataRoot });
   const includeLog = input.includeLog === true;
   const includeTrace = input.includeTrace === true;
+  const includeChildJobs = Object.prototype.hasOwnProperty.call(input, "includeChildJobs")
+    ? input.includeChildJobs === true
+    : explicitJobIds.length > 0;
+  const childJobLimit = clampInteger(input.childJobLimit || MAX_CHILD_JOB_SUMMARY_LIMIT, 1, MAX_CHILD_JOB_SUMMARY_LIMIT);
   const logMaxBytes = clampInteger(input.logMaxBytes || 12_000, 1024, MAX_JOB_LOG_BYTES);
   const jobs = [];
   const missing = [];
@@ -343,6 +356,19 @@ export async function buildBotJobStatusResult(api = {}, input = {}) {
     }
     if (includeTrace) {
       summary.agentTrace = await buildAgentTraceResult(api, { jobId, maxEvents: input.maxTraceEvents || 30 });
+    }
+    if (includeChildJobs) {
+      const childJobIds = await listChildJobIds(appDataRoot, jobId, childJobLimit);
+      const childJobs = [];
+      for (const childJobId of childJobIds) {
+        const childJob = await readJob(api, store, childJobId);
+        if (childJob) {
+          childJobs.push(summarizeJob(childJob));
+        }
+      }
+      summary.childJobs = childJobs;
+      summary.childJobCount = childJobs.length;
+      summary.childJobStatusCounts = summarizeStatusCounts(childJobs);
     }
     jobs.push(summary);
   }
