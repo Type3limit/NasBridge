@@ -512,6 +512,7 @@ async function buildAnalyzeFileContentResult(api = {}, input = {}) {
       temperature: 0.2
     });
     return {
+      status: "succeeded",
       mode: "text",
       file: fileInfo,
       excerpt: {
@@ -523,7 +524,9 @@ async function buildAnalyzeFileContentResult(api = {}, input = {}) {
         truncated: excerptResult.excerpt?.truncated === true
       },
       model: result.model || "",
-      analysis: String(result.text || "").trim()
+      analysis: String(result.text || "").trim(),
+      nextActions: Array.isArray(excerptResult.nextActions) ? excerptResult.nextActions : [],
+      actionPlan: Array.isArray(excerptResult.actionPlan) ? excerptResult.actionPlan : []
     };
   }
 
@@ -546,11 +549,24 @@ async function buildAnalyzeFileContentResult(api = {}, input = {}) {
       temperature: 0.2
     });
     return {
+      status: "succeeded",
       mode: "image",
       file: fileInfo,
       imageCount: 1,
       model: result.model || "",
-      analysis: String(result.text || "").trim()
+      analysis: String(result.text || "").trim(),
+      nextActions: [
+        "可基于图片分析回答用户问题；只有用户明确要求保存描述或标签时，才调用 update_file_metadata dryRun=true 预览写入。"
+      ],
+      actionPlan: [{
+        id: "write-image-analysis-if-requested",
+        tool: "update_file_metadata",
+        input: { fileId: file.id, dryRun: true },
+        reason: "只有用户明确要求保存图片描述、摘要或标签时才写入 metadata。",
+        riskLevel: "medium",
+        requiresConfirmation: true,
+        contentLayer: "write-metadata"
+      }]
     };
   }
 
@@ -564,23 +580,29 @@ async function buildAnalyzeFileContentResult(api = {}, input = {}) {
     });
     if (String(mediaSummary.aiSummary || "").trim() && input.forceAnalyze !== true) {
       return {
+        status: "succeeded",
         mode: "media-summary",
         file: fileInfo,
         media: mediaSummary.media,
         derived: mediaSummary.derived,
         aiSummary: mediaSummary.aiSummary,
-        transcriptExcerpt: mediaSummary.transcriptExcerpt || null
+        transcriptExcerpt: mediaSummary.transcriptExcerpt || null,
+        nextActions: Array.isArray(mediaSummary.nextActions) ? mediaSummary.nextActions : [],
+        actionPlan: Array.isArray(mediaSummary.actionPlan) ? mediaSummary.actionPlan : []
       };
     }
 
     const mimeType = String(file.mimeType || "").toLowerCase();
     if (!mimeType.startsWith("video/") && !mimeType.startsWith("audio/")) {
       return {
+        status: "unsupported",
         mode: "metadata",
         file: fileInfo,
         media: mediaSummary.media,
         derived: mediaSummary.derived,
-        message: "该文件没有可直接分析的文本、图片或视频/音频内容；已返回可用 metadata。"
+        message: "该文件没有可直接分析的文本、图片或视频/音频内容；已返回可用 metadata。",
+        nextActions: Array.isArray(mediaSummary.nextActions) ? mediaSummary.nextActions : [],
+        actionPlan: Array.isArray(mediaSummary.actionPlan) ? mediaSummary.actionPlan : []
       };
     }
 
@@ -608,11 +630,16 @@ async function buildAnalyzeFileContentResult(api = {}, input = {}) {
         });
         return {
           mode: "media-analysis-job",
-          status: completedJob.status,
-          jobId: completedJob.jobId,
+          delegated: true,
+          ...buildDelegatedJobFields("video.analyze", completedJob, {
+            waitForCompletion: true
+          }),
           file: fileInfo,
           result: completedJob.result || {},
-          error: completedJob.error || null
+          error: completedJob.error || null,
+          message: completedJob.status === "succeeded"
+            ? "媒体分析任务已完成。"
+            : "媒体分析任务已结束，请查看子任务状态和日志。"
         };
       }
 
@@ -633,17 +660,21 @@ async function buildAnalyzeFileContentResult(api = {}, input = {}) {
     }
 
     return {
+      status: "needs-analysis",
       mode: "media-summary",
       file: fileInfo,
       media: mediaSummary.media,
       derived: mediaSummary.derived,
       aiSummary: mediaSummary.aiSummary || "",
       transcriptExcerpt: mediaSummary.transcriptExcerpt || null,
-      nextAction: "该媒体文件还没有 AI 摘要；如需生成摘要，请再次调用 analyze_file_content 并设置 startAnalysis=true，或调用 analyze_storage_video。"
+      nextAction: "该媒体文件还没有 AI 摘要；如需生成摘要，请再次调用 analyze_file_content 并设置 startAnalysis=true，或调用 analyze_storage_video。",
+      nextActions: Array.isArray(mediaSummary.nextActions) ? mediaSummary.nextActions : [],
+      actionPlan: Array.isArray(mediaSummary.actionPlan) ? mediaSummary.actionPlan : []
     };
   }
 
   return {
+    status: "unsupported",
     mode: "metadata",
     file: fileInfo,
     message: "该文件类型暂不支持直接内容分析；已返回 metadata。"

@@ -37,6 +37,18 @@ function createFakeApi(overrides = {}) {
         clientId: "client",
         directories: [],
         files
+      }),
+      probeMediaFile: async () => ({
+        durationSeconds: 125,
+        durationLabel: "2:05",
+        resolution: "1920x1080",
+        width: 1920,
+        height: 1080,
+        videoTrackCount: 1,
+        audioTrackCount: 1,
+        subtitleTrackCount: 0,
+        formatName: "mov,mp4,m4a,3gp,3g2,mj2",
+        bitRate: 1200000
       })
     },
     emitProgress: async (event) => progress.push(event),
@@ -127,6 +139,65 @@ test("invoke_video_analyze can wait until a delegated job phase", async () => {
   assert.equal(result.nextAction, "waited-until-phase:transcribe");
   assert.equal(result.job.progress.percent, 35);
   assert.equal(result.tracking.statusCommand, "@ai /job botjob_child");
+});
+
+test("analyze_file_content reports needs-analysis before starting media job", async () => {
+  const api = createFakeApi();
+  const raw = await executeAiToolCall(
+    {
+      name: "analyze_file_content",
+      input: {
+        path: "Videos/demo.mp4"
+      }
+    },
+    { chat: {}, attachments: [] },
+    api
+  );
+  const result = JSON.parse(raw);
+
+  assert.equal(result.status, "needs-analysis");
+  assert.equal(result.mode, "media-summary");
+  assert.equal(result.file.fileId, "client:Videos/demo.mp4");
+  assert.equal(result.media.probeAvailable, true);
+  assert.equal(result.media.durationLabel, "2:05");
+  assert.match(result.nextAction, /startAnalysis=true/);
+  assert.ok(result.actionPlan.some((action) => action.tool === "invoke_video_analyze"));
+  assert.equal(api.invoked.length, 0);
+});
+
+test("analyze_file_content delegates media analysis with job tracking", async () => {
+  const api = createFakeApi();
+  const raw = await executeAiToolCall(
+    {
+      name: "analyze_file_content",
+      input: {
+        fileId: "client:Videos/demo.mp4",
+        startAnalysis: true
+      }
+    },
+    { chat: {}, attachments: [] },
+    api
+  );
+  const result = JSON.parse(raw);
+
+  assert.equal(result.mode, "media-analysis-job");
+  assert.equal(result.delegated, true);
+  assert.equal(result.botId, "video.analyze");
+  assert.equal(result.status, "queued");
+  assert.equal(result.jobId, "botjob_child");
+  assert.equal(result.tracking.statusCommand, "@ai /job botjob_child");
+  assert.equal(result.tracking.logCommand, "@ai /log botjob_child");
+  assert.equal(result.tracking.traceCommand, "@ai /trace botjob_child");
+  assert.equal(api.invoked[0].botId, "video.analyze");
+  assert.deepEqual(api.invoked[0].trigger.parsedArgs, {
+    fileId: "client:Videos/demo.mp4",
+    filePath: "Videos/demo.mp4"
+  });
+  assert.deepEqual(api.invoked[0].options, {
+    delegatedBy: "ai.chat",
+    parentJobId: "botjob_parent",
+    toolName: "analyze_file_content"
+  });
 });
 
 test("invoke_video_tag delegates to video.tag with summary context", async () => {
