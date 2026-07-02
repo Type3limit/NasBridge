@@ -996,21 +996,65 @@ export async function buildLibraryDetailsResult(api, input = {}) {
   };
 }
 
-export async function buildUpdateFileMetadataResult(api, input = {}) {
-  const dryRun = input.dryRun === true;
-  if (!dryRun && typeof api?.dependencies?.upsertFileMeta !== "function") {
-    throw new Error("upsertFileMeta dependency is unavailable");
+function buildSafetyConfirmation({
+  operation = "",
+  riskLevel = "medium",
+  reason = "",
+  targetFileCount = 0,
+  changedFields = [],
+  files = [],
+  recoverability = "",
+  estimatedDuration = "",
+  confirmWith = {}
+} = {}) {
+  return {
+    required: true,
+    operation,
+    riskLevel,
+    reason,
+    impact: {
+      targetFileCount: Math.max(0, Number(targetFileCount) || 0),
+      changedFields: Array.isArray(changedFields) ? changedFields.map((item) => String(item || "").trim()).filter(Boolean) : [],
+      files: (Array.isArray(files) ? files : []).map((file) => ({
+        fileId: String(file?.fileId || file?.id || file?.source?.fileId || "").trim(),
+        path: String(file?.path || file?.source?.path || "").trim(),
+        name: String(file?.name || file?.source?.name || "").trim(),
+        status: String(file?.status || "").trim()
+      })).filter((file) => file.fileId || file.path).slice(0, MAX_FILE_ORGANIZE_ACTIONS)
+    },
+    recoverability: String(recoverability || "").trim(),
+    estimatedDuration: String(estimatedDuration || "").trim(),
+    confirmWith
+  };
+}
+
+function estimateSmallBatchDuration(count = 0) {
+  const targetCount = Math.max(0, Number(count) || 0);
+  if (targetCount <= 5) {
+    return "< 1 分钟";
   }
+  if (targetCount <= 20) {
+    return "1-3 分钟";
+  }
+  return "数分钟，取决于磁盘速度和队列负载";
+}
+
+export async function buildUpdateFileMetadataResult(api, input = {}) {
   const snapshot = await loadLibrarySnapshot(api);
   const identifiers = [...new Set(collectFileIdentifiers(input))].slice(0, MAX_METADATA_UPDATE_FILES);
   if (!identifiers.length) {
     throw new Error("fileIds or paths is required");
   }
-  if ((Array.isArray(input.fileIds) || Array.isArray(input.paths)) && identifiers.length > 1 && input.confirmed !== true) {
-    throw new Error("批量写入 metadata 需要用户确认，请说明影响范围后以 confirmed=true 调用。");
+  const confirmed = input.confirmed === true;
+  const requestedDryRun = input.dryRun === true;
+  const batchRequest = (Array.isArray(input.fileIds) || Array.isArray(input.paths)) && identifiers.length > 1;
+  const dryRun = requestedDryRun || (batchRequest && !confirmed);
+  if (!dryRun && typeof api?.dependencies?.upsertFileMeta !== "function") {
+    throw new Error("upsertFileMeta dependency is unavailable");
   }
   const results = [];
   const missing = [];
+  const allChangedFields = new Set();
   for (const identifier of identifiers) {
     const file = resolveLibraryFile(snapshot.files, identifier);
     if (!file) {
@@ -1018,6 +1062,9 @@ export async function buildUpdateFileMetadataResult(api, input = {}) {
       continue;
     }
     const { patch, changedFields } = buildMetadataPatch(file, input);
+    for (const field of changedFields) {
+      allChangedFields.add(field);
+    }
     if (!changedFields.length) {
       results.push({
         fileId: file.id,
@@ -1056,12 +1103,38 @@ export async function buildUpdateFileMetadataResult(api, input = {}) {
       }
     });
   }
+  const executable = results.filter((item) => ["dry-run", "updated"].includes(item.status));
+  const requiresConfirmation = batchRequest && !confirmed && executable.length > 0;
   return {
     generatedAt: new Date().toISOString(),
+    operation: "update_file_metadata",
+    riskLevel: "medium",
     dryRun,
+    confirmed,
+    requiresConfirmation,
+    blocked: requiresConfirmation,
+    blockedReason: requiresConfirmation
+      ? "批量写入 metadata 需要用户确认；本次只返回预览，未写入任何文件。"
+      : "",
     count: results.length,
     missing,
-    results
+    results,
+    confirmation: requiresConfirmation
+      ? buildSafetyConfirmation({
+          operation: "update_file_metadata",
+          riskLevel: "medium",
+          reason: "批量写入 tags/aiSummary 会修改多个文件的 NAS metadata。",
+          targetFileCount: executable.length,
+          changedFields: [...allChangedFields],
+          files: executable,
+          recoverability: "metadata 写入会覆盖对应字段；请先确认 dry-run 预览，必要时保留当前标签/摘要作为回滚依据。",
+          estimatedDuration: estimateSmallBatchDuration(executable.length),
+          confirmWith: {
+            confirmed: true,
+            dryRun: false
+          }
+        })
+      : null
   };
 }
 
@@ -1173,13 +1246,14 @@ export async function buildOrganizeFilesResult(api, input = {}) {
   const executable = planned.filter((item) => item.status === "ready");
   const confirmationRequired = !requestedDryRun && !confirmed;
   if (dryRun || blockers.length) {
+    const requiresConfirmation = confirmationRequired || executable.length > 0;
     return {
       generatedAt: new Date().toISOString(),
       operation: "organize_files",
       riskLevel: "high",
       dryRun: true,
       confirmed,
-      requiresConfirmation: confirmationRequired || executable.length > 0,
+      requiresConfirmation,
       blocked: blockers.length > 0 || confirmationRequired,
       blockedReason: blockers.length
         ? "存在缺失文件、非法目标或目标冲突，未执行任何文件变更。"
@@ -1187,6 +1261,22 @@ export async function buildOrganizeFilesResult(api, input = {}) {
       count: planned.length,
       executableCount: executable.length,
       missing,
+      confirmation: requiresConfirmation
+        ? buildSafetyConfirmation({
+            operation: "organize_files",
+            riskLevel: "high",
+            reason: "移动/重命名会改变 NAS 文件路径，可能影响引用、播放列表和已有外部链接。",
+            targetFileCount: executable.length,
+            changedFields: ["path"],
+            files: executable,
+            recoverability: "同盘移动通常可手动移回；覆盖、跨盘或后续索引变更会增加恢复成本。",
+            estimatedDuration: estimateSmallBatchDuration(executable.length),
+            confirmWith: {
+              confirmed: true,
+              dryRun: false
+            }
+          })
+        : null,
       actions: planned.map((item) => ({
         ...item,
         status: item.status === "ready" ? "dry-run" : item.status

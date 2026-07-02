@@ -9,7 +9,8 @@ import {
   buildFileAccessPolicy,
   buildFileAccessExplanation,
   buildOrganizeFilesResult,
-  buildTextExcerptResult
+  buildTextExcerptResult,
+  buildUpdateFileMetadataResult
 } from "../../src/bot/tools/libraryFiles.js";
 
 async function withTempDir(fn) {
@@ -152,8 +153,78 @@ test("organize_files blocks unsafe targets and requires confirmation for real mo
     });
     assert.equal(needsConfirmation.blocked, true);
     assert.equal(needsConfirmation.requiresConfirmation, true);
+    assert.equal(needsConfirmation.confirmation.operation, "organize_files");
+    assert.equal(needsConfirmation.confirmation.riskLevel, "high");
+    assert.equal(needsConfirmation.confirmation.impact.targetFileCount, 1);
+    assert.deepEqual(needsConfirmation.confirmation.impact.changedFields, ["path"]);
+    assert.match(needsConfirmation.confirmation.recoverability, /移回/);
+    assert.equal(needsConfirmation.confirmation.confirmWith.confirmed, true);
+    assert.equal(needsConfirmation.confirmation.confirmWith.dryRun, false);
     assert.equal(needsConfirmation.actions[0].status, "dry-run");
     assert.equal(fsSync.existsSync(path.join(root, sourceRelative)), true);
+  });
+});
+
+test("update_file_metadata returns confirmation preview for batch writes", async () => {
+  await withTempDir(async (root) => {
+    const metadataWrites = [];
+    const files = [
+      {
+        id: "client:a.md",
+        clientId: "client",
+        path: "a.md",
+        name: "a.md",
+        size: 1,
+        mimeType: "text/markdown",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+        tags: ["old"]
+      },
+      {
+        id: "client:b.md",
+        clientId: "client",
+        path: "b.md",
+        name: "b.md",
+        size: 1,
+        mimeType: "text/markdown",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+        tags: []
+      }
+    ];
+    const api = createApi(root, files, {
+      upsertFileMeta: async (fileId, patch) => {
+        metadataWrites.push({ fileId, patch });
+      }
+    });
+
+    const preview = await buildUpdateFileMetadataResult(api, {
+      fileIds: ["client:a.md", "client:b.md"],
+      addTags: ["reviewed"]
+    });
+
+    assert.equal(preview.operation, "update_file_metadata");
+    assert.equal(preview.riskLevel, "medium");
+    assert.equal(preview.dryRun, true);
+    assert.equal(preview.blocked, true);
+    assert.equal(preview.requiresConfirmation, true);
+    assert.equal(preview.confirmation.impact.targetFileCount, 2);
+    assert.deepEqual(preview.confirmation.impact.changedFields, ["tags"]);
+    assert.match(preview.confirmation.estimatedDuration, /分钟/);
+    assert.equal(preview.confirmation.confirmWith.confirmed, true);
+    assert.equal(preview.results.every((item) => item.status === "dry-run"), true);
+    assert.deepEqual(metadataWrites, []);
+
+    const executed = await buildUpdateFileMetadataResult(api, {
+      fileIds: ["client:a.md", "client:b.md"],
+      addTags: ["reviewed"],
+      confirmed: true
+    });
+
+    assert.equal(executed.dryRun, false);
+    assert.equal(executed.blocked, false);
+    assert.equal(executed.requiresConfirmation, false);
+    assert.equal(executed.confirmation, null);
+    assert.equal(executed.results.every((item) => item.status === "updated"), true);
+    assert.deepEqual(metadataWrites.map((item) => item.fileId), ["client:a.md", "client:b.md"]);
   });
 });
 
