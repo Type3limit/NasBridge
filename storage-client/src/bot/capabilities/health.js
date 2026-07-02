@@ -400,6 +400,8 @@ async function checkStorage(api = {}) {
     writable: access.writable,
     storageRootOnly: policy.storageRootOnly,
     allowBinaryRead: policy.allowBinaryRead,
+    acceptsStorageRootAbsolutePath: policy.acceptsStorageRootAbsolutePath,
+    absolutePathInputScope: policy.absolutePathInputScope,
     rawAbsolutePathExposed: policy.rawAbsolutePathExposed,
     writeRequiresConfirmation: policy.writeRequiresConfirmation
   };
@@ -412,6 +414,8 @@ async function checkStorage(api = {}) {
     maxBatchFiles: policy.maxBatchFiles,
     allowRawTextRead: policy.allowRawTextRead,
     allowBinaryRead: policy.allowBinaryRead,
+    acceptsStorageRootAbsolutePath: policy.acceptsStorageRootAbsolutePath,
+    absolutePathInputScope: policy.absolutePathInputScope,
     rawAbsolutePathExposed: policy.rawAbsolutePathExposed,
     storageRootOnly: policy.storageRootOnly,
     writeRequiresConfirmation: policy.writeRequiresConfirmation
@@ -804,6 +808,7 @@ function formatStorageFileAccessReport(check = {}) {
     `storageRootOnly=${fileAccess.storageRootOnly ?? policy.storageRootOnly ?? "unknown"}`,
     `allowRawTextRead=${policy.allowRawTextRead ?? "unknown"}`,
     `allowBinaryRead=${fileAccess.allowBinaryRead ?? policy.allowBinaryRead ?? "unknown"}`,
+    `absolutePathInput=${fileAccess.absolutePathInputScope ?? policy.absolutePathInputScope ?? ((fileAccess.storageRootOnly ?? policy.storageRootOnly) === true ? "storage-root-only" : "unknown")}`,
     `rawAbsolutePathExposed=${fileAccess.rawAbsolutePathExposed ?? policy.rawAbsolutePathExposed ?? "unknown"}`,
     `writeRequiresConfirmation=${fileAccess.writeRequiresConfirmation ?? policy.writeRequiresConfirmation ?? "unknown"}`
   ];

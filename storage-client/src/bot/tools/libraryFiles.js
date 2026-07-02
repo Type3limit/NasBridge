@@ -1490,7 +1490,7 @@ export function buildFileAccessPolicy(api = {}) {
     allowedRoots: root ? [root] : [],
     hiddenDirs: getHiddenDirectoryNames(),
     hiddenDirectories: getHiddenDirectoryNames(),
-    accessBy: ["fileId", "relativePath"],
+    accessBy: ["fileId", "relativePath", "storageRootAbsolutePath"],
     maxListResults: MAX_LIBRARY_LIST_LIMIT,
     maxDetailFiles: MAX_LIBRARY_DETAIL_FILES,
     maxInlineTextChars: MAX_TEXT_EXCERPT_CHARS,
@@ -1499,6 +1499,8 @@ export function buildFileAccessPolicy(api = {}) {
     allowRawTextRead: true,
     allowBinaryRead: false,
     binaryReadAllowed: false,
+    acceptsStorageRootAbsolutePath: true,
+    absolutePathInputScope: "storage-root-only",
     rawAbsolutePathExposed: false,
     storageRootOnly: true,
     writeRequiresConfirmation: true
@@ -2124,6 +2126,8 @@ export async function buildFileAccessExplanation(api, input = {}) {
       storageRootOnly: policy.storageRootOnly,
       allowRawTextRead: policy.allowRawTextRead,
       allowBinaryRead: policy.allowBinaryRead,
+      acceptsStorageRootAbsolutePath: policy.acceptsStorageRootAbsolutePath,
+      absolutePathInputScope: policy.absolutePathInputScope,
       rawAbsolutePathExposed: policy.rawAbsolutePathExposed,
       writeRequiresConfirmation: policy.writeRequiresConfirmation,
       maxListResults: policy.maxListResults,
@@ -2139,7 +2143,7 @@ export async function buildFileAccessExplanation(api, input = {}) {
     visibleDirectories: snapshot.directories.length,
     countsByKind,
     currentStatus,
-    summary: "AI 可以通过索引、fileId 和相对路径访问 STORAGE_ROOT 内的 NAS 文件元数据、摘要、字幕和受控片段；不能读取任意本机路径、STORAGE_ROOT 外文件或二进制原文。",
+    summary: "AI 可以通过索引、fileId、相对路径，以及用户提供且位于 STORAGE_ROOT 内的绝对路径访问 NAS 文件元数据、摘要、字幕和受控片段；绝对路径会先归一化为相对路径，不会暴露给模型。不能读取任意本机路径、STORAGE_ROOT 外文件或二进制原文。",
     canAccess: {
       indexedFiles: true,
       fileMetadata: true,
@@ -2149,6 +2153,7 @@ export async function buildFileAccessExplanation(api, input = {}) {
       mediaDerivedContent: true,
       imageAnalysis: true,
       videoAudioAnalysisViaBot: true,
+      storageRootAbsolutePathInput: true,
       directBinaryRawContent: false,
       arbitraryLocalPaths: false,
       outsideStorageRoot: false,
@@ -2162,7 +2167,7 @@ export async function buildFileAccessExplanation(api, input = {}) {
       "Derived: 既有 AI summary、字幕 sidecar、媒体派生信息"
     ],
     blockedLayers: [
-      "任意绝对路径读取",
+      "任意绝对路径读取；只有 STORAGE_ROOT 内绝对路径可作为输入别名并会被归一化",
       "STORAGE_ROOT 外文件",
       "二进制原文直接塞进模型上下文",
       "未经确认的移入回收站、移动、重命名、批量覆盖"

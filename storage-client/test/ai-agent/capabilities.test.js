@@ -161,6 +161,8 @@ test("health cache uses isolated local dependencies and caches the second snapsh
         assert.match(storageCheck.detail, /latestFile=2026-07-01T00:00:00\.000Z/);
         assert.equal(storageCheck.policy.allowBinaryRead, false);
         assert.equal(storageCheck.policy.storageRootOnly, true);
+        assert.equal(storageCheck.policy.acceptsStorageRootAbsolutePath, true);
+        assert.equal(storageCheck.policy.absolutePathInputScope, "storage-root-only");
         assert.ok(storageCheck.policy.hiddenDirs.includes(".nas-bot"));
         assert.deepEqual({
           rootConfigured: storageCheck.fileAccess.rootConfigured,
@@ -199,7 +201,7 @@ test("health cache uses isolated local dependencies and caches the second snapsh
         assert.match(firstReport, /NAS 文件访问: STORAGE_ROOT；可读写；/);
         assert.match(firstReport, /文件访问：root=STORAGE_ROOT · exists=true · readable=true · writable=true · indexedFiles=1 · dirs=0 · indexSource=dependency/);
         assert.match(firstReport, /fileIdResolution=ok · resolutionChecked=1\/1/);
-        assert.match(firstReport, /访问边界：storageRootOnly=true · allowRawTextRead=true · allowBinaryRead=false · rawAbsolutePathExposed=false · writeRequiresConfirmation=true/);
+        assert.match(firstReport, /访问边界：storageRootOnly=true · allowRawTextRead=true · allowBinaryRead=false · absolutePathInput=storage-root-only · rawAbsolutePathExposed=false · writeRequiresConfirmation=true/);
         assert.equal(firstReport.includes(root), false);
       });
     } finally {
@@ -586,7 +588,7 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(summary, /failure-diagnostic: get_bot_job_status -> read_agent_trace -> read_bot_job_log/);
   assert.match(summary, /NAS file access snapshot: status=warn, rootConfigured=true, exists=true, readable=true, writable=false, indexedFiles=42, dirs=7, indexSource=dependency/);
   assert.match(summary, /hiddenDirsExcluded=4, skippedDirs=2/);
-  assert.match(summary, /policy storageRootOnly=true, allowBinaryRead=false, rawAbsolutePathExposed=false, writeRequiresConfirmation=true/);
+  assert.match(summary, /policy storageRootOnly=true, allowBinaryRead=false, absolutePathInput=storage-root-only, rawAbsolutePathExposed=false, writeRequiresConfirmation=true/);
   assert.match(summary, /fix=检查 \[local-path\] 的读写权限/);
   assert.match(summary, /\[local-path\]/);
   assert.doesNotMatch(summary, /C:\\Secret/);

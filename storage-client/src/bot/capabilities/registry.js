@@ -705,6 +705,7 @@ function summarizeStorageAccessForPrompt(checks = []) {
   const policyBits = [
     `storageRootOnly=${fileAccess.storageRootOnly ?? policy.storageRootOnly ?? "unknown"}`,
     `allowBinaryRead=${fileAccess.allowBinaryRead ?? policy.allowBinaryRead ?? "unknown"}`,
+    `absolutePathInput=${fileAccess.absolutePathInputScope ?? policy.absolutePathInputScope ?? ((fileAccess.storageRootOnly ?? policy.storageRootOnly) === true ? "storage-root-only" : "unknown")}`,
     `rawAbsolutePathExposed=${fileAccess.rawAbsolutePathExposed ?? policy.rawAbsolutePathExposed ?? "unknown"}`,
     `writeRequiresConfirmation=${fileAccess.writeRequiresConfirmation ?? policy.writeRequiresConfirmation ?? "unknown"}`
   ];
