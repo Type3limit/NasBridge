@@ -495,6 +495,65 @@ test("prepare input routes explicit session confirmation to textTools", async ()
   });
 });
 
+test("prepare input keeps natural batch tagging inside the agent loop", async () => {
+  await withTempDir(async (appDataRoot) => {
+    const logs = [];
+    const state = await prepareAiChatGraphState({
+      context: {
+        jobId: "botjob_batch_tag_agent",
+        trigger: {
+          rawText: "@ai 给最近下载的视频批量打标签"
+        },
+        attachments: []
+      },
+      api: {
+        appDataRoot,
+        throwIfCancelled: () => {},
+        appendLog: async (line) => logs.push(line),
+        emitProgress: async () => {},
+        listBots: () => [
+          { botId: "video.tag", displayName: "视频标签", aliases: ["video.tag"] }
+        ]
+      },
+      hooks: {}
+    });
+
+    assert.equal(state.route, "text");
+    assert.equal(state.prepared.delegatedInvocation, null);
+    assert.match(state.prepared.toolAwarePrompt, /批量打标签/);
+    assert.match(logs.join("\n"), /ai invocation/);
+  });
+});
+
+test("prepare input still delegates explicit nested bot invocations", async () => {
+  await withTempDir(async (appDataRoot) => {
+    const state = await prepareAiChatGraphState({
+      context: {
+        jobId: "botjob_explicit_video_tag",
+        trigger: {
+          rawText: "@ai @video.tag 给最近下载的视频批量打标签"
+        },
+        attachments: []
+      },
+      api: {
+        appDataRoot,
+        throwIfCancelled: () => {},
+        appendLog: async () => {},
+        emitProgress: async () => {},
+        listBots: () => [
+          { botId: "video.tag", displayName: "视频标签", aliases: ["tag"] }
+        ]
+      },
+      hooks: {}
+    });
+
+    assert.equal(state.route, "delegate");
+    assert.equal(state.prepared.delegatedInvocation.kind, "nested");
+    assert.equal(state.prepared.delegatedInvocation.invocation.target.botId, "video.tag");
+    assert.equal(state.prepared.delegatedInvocation.invocation.rawText, "给最近下载的视频批量打标签");
+  });
+});
+
 test("textTools recovery directly retries local read-only diagnostic tools", () => {
   const pendingToolCalls = [
     {

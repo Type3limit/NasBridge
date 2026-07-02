@@ -1,7 +1,7 @@
 import { parseModelDirective } from "../../plugins/ai-chat/parsers/modelDirectives.js";
 import { parseAiSessionDirective } from "../../plugins/ai-chat/parsers/sessionDirectives.js";
 import { findNestedBotInvocation } from "../../plugins/ai-chat/selectors/botInvocations.js";
-import { isImageAttachment, stripSelfMention, wantsBatchTagging, wantsVideoAnalysis, wantsVision } from "../../plugins/ai-chat/selectors/intents.js";
+import { isImageAttachment, stripSelfMention, wantsVideoAnalysis, wantsVision } from "../../plugins/ai-chat/selectors/intents.js";
 import { formatAiSessionLabel, getAiSession } from "../../plugins/ai-chat/services/aiSessions.js";
 import { getEffectiveMultimodalModel, getEffectiveTextModel, readAiModelSettings } from "../../plugins/ai-chat/services/modelSettings.js";
 import { readAiSessionCheckpoint } from "../checkpoints/aiSessionCheckpointer.js";
@@ -138,26 +138,6 @@ export async function prepareAiChatGraphState(state = {}) {
           subtitle: modelOverride
             ? `模型: ${modelOverride} · 已委派给 ${videoAnalyzeTarget.displayName}`
             : `已委派给 ${videoAnalyzeTarget.displayName}`
-        }
-      };
-    }
-  }
-
-  if (route !== "command" && route !== "delegate" && wantsBatchTagging(effectivePrompt)) {
-    const videoTagTarget = catalog.find((item) => item.botId === "video.tag");
-    if (videoTagTarget) {
-      route = "delegate";
-      delegatedInvocation = {
-        kind: "nested",
-        invocation: {
-          target: videoTagTarget,
-          rawText: effectivePrompt,
-          parsedArgs: { batch: true }
-        },
-        options: {
-          subtitle: modelOverride
-            ? `模型: ${modelOverride} · 已委派给 ${videoTagTarget.displayName}`
-            : `已委派给 ${videoTagTarget.displayName}`
         }
       };
     }
