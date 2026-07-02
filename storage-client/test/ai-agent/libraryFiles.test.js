@@ -681,6 +681,9 @@ test("organize_files blocks unsafe targets and requires confirmation for real mo
     assert.equal(unsafe.blocked, true);
     assert.equal(unsafe.executableCount, 0);
     assert.deepEqual(unsafe.actions.map((item) => item.status), ["invalid", "invalid"]);
+    assert.match(unsafe.nextActions[0], /阻塞项/);
+    assert.equal(unsafe.actionPlan[0].tool, "organize_files");
+    assert.equal(unsafe.actionPlan[0].blocked, true);
 
     const needsConfirmation = await buildOrganizeFilesResult(api, {
       path: sourceRelative,
@@ -697,6 +700,13 @@ test("organize_files blocks unsafe targets and requires confirmation for real mo
     assert.equal(needsConfirmation.confirmation.confirmWith.confirmed, true);
     assert.equal(needsConfirmation.confirmation.confirmWith.dryRun, false);
     assert.equal(needsConfirmation.actions[0].status, "dry-run");
+    assert.match(needsConfirmation.nextActions[0], /预览/);
+    assert.equal(needsConfirmation.actionPlan[0].tool, "organize_files");
+    assert.equal(needsConfirmation.actionPlan[0].requiresConfirmation, true);
+    assert.equal(needsConfirmation.actionPlan[0].blocked, true);
+    assert.equal(needsConfirmation.actionPlan[0].input.confirmed, true);
+    assert.equal(needsConfirmation.actionPlan[0].input.dryRun, false);
+    assert.equal(needsConfirmation.actionPlan[0].input.actions[0].targetPath, "organized/video.mp4");
     assert.equal(fsSync.existsSync(path.join(root, sourceRelative)), true);
   });
 });
@@ -747,6 +757,13 @@ test("update_file_metadata returns confirmation preview for batch writes", async
     assert.match(preview.confirmation.estimatedDuration, /分钟/);
     assert.equal(preview.confirmation.confirmWith.confirmed, true);
     assert.equal(preview.results.every((item) => item.status === "dry-run"), true);
+    assert.match(preview.nextActions[0], /dry-run/);
+    assert.equal(preview.actionPlan[0].tool, "update_file_metadata");
+    assert.equal(preview.actionPlan[0].requiresConfirmation, true);
+    assert.equal(preview.actionPlan[0].blocked, true);
+    assert.deepEqual(preview.actionPlan[0].input.fileIds, ["client:a.md", "client:b.md"]);
+    assert.equal(preview.actionPlan[0].input.confirmed, true);
+    assert.equal(preview.actionPlan[0].input.dryRun, false);
     assert.deepEqual(metadataWrites, []);
 
     const executed = await buildUpdateFileMetadataResult(api, {
@@ -760,6 +777,9 @@ test("update_file_metadata returns confirmation preview for batch writes", async
     assert.equal(executed.requiresConfirmation, false);
     assert.equal(executed.confirmation, null);
     assert.equal(executed.results.every((item) => item.status === "updated"), true);
+    assert.match(executed.nextActions[0], /已写入/);
+    assert.equal(executed.actionPlan[0].tool, "read_file_metadata");
+    assert.deepEqual(executed.actionPlan[0].input.fileIds, ["client:a.md", "client:b.md"]);
     assert.deepEqual(metadataWrites.map((item) => item.fileId), ["client:a.md", "client:b.md"]);
   });
 });
@@ -800,6 +820,11 @@ test("organize_files moves inside storage root and migrates metadata after confi
     assert.equal(result.dryRun, false);
     assert.equal(result.actions[0].status, "moved");
     assert.equal(result.audit.storageRootOnly, true);
+    assert.match(result.nextActions[0], /移动|重命名/);
+    assert.equal(result.actionPlan[0].tool, "search_library_files");
+    assert.equal(result.actionPlan[0].input.pathPrefix, "organized");
+    assert.equal(result.actionPlan[1].tool, "read_file_metadata");
+    assert.equal(result.actionPlan[1].input.fileId, `client:${targetRelative}`);
     assert.equal(fsSync.existsSync(path.join(root, sourceRelative)), false);
     assert.equal(fsSync.existsSync(path.join(root, targetRelative)), true);
     assert.deepEqual(metadataWrites, [

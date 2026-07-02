@@ -2153,6 +2153,270 @@ function estimateSmallBatchDuration(count = 0) {
   return "数分钟，取决于磁盘速度和队列负载";
 }
 
+function collectMutationFileIds(items = [], field = "fileId") {
+  const seen = new Set();
+  const result = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const value = String(field.split(".").reduce((current, key) => current?.[key], item) || "").trim();
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function copyMetadataMutationInput(input = {}) {
+  const result = {};
+  for (const key of ["tags", "addTags", "removeTags"]) {
+    if (Array.isArray(input[key])) {
+      result[key] = input[key];
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(input, "aiSummary")) {
+    result.aiSummary = String(input.aiSummary || "").trim();
+  }
+  if (input.clearAiSummary === true) {
+    result.clearAiSummary = true;
+  }
+  return result;
+}
+
+function buildMetadataMutationInput(input = {}, fileIds = [], extra = {}) {
+  const ids = collectMutationFileIds(fileIds.map((fileId) => ({ fileId })));
+  return {
+    ...(ids.length === 1 ? { fileId: ids[0] } : { fileIds: ids }),
+    ...copyMetadataMutationInput(input),
+    ...extra
+  };
+}
+
+function buildUpdateMetadataNextActions({
+  dryRun = false,
+  requiresConfirmation = false,
+  executable = [],
+  results = [],
+  missing = []
+} = {}) {
+  const executableCount = executable.length;
+  const updatedCount = results.filter((item) => item.status === "updated").length;
+  const skippedCount = results.filter((item) => item.status === "skipped").length;
+  if (requiresConfirmation) {
+    return [
+      `已生成 ${executableCount} 个文件的 metadata 写入 dry-run 预览，本次没有写入文件。`,
+      "先向用户展示 confirmation.impact 和 results；用户明确确认后，再通过会话恢复链路执行 confirmation.confirmWith 中的 confirmed=true、dryRun=false。"
+    ];
+  }
+  if (dryRun && executableCount) {
+    return [
+      `已生成 ${executableCount} 个文件的 metadata 写入预览，本次没有写入文件。`,
+      "确认字段无误后调用 update_file_metadata dryRun=false 执行；执行后调用 read_file_metadata 复查 tags/aiSummary。"
+    ];
+  }
+  if (updatedCount) {
+    return [
+      `已写入 ${updatedCount} 个文件的 metadata，并记录了 riskLevel=medium 审计信息。`,
+      "调用 read_file_metadata 复查 tags/aiSummary 状态；如果索引或 metadata 缓存未刷新，先重新搜索目标文件。"
+    ];
+  }
+  if (missing.length) {
+    return [`未找到 ${missing.length} 个文件；先调用 search_library_files 重新定位候选文件，再写入 metadata。`];
+  }
+  if (skippedCount) {
+    return ["没有可写 metadata 变化；请提供 tags/addTags/removeTags/aiSummary/clearAiSummary 之一后再调用。"];
+  }
+  return ["没有执行任何 metadata 写入；先确认目标文件和要修改的字段。"];
+}
+
+function buildUpdateMetadataActionPlan(input = {}, {
+  dryRun = false,
+  requiresConfirmation = false,
+  executable = [],
+  results = [],
+  missing = []
+} = {}) {
+  const executableFileIds = collectMutationFileIds(executable);
+  const updatedFileIds = collectMutationFileIds(results.filter((item) => item.status === "updated"));
+  const actions = [];
+  if (requiresConfirmation && executableFileIds.length) {
+    actions.push(buildAccessAction({
+      id: "await-metadata-write-confirmation",
+      tool: "update_file_metadata",
+      input: buildMetadataMutationInput(input, executableFileIds, { confirmed: true, dryRun: false }),
+      reason: "批量 metadata 写入需要先向用户展示影响范围；用户明确确认后才可由会话恢复链路执行。",
+      riskLevel: "medium",
+      requiresConfirmation: true,
+      blocked: true,
+      contentLayer: "write-metadata"
+    }));
+  } else if (dryRun && executableFileIds.length) {
+    actions.push(buildAccessAction({
+      id: "execute-metadata-write",
+      tool: "update_file_metadata",
+      input: buildMetadataMutationInput(input, executableFileIds, { dryRun: false }),
+      reason: "dry-run 预览无误后执行单文件或已授权范围内的 metadata 写入。",
+      riskLevel: "medium",
+      contentLayer: "write-metadata"
+    }));
+  } else if (updatedFileIds.length) {
+    actions.push(buildAccessAction({
+      id: "verify-metadata-write",
+      tool: "read_file_metadata",
+      input: updatedFileIds.length === 1 ? { fileId: updatedFileIds[0] } : { fileIds: updatedFileIds },
+      reason: "写入完成后复查 tags/aiSummary，避免缓存或索引状态误导后续计划。",
+      contentLayer: "metadata"
+    }));
+  }
+  if (missing.length && !actions.some((action) => action.tool === "search_library_files")) {
+    actions.push(buildAccessAction({
+      id: "relocate-missing-files",
+      tool: "search_library_files",
+      input: { limit: 10 },
+      reason: "存在未找到的目标文件；重新搜索索引后再选择 fileId。",
+      contentLayer: "index"
+    }));
+  }
+  return actions;
+}
+
+function buildOrganizeExecutionInput(executable = [], extra = {}) {
+  return {
+    actions: (Array.isArray(executable) ? executable : []).map((item) => ({
+      fileId: String(item?.source?.fileId || "").trim(),
+      targetPath: String(item?.target?.path || "").trim(),
+      ...(item?.target?.overwrite === true ? { overwrite: true } : {})
+    })).filter((item) => item.fileId && item.targetPath),
+    ...extra
+  };
+}
+
+function firstTargetPathPrefix(items = []) {
+  for (const item of Array.isArray(items) ? items : []) {
+    const targetPath = normalizeRelativePath(item?.target?.path || "");
+    if (!targetPath) {
+      continue;
+    }
+    const parts = targetPath.split("/").filter(Boolean);
+    parts.pop();
+    return parts.join("/");
+  }
+  return "";
+}
+
+function buildOrganizeNextActions({
+  dryRun = true,
+  requiresConfirmation = false,
+  blockers = [],
+  executable = [],
+  results = [],
+  missing = []
+} = {}) {
+  if (blockers.length) {
+    return [
+      `存在 ${blockers.length} 个整理阻塞项（缺失、非法目标或冲突），本次没有执行文件变更。`,
+      executable.length
+        ? "先修复 blockers 中的目标路径/冲突/缺失文件并重新 dry-run；不要在存在阻塞项时执行部分移动。"
+        : "修正 targetPath/targetFolder/overwrite，或调用 search_library_files 重新定位文件后再预览整理。"
+    ];
+  }
+  if (requiresConfirmation) {
+    return [
+      `已生成 ${executable.length} 个文件的移动/重命名预览，本次没有执行文件变更。`,
+      "先向用户展示 confirmation.impact 和 actions；用户明确确认后，再通过会话恢复链路执行 confirmed=true、dryRun=false。"
+    ];
+  }
+  if (dryRun && executable.length) {
+    return [
+      `已生成 ${executable.length} 个文件的整理预览，本次没有执行文件变更。`,
+      "移动/重命名是高风险操作；展示目标路径并等待用户明确确认后，才可调用 organize_files confirmed=true dryRun=false。"
+    ];
+  }
+  const movedCount = results.filter((item) => item.status === "moved").length;
+  if (movedCount) {
+    return [
+      `已在 storage root 内移动/重命名 ${movedCount} 个文件，并尽量迁移 tags/aiSummary metadata。`,
+      "调用 search_library_files 检查目标目录；如果索引尚未刷新，等待下一次扫描后再用 read_file_metadata 复查新 fileId。"
+    ];
+  }
+  if (missing.length) {
+    return [`未找到 ${missing.length} 个文件；先调用 search_library_files 重新定位候选文件，再 dry-run 整理。`];
+  }
+  return ["没有可执行的整理动作；请提供目标目录、目标文件名或每个文件的 targetPath。"];
+}
+
+function buildOrganizeActionPlan({
+  dryRun = true,
+  requiresConfirmation = false,
+  blockers = [],
+  executable = [],
+  results = [],
+  missing = []
+} = {}) {
+  const actions = [];
+  if (blockers.length) {
+    actions.push(buildAccessAction({
+      id: "repair-organize-preview",
+      tool: "organize_files",
+      input: { dryRun: true },
+      reason: "修复缺失文件、非法目标或目标冲突后重新 dry-run；不要在存在阻塞项时执行文件移动。",
+      riskLevel: "high",
+      requiresConfirmation: true,
+      blocked: true,
+      blockerIds: blockers.map((item, index) => `organize-${item.status || "blocked"}-${index + 1}`),
+      contentLayer: "file-mutation"
+    }));
+    if (missing.length) {
+      actions.push(buildAccessAction({
+        id: "relocate-organize-missing-files",
+        tool: "search_library_files",
+        input: { limit: 10 },
+        reason: "存在未找到的源文件；重新搜索索引后再生成整理预览。",
+        contentLayer: "index"
+      }));
+    }
+    return actions;
+  }
+  if ((requiresConfirmation || dryRun) && executable.length) {
+    actions.push(buildAccessAction({
+      id: "await-organize-confirmation",
+      tool: "organize_files",
+      input: buildOrganizeExecutionInput(executable, { confirmed: true, dryRun: false }),
+      reason: "移动/重命名属于高风险操作；用户明确确认目标路径后才可由会话恢复链路执行。",
+      riskLevel: "high",
+      requiresConfirmation: true,
+      blocked: true,
+      contentLayer: "file-mutation"
+    }));
+    return actions;
+  }
+  const moved = results.filter((item) => item.status === "moved");
+  if (moved.length) {
+    const pathPrefix = firstTargetPathPrefix(moved);
+    const movedFileIds = collectMutationFileIds(moved, "target.fileId");
+    actions.push(buildAccessAction({
+      id: "verify-moved-files",
+      tool: "search_library_files",
+      input: {
+        ...(pathPrefix ? { pathPrefix } : {}),
+        limit: Math.min(MAX_LIBRARY_LIST_LIMIT, Math.max(10, moved.length))
+      },
+      reason: "移动完成后搜索目标目录，确认索引和目标路径状态。",
+      contentLayer: "index"
+    }));
+    if (movedFileIds.length) {
+      actions.push(buildAccessAction({
+        id: "verify-moved-metadata",
+        tool: "read_file_metadata",
+        input: movedFileIds.length === 1 ? { fileId: movedFileIds[0] } : { fileIds: movedFileIds },
+        reason: "索引刷新后复查迁移后的 tags/aiSummary metadata。",
+        contentLayer: "metadata"
+      }));
+    }
+  }
+  return actions;
+}
+
 export async function buildUpdateFileMetadataResult(api, input = {}) {
   const snapshot = await loadLibrarySnapshot(api);
   const identifiers = [...new Set(collectFileIdentifiers(input))].slice(0, MAX_METADATA_UPDATE_FILES);
@@ -2233,6 +2497,20 @@ export async function buildUpdateFileMetadataResult(api, input = {}) {
     count: results.length,
     missing,
     results,
+    nextActions: buildUpdateMetadataNextActions({
+      dryRun,
+      requiresConfirmation,
+      executable,
+      results,
+      missing
+    }),
+    actionPlan: buildUpdateMetadataActionPlan(input, {
+      dryRun,
+      requiresConfirmation,
+      executable,
+      results,
+      missing
+    }),
     confirmation: requiresConfirmation
       ? buildSafetyConfirmation({
           operation: "update_file_metadata",
@@ -2375,6 +2653,22 @@ export async function buildOrganizeFilesResult(api, input = {}) {
       count: planned.length,
       executableCount: executable.length,
       missing,
+      nextActions: buildOrganizeNextActions({
+        dryRun: true,
+        requiresConfirmation,
+        blockers,
+        executable,
+        results: [],
+        missing
+      }),
+      actionPlan: buildOrganizeActionPlan({
+        dryRun: true,
+        requiresConfirmation,
+        blockers,
+        executable,
+        results: [],
+        missing
+      }),
       confirmation: requiresConfirmation
         ? buildSafetyConfirmation({
             operation: "organize_files",
@@ -2436,6 +2730,22 @@ export async function buildOrganizeFilesResult(api, input = {}) {
       ...results,
       ...planned.filter((item) => item.status === "skipped")
     ],
+    nextActions: buildOrganizeNextActions({
+      dryRun: false,
+      requiresConfirmation: false,
+      blockers: [],
+      executable: [],
+      results,
+      missing
+    }),
+    actionPlan: buildOrganizeActionPlan({
+      dryRun: false,
+      requiresConfirmation: false,
+      blockers: [],
+      executable: [],
+      results,
+      missing
+    }),
     audit: {
       storageRootOnly: true,
       absolutePathsExposed: false,
