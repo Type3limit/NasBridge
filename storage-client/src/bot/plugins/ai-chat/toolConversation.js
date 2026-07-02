@@ -1,7 +1,196 @@
 import { executeAiToolCall, getAiToolDefinitions } from "../../tools/aiToolRuntime.js";
-import { invokeTextModel } from "../../tools/llmClient.js";
+import { invokeTextModel, parseModelRef } from "../../tools/llmClient.js";
 
 const MAX_TOOL_ROUND_OFFSET = 8;
+const JSON_FALLBACK_REPAIR_ATTEMPTS = 1;
+
+function parseJsonBlock(text = "") {
+  const source = String(text || "").trim();
+  if (!source) {
+    return null;
+  }
+  const fenced = source.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced?.[1] || source;
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    const objectMatch = candidate.match(/\{[\s\S]*\}/);
+    if (!objectMatch) {
+      return null;
+    }
+    try {
+      return JSON.parse(objectMatch[0]);
+    } catch {
+      return null;
+    }
+  }
+}
+
+function normalizeToolInput(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function compactToolDefinitionsForJsonFallback(tools = []) {
+  return (Array.isArray(tools) ? tools : []).map((tool) => ({
+    name: String(tool?.name || "").trim(),
+    description: String(tool?.description || "").trim(),
+    inputSchema: tool?.inputSchema && typeof tool.inputSchema === "object" ? tool.inputSchema : { type: "object", properties: {} }
+  })).filter((tool) => tool.name);
+}
+
+function findCachedModel(modelRef = "", modelSettings = {}) {
+  const models = Array.isArray(modelSettings?.lastListedModels) ? modelSettings.lastListedModels : [];
+  if (!models.length) {
+    return null;
+  }
+  const parsed = parseModelRef(modelRef);
+  const modelId = String(parsed.modelId || modelRef || "").trim().toLowerCase();
+  const fullRef = String(modelRef || "").trim().toLowerCase();
+  for (const model of models) {
+    const candidateId = String(model?.id || "").trim();
+    const candidateParsed = parseModelRef(candidateId);
+    const candidateModelId = String(model?.modelId || candidateParsed.modelId || candidateId || "").trim().toLowerCase();
+    const candidateRef = candidateId.toLowerCase();
+    const candidateName = String(model?.name || "").trim().toLowerCase();
+    const providerMatches = !parsed.provider || !model?.provider || String(model.provider || "").trim().toLowerCase() === parsed.provider;
+    if (!providerMatches) {
+      continue;
+    }
+    if (candidateRef === fullRef || candidateModelId === modelId || candidateName === modelId) {
+      return model;
+    }
+  }
+  return null;
+}
+
+export function shouldUseJsonToolFallback({ model = "", modelSettings = {} } = {}) {
+  const cached = findCachedModel(model, modelSettings);
+  return cached ? cached.toolCalls !== true : false;
+}
+
+function isNativeToolUnsupportedError(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  return /tool|function|tool_choice|tools/.test(message) && /support|unsupported|not supported|invalid|unknown|不支持|无效/.test(message);
+}
+
+function buildJsonFallbackSystemPrompt(tools = [], allowToolCalls = true) {
+  const toolCatalog = compactToolDefinitionsForJsonFallback(tools);
+  const examples = allowToolCalls
+    ? [
+        '{"action":"call_tool","tool":"search_library_files","arguments":{"kind":"video","limit":5},"reason":"需要先定位 NAS 文件"}',
+        '{"action":"final_answer","answer":"这里写给用户的最终回答"}'
+      ]
+    : ['{"action":"final_answer","answer":"这里写给用户的最终回答"}'];
+  return [
+    "当前模型不使用原生 tool-call。你必须用严格 JSON 作为 agent plan 输出，不要输出 Markdown。",
+    allowToolCalls
+      ? "如果需要调用工具，输出 {\"action\":\"call_tool\",\"tool\":\"工具名\",\"arguments\":{...},\"reason\":\"为什么调用\"}。"
+      : "当前已达到工具轮数上限，只能输出 final_answer。",
+    "如果已经能回答用户，输出 {\"action\":\"final_answer\",\"answer\":\"...\"}。",
+    "arguments 必须是 JSON object，字段必须符合工具 inputSchema。一次只调用一个工具。",
+    "可用工具：",
+    JSON.stringify(toolCatalog, null, 2),
+    "示例：",
+    examples.join("\n")
+  ].join("\n");
+}
+
+function normalizeMessagesForJsonFallback(messages = [], fallbackSystemPrompt = "") {
+  const normalized = [];
+  let inserted = false;
+  for (const message of Array.isArray(messages) ? messages : []) {
+    if (!message?.role) {
+      continue;
+    }
+    if (message.role === "tool") {
+      normalized.push({
+        role: "user",
+        content: `工具返回：\n${String(message.content || "").trim()}`
+      });
+      continue;
+    }
+    if (message.role === "assistant" && Array.isArray(message.tool_calls)) {
+      const content = String(message.content || "").trim();
+      normalized.push({
+        role: "assistant",
+        content: content || `已请求工具：${message.tool_calls.map((call) => call?.function?.name).filter(Boolean).join(", ")}`
+      });
+      continue;
+    }
+    normalized.push({
+      role: message.role,
+      content: String(message.content || "")
+    });
+    if (!inserted && message.role === "system") {
+      normalized.push({ role: "system", content: fallbackSystemPrompt });
+      inserted = true;
+    }
+  }
+  if (!inserted) {
+    normalized.unshift({ role: "system", content: fallbackSystemPrompt });
+  }
+  return normalized;
+}
+
+export function parseJsonToolPlan(text = "", tools = [], options = {}) {
+  const parsed = parseJsonBlock(text);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {
+      ok: false,
+      error: "model did not return a JSON object",
+      finalAnswer: String(text || "").trim()
+    };
+  }
+  const action = String(parsed.action || (parsed.tool ? "call_tool" : "final_answer")).trim().toLowerCase();
+  if (action === "final_answer" || action === "answer" || action === "finish") {
+    return {
+      ok: true,
+      action: "final_answer",
+      finalAnswer: String(parsed.answer || parsed.final || parsed.message || "").trim()
+    };
+  }
+  if (action !== "call_tool" && action !== "tool") {
+    return {
+      ok: false,
+      error: `unsupported JSON plan action: ${action || "empty"}`,
+      finalAnswer: String(parsed.answer || "").trim()
+    };
+  }
+  const toolName = String(parsed.tool || parsed.name || parsed.toolName || "").trim();
+  const tool = (Array.isArray(tools) ? tools : []).find((item) => item?.name === toolName);
+  if (!tool) {
+    return {
+      ok: false,
+      error: `unknown tool in JSON plan: ${toolName || "empty"}`,
+      finalAnswer: ""
+    };
+  }
+  if (options.allowToolCalls === false) {
+    return {
+      ok: false,
+      error: "tool call requested after max tool rounds",
+      finalAnswer: ""
+    };
+  }
+  return {
+    ok: true,
+    action: "call_tool",
+    toolCall: {
+      id: `jsonplan_${Number(options.round || 0)}_${toolName.replace(/[^a-z0-9_:-]/gi, "_")}`,
+      name: toolName,
+      input: normalizeToolInput(parsed.arguments || parsed.args || parsed.input),
+      fallbackJsonPlan: true,
+      reason: String(parsed.reason || "").trim()
+    }
+  };
+}
+
+function createJsonFallbackAssistantMessage(result = {}, planText = "") {
+  return {
+    role: "assistant",
+    content: String(planText || result.text || "").trim()
+  };
+}
 
 export function getAiToolProgress(toolName = "", round = 0) {
   const safeRound = Math.max(0, Number(round) || 0);
@@ -177,13 +366,100 @@ export function createToolCallAssistantMessage(result = {}) {
   };
 }
 
-export async function invokeToolAwarePlanningRound({ messages, recentMessages, context, api, modelOverride = "", defaultTextModel = "", round = 0, maxToolRounds = 4 }) {
+async function invokeJsonFallbackPlanningRound({
+  planningMessages,
+  tools,
+  allowMoreToolCalls,
+  api,
+  model,
+  round = 0,
+  modelInvoker = invokeTextModel,
+  retryReason = ""
+}) {
+  await api.appendLog(`json-tool-fallback round=${round}${retryReason ? ` reason=${retryReason}` : ""}`);
+  await api.emitProgress({
+    phase: "plan-json-tool",
+    label: round > 0 ? `使用 JSON 工具计划继续推理（第 ${round + 1} 轮）` : "使用 JSON 工具计划分析任务",
+    percent: Math.min(52, 35 + round * 6)
+  });
+  const fallbackSystemPrompt = buildJsonFallbackSystemPrompt(tools, allowMoreToolCalls);
+  let fallbackMessages = normalizeMessagesForJsonFallback(planningMessages, fallbackSystemPrompt);
+  let result = await modelInvoker({
+    model: model || undefined,
+    messages: fallbackMessages,
+    toolChoice: "none",
+    signal: api.signal,
+    maxTokens: 1200,
+    temperature: 0.15
+  });
+  let parsed = parseJsonToolPlan(result.text || "", tools, { allowToolCalls: allowMoreToolCalls, round });
+  for (let attempt = 0; !parsed.ok && attempt < JSON_FALLBACK_REPAIR_ATTEMPTS; attempt += 1) {
+    fallbackMessages = fallbackMessages.concat([
+      createJsonFallbackAssistantMessage(result),
+      {
+        role: "user",
+        content: `上一条输出无法作为工具计划解析：${parsed.error}。请只输出一个严格 JSON object，不要输出 Markdown 或解释。`
+      }
+    ]);
+    result = await modelInvoker({
+      model: model || undefined,
+      messages: fallbackMessages,
+      toolChoice: "none",
+      signal: api.signal,
+      maxTokens: 1000,
+      temperature: 0.05
+    });
+    parsed = parseJsonToolPlan(result.text || "", tools, { allowToolCalls: allowMoreToolCalls, round });
+  }
+
+  const nextPlanningMessages = [...planningMessages, createJsonFallbackAssistantMessage(result)];
+  if (parsed.ok && parsed.action === "call_tool" && parsed.toolCall) {
+    return {
+      planningMessages: nextPlanningMessages,
+      pendingToolCalls: [parsed.toolCall],
+      result: {
+        ...result,
+        fallback: "json-plan",
+        jsonPlan: parsed
+      }
+    };
+  }
+
+  return {
+    planningMessages: parsed.ok && parsed.action === "final_answer" && parsed.finalAnswer
+      ? [...planningMessages, { role: "assistant", content: parsed.finalAnswer }]
+      : nextPlanningMessages,
+    pendingToolCalls: [],
+    result: {
+      ...result,
+      text: parsed.finalAnswer || result.text || "",
+      fallback: "json-plan",
+      jsonPlan: parsed
+    }
+  };
+}
+
+export async function invokeToolAwarePlanningRound({ messages, recentMessages, context, api, modelOverride = "", defaultTextModel = "", modelSettings = {}, round = 0, maxToolRounds = 4, modelInvoker = invokeTextModel }) {
   if (round > maxToolRounds) {
     throw new Error("AI tool-call exceeded max rounds");
   }
   const allowMoreToolCalls = round < maxToolRounds;
   const tools = allowMoreToolCalls ? getAiToolDefinitions() : [];
   const planningMessages = Array.isArray(messages) ? [...messages] : [];
+  const model = modelOverride || defaultTextModel || "";
+  const useJsonFallback = allowMoreToolCalls && shouldUseJsonToolFallback({ model, modelSettings });
+  if (useJsonFallback) {
+    return invokeJsonFallbackPlanningRound({
+      planningMessages,
+      tools,
+      allowMoreToolCalls,
+      api,
+      model,
+      round,
+      modelInvoker,
+      retryReason: "cached-model-without-tool-calls"
+    });
+  }
   await api.emitProgress({
     phase: "plan-reply",
     label: allowMoreToolCalls
@@ -191,14 +467,33 @@ export async function invokeToolAwarePlanningRound({ messages, recentMessages, c
       : "已达到工具上限，基于现有结果生成最终回答",
     percent: Math.min(52, 34 + round * 6)
   });
-  const result = await invokeTextModel({
-    model: modelOverride || defaultTextModel || undefined,
-    messages: planningMessages,
-    tools,
-    toolChoice: allowMoreToolCalls ? "auto" : "none",
-    maxTokens: 1000,
-    temperature: 0.25
-  });
+
+  let result;
+  try {
+    result = await modelInvoker({
+      model: model || undefined,
+      messages: planningMessages,
+      tools,
+      toolChoice: allowMoreToolCalls ? "auto" : "none",
+      signal: api.signal,
+      maxTokens: 1000,
+      temperature: 0.25
+    });
+  } catch (error) {
+    if (allowMoreToolCalls && tools.length && isNativeToolUnsupportedError(error)) {
+      return invokeJsonFallbackPlanningRound({
+        planningMessages,
+        tools,
+        allowMoreToolCalls,
+        api,
+        model,
+        round,
+        modelInvoker,
+        retryReason: String(error?.message || error || "native tool call unsupported").slice(0, 180)
+      });
+    }
+    throw error;
+  }
   const pendingToolCalls = Array.isArray(result.toolCalls) ? result.toolCalls : [];
   if (pendingToolCalls.length) {
     planningMessages.push(createToolCallAssistantMessage(result));
@@ -216,7 +511,8 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
   const nextMessages = Array.isArray(planningMessages) ? [...planningMessages] : [];
   const traceHooks = api?.traceHooks;
   for (const toolCall of Array.isArray(pendingToolCalls) ? pendingToolCalls : []) {
-    await api.appendLog(`tool-call ${toolCall.name}: ${JSON.stringify(toolCall.input || {})}`);
+    const fallbackMode = toolCall.fallbackJsonPlan === true ? "json-plan" : "";
+    await api.appendLog(`${fallbackMode ? "json-tool-call" : "tool-call"} ${toolCall.name}: ${JSON.stringify(toolCall.input || {})}`);
     await api.emitProgress(getAiToolProgress(toolCall.name, round));
     let toolResult = "";
     try {
@@ -225,7 +521,7 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
         name: toolCall.name,
         round,
         status: "completed",
-        input: toolCall.input || {},
+        input: fallbackMode ? { ...(toolCall.input || {}), __fallback: fallbackMode } : (toolCall.input || {}),
         outputPreview: String(toolResult || "")
       });
     } catch (error) {
@@ -234,21 +530,33 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
         name: toolCall.name,
         round,
         status: cancelled ? "cancelled" : "failed",
-        input: toolCall.input || {},
+        input: fallbackMode ? { ...(toolCall.input || {}), __fallback: fallbackMode } : (toolCall.input || {}),
         outputPreview: String(error?.message || error || "")
       });
       throw error;
     }
-    nextMessages.push({
-      role: "tool",
-      tool_call_id: toolCall.id,
-      content: toolResult
-    });
+    if (fallbackMode) {
+      nextMessages.push({
+        role: "user",
+        content: [
+          `工具 ${toolCall.name} 已执行。`,
+          toolCall.reason ? `调用原因：${toolCall.reason}` : "",
+          "工具返回 JSON：",
+          toolResult
+        ].filter(Boolean).join("\n")
+      });
+    } else {
+      nextMessages.push({
+        role: "tool",
+        tool_call_id: toolCall.id,
+        content: toolResult
+      });
+    }
   }
   return nextMessages;
 }
 
-export async function runToolAwareConversation({ systemPrompt, effectivePrompt, historyMessages, recentMessages, context, api, modelOverride = "", defaultTextModel = "", maxToolRounds = 4 }) {
+export async function runToolAwareConversation({ systemPrompt, effectivePrompt, historyMessages, recentMessages, context, api, modelOverride = "", defaultTextModel = "", modelSettings = {}, maxToolRounds = 4 }) {
   const messages = createToolAwarePlanningMessages({
     systemPrompt,
     effectivePrompt,
@@ -263,6 +571,7 @@ export async function runToolAwareConversation({ systemPrompt, effectivePrompt, 
       api,
       modelOverride,
       defaultTextModel,
+      modelSettings,
       round,
       maxToolRounds
     });

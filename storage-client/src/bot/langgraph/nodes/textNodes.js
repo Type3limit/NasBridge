@@ -116,6 +116,7 @@ export async function handleAiChatTextPlanRoute(state = {}) {
     api: prepared.replyApi,
     modelOverride: prepared.modelOverride || "",
     defaultTextModel: prepared.defaultTextModel || "",
+    modelSettings: prepared.modelSettings || {},
     round: toolRound,
     maxToolRounds: MAX_TOOL_ROUNDS
   });
