@@ -367,7 +367,7 @@ export function createAiSessionCheckpointer({ appDataRoot = "", jobId = "", botI
         status: String(status || "").trim()
       });
     },
-    async recordToolEvent({ name = "", round = 0, status = "", input = null, outputPreview = "", resultSummary = null, errorSummary = null } = {}) {
+    async recordToolEvent({ name = "", round = 0, status = "", input = null, inputSummary = null, startedAt = "", finishedAt = "", durationMs = null, outputPreview = "", resultSummary = null, errorSummary = null } = {}) {
       await appendJsonLine(getExecutionTracePath(appDataRoot, normalizedJobId), {
         ...createBaseEvent(),
         kind: "tool",
@@ -375,6 +375,10 @@ export function createAiSessionCheckpointer({ appDataRoot = "", jobId = "", botI
         round: Number.isFinite(round) ? Number(round) : 0,
         status: String(status || "").trim(),
         input,
+        inputSummary: inputSummary && typeof inputSummary === "object" ? inputSummary : null,
+        startedAt: String(startedAt || "").trim(),
+        finishedAt: String(finishedAt || "").trim(),
+        durationMs: Number.isFinite(Number(durationMs)) ? Number(durationMs) : null,
         outputPreview: String(outputPreview || "").slice(0, 320),
         resultSummary: resultSummary && typeof resultSummary === "object" ? resultSummary : null,
         errorSummary: errorSummary && typeof errorSummary === "object"

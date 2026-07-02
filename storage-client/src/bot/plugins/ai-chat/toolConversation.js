@@ -4,6 +4,7 @@ import { invokeTextModel, parseModelRef } from "../../tools/llmClient.js";
 
 const MAX_TOOL_ROUND_OFFSET = 8;
 const JSON_FALLBACK_REPAIR_ATTEMPTS = 1;
+const TRACE_INPUT_TEXT_LIMIT = 160;
 
 function parseJsonBlock(text = "") {
   const source = String(text || "").trim();
@@ -204,6 +205,84 @@ function summarizePendingToolCalls(toolCalls = []) {
     fallbackJsonPlan: call?.fallbackJsonPlan === true,
     reason: String(call?.reason || "").trim()
   })).filter((call) => call.name);
+}
+
+function truncateTraceText(value = "", limit = TRACE_INPUT_TEXT_LIMIT) {
+  const text = String(value || "").trim();
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
+function summarizeStringList(value, limit = 5) {
+  if (Array.isArray(value)) {
+    return value.map((item) => truncateTraceText(item, 96)).filter(Boolean).slice(0, limit);
+  }
+  const single = truncateTraceText(value, 96);
+  return single ? [single] : [];
+}
+
+function buildToolInputSummary(toolCall = {}) {
+  const input = normalizeToolInput(toolCall.input);
+  const keys = Object.keys(input).filter((key) => !String(key || "").startsWith("__")).sort();
+  const identifiers = [
+    ...summarizeStringList(input.fileId),
+    ...summarizeStringList(input.fileIds),
+    ...summarizeStringList(input.path),
+    ...summarizeStringList(input.paths),
+    ...summarizeStringList(input.filePath)
+  ];
+  const filters = {};
+  for (const key of ["query", "kind", "pathPrefix", "mimePrefix", "extension", "updatedAfter", "updatedBefore", "preferredSource"]) {
+    if (input[key] !== undefined && input[key] !== null && input[key] !== "") {
+      filters[key] = truncateTraceText(input[key], key === "query" ? 120 : 80);
+    }
+  }
+  const options = {};
+  for (const key of ["batch", "force", "forceAnalyze", "waitForCompletion", "dryRun", "confirmed", "includeSummary", "includeSubtitle", "includeTranscriptExcerpt"]) {
+    if (typeof input[key] === "boolean") {
+      options[key] = input[key];
+    }
+  }
+  for (const key of ["limit", "maxResults", "timeoutSeconds", "maxChars"]) {
+    if (Number.isFinite(Number(input[key]))) {
+      options[key] = Number(input[key]);
+    }
+  }
+  const counts = {};
+  for (const key of ["fileIds", "paths", "sources", "actions", "tags", "addTags", "removeTags"]) {
+    if (Array.isArray(input[key])) {
+      counts[key] = input[key].length;
+    }
+  }
+  return Object.fromEntries(Object.entries({
+    tool: String(toolCall.name || "").trim(),
+    keys,
+    identifiers: identifiers.slice(0, 8),
+    filters,
+    options,
+    counts,
+    fallbackJsonPlan: toolCall.fallbackJsonPlan === true,
+    reason: truncateTraceText(toolCall.reason || "", 180)
+  }).filter(([, value]) => {
+    if (value === false || value === null || value === undefined || value === "") {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    if (value && typeof value === "object") {
+      return Object.keys(value).length > 0;
+    }
+    return true;
+  }));
+}
+
+function buildTraceTiming(startedAt = "", startedMs = 0) {
+  const finishedAt = new Date().toISOString();
+  return {
+    startedAt,
+    finishedAt,
+    durationMs: Math.max(0, Date.now() - startedMs)
+  };
 }
 
 async function recordAgentPlanningEvent(api = {}, {
@@ -782,6 +861,9 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
   const traceHooks = api?.traceHooks;
   for (const toolCall of Array.isArray(pendingToolCalls) ? pendingToolCalls : []) {
     const fallbackMode = toolCall.fallbackJsonPlan === true ? "json-plan" : "";
+    const startedAt = new Date().toISOString();
+    const startedMs = Date.now();
+    const inputSummary = buildToolInputSummary(toolCall);
     await api.appendLog(`${fallbackMode ? "json-tool-call" : "tool-call"} ${toolCall.name}: ${JSON.stringify(toolCall.input || {})}`);
     await api.emitProgress(getAiToolProgress(toolCall.name, round));
     let toolResult = "";
@@ -795,6 +877,8 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
         round,
         status: "blocked",
         input: fallbackMode ? { ...(toolCall.input || {}), __fallback: fallbackMode } : (toolCall.input || {}),
+        inputSummary,
+        ...buildTraceTiming(startedAt, startedMs),
         outputPreview: toolResult,
         resultSummary: summarizeToolResultForTrace(toolResult)
       });
@@ -806,6 +890,8 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
           round,
           status: "completed",
           input: fallbackMode ? { ...(toolCall.input || {}), __fallback: fallbackMode } : (toolCall.input || {}),
+          inputSummary,
+          ...buildTraceTiming(startedAt, startedMs),
           outputPreview: String(toolResult || ""),
           resultSummary: summarizeToolResultForTrace(toolResult)
         });
@@ -816,6 +902,8 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
           round,
           status: cancelled ? "cancelled" : "failed",
           input: fallbackMode ? { ...(toolCall.input || {}), __fallback: fallbackMode } : (toolCall.input || {}),
+          inputSummary,
+          ...buildTraceTiming(startedAt, startedMs),
           outputPreview: String(error?.message || error || ""),
           errorSummary: summarizeToolErrorForTrace(error)
         });

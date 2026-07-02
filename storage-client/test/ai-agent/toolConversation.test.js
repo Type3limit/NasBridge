@@ -257,6 +257,11 @@ test("tool execution preflight blocks unavailable hard dependencies without crea
   assert.match(observation.content, /WHISPER_CPP_PATH/);
   assert.doesNotMatch(observation.content, /D:\\NAS/);
   assert.equal(api.toolEvents[0].status, "blocked");
+  assert.equal(api.toolEvents[0].inputSummary.tool, "invoke_video_analyze");
+  assert.deepEqual(api.toolEvents[0].inputSummary.identifiers, ["client:Videos/demo.mp4"]);
+  assert.match(api.toolEvents[0].startedAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.match(api.toolEvents[0].finishedAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.ok(api.toolEvents[0].durationMs >= 0);
   assert.match(api.logs.join("\n"), /tool-call-blocked invoke_video_analyze/);
 });
 
@@ -304,6 +309,9 @@ test("delegated tool results write structured job refs into tool trace events", 
   assert.equal(observation.role, "tool");
   assert.match(observation.content, /botjob_child/);
   assert.equal(api.toolEvents[0].status, "completed");
+  assert.equal(api.toolEvents[0].inputSummary.tool, "invoke_video_analyze");
+  assert.deepEqual(api.toolEvents[0].inputSummary.identifiers, ["client:Videos/demo.mp4"]);
+  assert.ok(api.toolEvents[0].durationMs >= 0);
   assert.equal(api.toolEvents[0].resultSummary.jobId, "botjob_child");
   assert.equal(api.toolEvents[0].resultSummary.botId, "video.analyze");
   assert.equal(api.toolEvents[0].resultSummary.delegated, true);
