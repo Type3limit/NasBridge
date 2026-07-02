@@ -5,7 +5,7 @@ import { isImageAttachment, stripSelfMention, wantsBatchTagging, wantsVideoAnaly
 import { formatAiSessionLabel, getAiSession } from "../../plugins/ai-chat/services/aiSessions.js";
 import { getEffectiveMultimodalModel, getEffectiveTextModel, readAiModelSettings } from "../../plugins/ai-chat/services/modelSettings.js";
 import { readAiSessionCheckpoint } from "../checkpoints/aiSessionCheckpointer.js";
-import { buildSessionRecoveryGuidance } from "./recoveryNodes.js";
+import { buildConfirmedToolRecoveryState, buildSessionRecoveryGuidance, isConfirmationPrompt } from "./recoveryNodes.js";
 
 export async function prepareAiChatGraphState(state = {}) {
   const context = state.context;
@@ -63,6 +63,19 @@ export async function prepareAiChatGraphState(state = {}) {
     }
     sessionRecovery = await readAiSessionCheckpoint(api.appDataRoot, activeSession.id);
     recoveryGuidance = buildSessionRecoveryGuidance(sessionRecovery);
+    const confirmedToolRecovery = recoveryGuidance?.recoveryAction?.pendingConfirmation && isConfirmationPrompt(effectivePrompt)
+      ? buildConfirmedToolRecoveryState(recoveryGuidance.recoveryAction.pendingConfirmation, effectivePrompt)
+      : null;
+    if (confirmedToolRecovery) {
+      recoveryGuidance = {
+        ...recoveryGuidance,
+        strategy: `用户已确认上一轮待确认操作，继续执行工具：${recoveryGuidance.recoveryAction.pendingConfirmation.tool}。`,
+        recoveryAction: {
+          ...recoveryGuidance.recoveryAction,
+          ...confirmedToolRecovery
+        }
+      };
+    }
     await api.appendLog(`ai session bound: ${formatAiSessionLabel(activeSession)}`);
     if (sessionRecovery?.latestExecution?.jobId) {
       await api.appendLog(`ai session checkpoint restored: job=${sessionRecovery.latestExecution.jobId} status=${sessionRecovery.latestExecution.status || "unknown"} route=${sessionRecovery.latestExecution.route || "unknown"}`);
@@ -142,6 +155,8 @@ export async function prepareAiChatGraphState(state = {}) {
     const recoveryAction = recoveryGuidance?.recoveryAction || null;
     if (recoveryAction?.requiresAttachment && !hasImageAttachment) {
       route = recoveryAction.route || "recovery";
+    } else if (recoveryAction?.mode === "confirmed-tool-call" && Array.isArray(recoveryAction?.recoveredPendingToolCalls) && recoveryAction.recoveredPendingToolCalls.length) {
+      route = "textTools";
     } else if (recoveryAction?.mode === "text-retry-tools" && Array.isArray(recoveryAction?.recoveredPendingToolCalls) && recoveryAction.recoveredPendingToolCalls.length) {
       route = "textTools";
     } else if (recoveryAction?.mode === "text-replan") {

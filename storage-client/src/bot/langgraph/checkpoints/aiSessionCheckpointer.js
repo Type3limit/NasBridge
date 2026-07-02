@@ -237,15 +237,88 @@ export async function readExecutionSnapshot(appDataRoot = "", jobId = "") {
   return readJsonFile(getExecutionSnapshotPath(appDataRoot, jobId));
 }
 
+async function readExecutionTraceEvents(appDataRoot = "", jobId = "") {
+  try {
+    const raw = await fs.promises.readFile(getExecutionTracePath(appDataRoot, jobId), "utf8");
+    return raw.split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function normalizeConfirmationInput(input = {}) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(input)
+      .filter(([key]) => !String(key || "").startsWith("__"))
+  );
+}
+
+function extractPendingConfirmation(traceEvents = []) {
+  const events = Array.isArray(traceEvents) ? traceEvents : [];
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (String(event?.kind || "").trim() !== "tool") {
+      continue;
+    }
+    const summary = event?.resultSummary;
+    const confirmation = summary?.confirmation;
+    if (!summary?.requiresConfirmation || !confirmation || typeof confirmation !== "object") {
+      continue;
+    }
+    const input = normalizeConfirmationInput(event.input || {});
+    const confirmWith = confirmation.confirmWith && typeof confirmation.confirmWith === "object"
+      ? normalizeConfirmationInput(confirmation.confirmWith)
+      : {};
+    return {
+      jobId: String(event.jobId || "").trim(),
+      tool: String(event.tool || "").trim(),
+      round: Number.isFinite(event.round) ? Number(event.round) : 0,
+      input,
+      confirmInput: {
+        ...input,
+        ...confirmWith
+      },
+      summary: {
+        status: String(summary.status || "").trim(),
+        blocked: summary.blocked === true,
+        blockedReason: String(summary.blockedReason || "").trim()
+      },
+      confirmation
+    };
+  }
+  return null;
+}
+
 export async function readAiSessionCheckpoint(appDataRoot = "", sessionId = 0) {
   const checkpoint = await readJsonFile(getSessionCheckpointPath(appDataRoot, sessionId));
   if (!checkpoint?.latestExecution?.jobId) {
     return checkpoint;
   }
   const latestSnapshot = await readExecutionSnapshot(appDataRoot, checkpoint.latestExecution.jobId);
+  const latestTraceEvents = await readExecutionTraceEvents(appDataRoot, checkpoint.latestExecution.jobId);
+  const pendingConfirmation = extractPendingConfirmation(latestTraceEvents);
   return {
     ...checkpoint,
-    latestSnapshot
+    latestSnapshot: latestSnapshot
+      ? {
+          ...latestSnapshot,
+          pendingConfirmation
+        }
+      : latestSnapshot,
+    pendingConfirmation
   };
 }
 

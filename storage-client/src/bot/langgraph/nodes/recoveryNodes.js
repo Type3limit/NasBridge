@@ -1,6 +1,67 @@
 import { createRecoveryArtifact, createRecoveryCard, createRecoveryReplyText, resolveTextToolsRecoveryPolicy } from "../../plugins/ai-chat/recovery.js";
 import { appendAiSessionTurn } from "../../plugins/ai-chat/services/aiSessions.js";
 
+export function isConfirmationPrompt(prompt = "") {
+  const normalized = String(prompt || "").normalize("NFKC").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return /^(确认|同意|可以|继续|执行|开始|确定|yes|ok|okay|confirm|go ahead|proceed)([，。,.!！\s]*(执行|继续|开始|吧|即可|这个|以上|操作|任务)*)?$/.test(normalized);
+}
+
+export function buildConfirmedToolRecoveryState(pendingConfirmation = null, prompt = "") {
+  const toolName = String(pendingConfirmation?.tool || "").trim();
+  const input = pendingConfirmation?.confirmInput && typeof pendingConfirmation.confirmInput === "object"
+    ? pendingConfirmation.confirmInput
+    : null;
+  if (!toolName || !input) {
+    return null;
+  }
+  const toolCallId = `confirmed_${toolName.replace(/[^a-z0-9_:-]/gi, "_")}_${Date.now().toString(36)}`;
+  const pendingToolCall = {
+    id: toolCallId,
+    name: toolName,
+    input,
+    reason: "用户已确认上一轮需要确认的操作"
+  };
+  return {
+    mode: "confirmed-tool-call",
+    route: "textTools",
+    directRetryAllowed: true,
+    nextStep: `用户已确认，继续执行工具：${toolName}`,
+    recoveredToolRound: 0,
+    recoveredPendingToolCalls: [pendingToolCall],
+    recoveredPlanningMessages: [
+      {
+        role: "system",
+        content: "你正在继续一个已由用户确认的 NAS agent 操作。先执行待确认工具；工具返回后，用简体中文简要说明执行结果、jobId/状态或失败原因。"
+      },
+      {
+        role: "user",
+        content: [
+          "用户已确认上一轮操作。",
+          prompt ? `本轮确认文本：${String(prompt || "").trim()}` : "",
+          pendingConfirmation?.confirmation?.reason ? `确认事项：${pendingConfirmation.confirmation.reason}` : ""
+        ].filter(Boolean).join("\n")
+      },
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: toolCallId,
+            type: "function",
+            function: {
+              name: toolName,
+              arguments: JSON.stringify(input)
+            }
+          }
+        ]
+      }
+    ]
+  };
+}
+
 export function buildSessionRecoveryGuidance(sessionRecovery = null) {
   const latestExecution = sessionRecovery?.latestExecution || null;
   const latestSnapshot = sessionRecovery?.latestSnapshot || null;
@@ -13,6 +74,7 @@ export function buildSessionRecoveryGuidance(sessionRecovery = null) {
   const lastNode = String(latestExecution.lastNode || latestSnapshot?.traceSummary?.lastNode || "").trim();
   const replyPreview = String(latestExecution.replyPreview || latestSnapshot?.result?.reply?.textPreview || "").trim();
   const recoveryState = latestSnapshot?.recoveryState || null;
+  const pendingConfirmation = latestSnapshot?.pendingConfirmation || sessionRecovery?.pendingConfirmation || null;
   const summary = `该会话最近一次 LangGraph 执行：job=${latestExecution.jobId}，状态=${status}，路由=${route}，最后节点=${lastNode || "未知"}，上一条回复摘要：${replyPreview || "无"}。`;
   const recoveryAction = {
     mode: "resume-default",
@@ -28,7 +90,8 @@ export function buildSessionRecoveryGuidance(sessionRecovery = null) {
     },
     recoveredPlanningMessages: [],
     recoveredPendingToolCalls: [],
-    recoveredToolRound: 0
+    recoveredToolRound: 0,
+    pendingConfirmation
   };
 
   let strategy = "延续这个会话时，应把上一次执行结果当作恢复线索，而不是盲目重复整个流程。";
@@ -80,6 +143,19 @@ export function buildSessionRecoveryGuidance(sessionRecovery = null) {
     strategy = "上次执行失败。继续时应参考上一次的路由和最后节点，避免不加区分地重复整个流程。";
     recoveryAction.mode = "failed-replan";
     recoveryAction.nextStep = "结合失败节点重新规划。";
+  }
+
+  if (pendingConfirmation?.tool && pendingConfirmation?.confirmation) {
+    const confirmation = pendingConfirmation.confirmation;
+    const impact = confirmation.impact || {};
+    strategy = [
+      `上次执行已停在需要用户确认的工具：${pendingConfirmation.tool}。`,
+      `风险级别=${confirmation.riskLevel || "unknown"}，影响文件数=${impact.targetFileCount ?? "未知"}。`,
+      "如果用户本轮明确确认，应继续执行同一个工具并合并 confirmation.confirmWith 参数；如果用户没有明确确认，先复述影响范围并等待确认。"
+    ].join("");
+    recoveryAction.mode = "awaiting-confirmation";
+    recoveryAction.route = "text";
+    recoveryAction.nextStep = `等待用户确认后继续执行 ${pendingConfirmation.tool}`;
   }
 
   return {
