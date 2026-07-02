@@ -48,6 +48,57 @@ const BOT_PERMISSIONS = {
   "aria2.downloader": ["bot:invoke", "network:download", "storage:file:write"]
 };
 
+const DELEGATED_JOB_OUTPUT_SCHEMA = {
+  type: "object",
+  required: ["status", "botId", "jobId"],
+  properties: {
+    status: { type: "string" },
+    phase: { type: "string" },
+    botId: { type: "string" },
+    jobId: { type: "string" },
+    logHint: { type: "string" },
+    nextAction: { type: "string" },
+    tracking: { type: "object" }
+  },
+  additionalProperties: true
+};
+
+const BOT_OUTPUT_SCHEMAS = {
+  "ai.chat": {
+    type: "object",
+    properties: {
+      message: { type: "string" },
+      trace: { type: "object" },
+      pendingConfirmation: { type: "object" }
+    },
+    additionalProperties: true
+  },
+  "ai.multimodal-image": {
+    type: "object",
+    properties: {
+      description: { type: "string" },
+      model: { type: "string" }
+    },
+    additionalProperties: true
+  },
+  "music.control": {
+    type: "object",
+    properties: {
+      status: { type: "string" },
+      action: { type: "string" },
+      message: { type: "string" },
+      queue: { type: "array" }
+    },
+    additionalProperties: true
+  },
+  "video.analyze": DELEGATED_JOB_OUTPUT_SCHEMA,
+  "video.tag": DELEGATED_JOB_OUTPUT_SCHEMA,
+  "bilibili.downloader": DELEGATED_JOB_OUTPUT_SCHEMA,
+  "ytdlp.downloader": DELEGATED_JOB_OUTPUT_SCHEMA,
+  "torrent.downloader": DELEGATED_JOB_OUTPUT_SCHEMA,
+  "aria2.downloader": DELEGATED_JOB_OUTPUT_SCHEMA
+};
+
 const TOOL_RISK_LEVELS = {
   list_storage_files: "low",
   search_library_files: "low",
@@ -79,6 +130,207 @@ const TOOL_RISK_LEVELS = {
   describe_image: "low",
   search_yyets_show: "low",
   download_yyets_episodes: "medium"
+};
+
+const FILE_ACTION_OUTPUT_FIELDS = {
+  nextActions: { type: "array", items: { type: "string" } },
+  actionPlan: { type: "array", items: { type: "object" } }
+};
+
+const TOOL_OUTPUT_SCHEMAS = {
+  list_storage_files: {
+    type: "object",
+    required: ["total", "files"],
+    properties: {
+      total: { type: "integer" },
+      files: { type: "array", items: { type: "object" } },
+      selection: { type: "object" },
+      ...FILE_ACTION_OUTPUT_FIELDS
+    },
+    additionalProperties: true
+  },
+  search_library_files: {
+    type: "object",
+    required: ["total", "files"],
+    properties: {
+      total: { type: "integer" },
+      files: { type: "array", items: { type: "object" } },
+      selection: { type: "object" },
+      ...FILE_ACTION_OUTPUT_FIELDS
+    },
+    additionalProperties: true
+  },
+  read_file_metadata: {
+    type: "object",
+    required: ["count", "files"],
+    properties: {
+      count: { type: "integer" },
+      missing: { type: "array" },
+      files: { type: "array", items: { type: "object" } },
+      ...FILE_ACTION_OUTPUT_FIELDS
+    },
+    additionalProperties: true
+  },
+  diagnose_file_access: {
+    type: "object",
+    required: ["status", "file"],
+    properties: {
+      status: { type: "string" },
+      file: { type: "object" },
+      layers: { type: "array" },
+      blockers: { type: "array" },
+      dependencies: { type: "object" },
+      ...FILE_ACTION_OUTPUT_FIELDS
+    },
+    additionalProperties: true
+  },
+  read_text_excerpt: {
+    type: "object",
+    required: ["file", "excerpt"],
+    properties: {
+      file: { type: "object" },
+      excerpt: { type: "object" },
+      text: { type: "string" },
+      truncated: { type: "boolean" },
+      nextStartChar: { type: "integer" },
+      ...FILE_ACTION_OUTPUT_FIELDS
+    },
+    additionalProperties: true
+  },
+  read_media_summary: {
+    type: "object",
+    required: ["file"],
+    properties: {
+      file: { type: "object" },
+      aiSummary: { type: "string" },
+      transcriptExcerpt: { type: "object" },
+      mediaProbe: { type: "object" },
+      dependencies: { type: "object" },
+      ...FILE_ACTION_OUTPUT_FIELDS
+    },
+    additionalProperties: true
+  },
+  analyze_file_content: {
+    type: "object",
+    required: ["status"],
+    properties: {
+      status: { type: "string" },
+      mode: { type: "string" },
+      file: { type: "object" },
+      analysis: { type: "string" },
+      delegated: { type: "boolean" },
+      jobId: { type: "string" },
+      ...FILE_ACTION_OUTPUT_FIELDS
+    },
+    additionalProperties: true
+  },
+  update_file_metadata: {
+    type: "object",
+    required: ["operation", "results"],
+    properties: {
+      operation: { type: "string" },
+      riskLevel: { type: "string" },
+      dryRun: { type: "boolean" },
+      requiresConfirmation: { type: "boolean" },
+      blocked: { type: "boolean" },
+      confirmation: { type: "object" },
+      results: { type: "array", items: { type: "object" } },
+      ...FILE_ACTION_OUTPUT_FIELDS
+    },
+    additionalProperties: true
+  },
+  organize_files: {
+    type: "object",
+    required: ["operation", "actions"],
+    properties: {
+      operation: { type: "string" },
+      riskLevel: { type: "string" },
+      dryRun: { type: "boolean" },
+      requiresConfirmation: { type: "boolean" },
+      blocked: { type: "boolean" },
+      confirmation: { type: "object" },
+      actions: { type: "array", items: { type: "object" } },
+      ...FILE_ACTION_OUTPUT_FIELDS
+    },
+    additionalProperties: true
+  },
+  explain_file_access: {
+    type: "object",
+    required: ["policy", "tools"],
+    properties: {
+      policy: { type: "object" },
+      tools: { type: "array" },
+      summary: { type: "array" },
+      actionPlan: { type: "array", items: { type: "object" } }
+    },
+    additionalProperties: true
+  },
+  get_storage_file_details: {
+    type: "object",
+    required: ["count", "files"],
+    properties: {
+      count: { type: "integer" },
+      missing: { type: "array" },
+      files: { type: "array", items: { type: "object" } }
+    },
+    additionalProperties: true
+  },
+  invoke_video_analyze: DELEGATED_JOB_OUTPUT_SCHEMA,
+  analyze_storage_video: DELEGATED_JOB_OUTPUT_SCHEMA,
+  invoke_video_tag: DELEGATED_JOB_OUTPUT_SCHEMA,
+  tag_storage_video: DELEGATED_JOB_OUTPUT_SCHEMA,
+  invoke_music_control: {
+    type: "object",
+    required: ["status"],
+    properties: {
+      status: { type: "string" },
+      action: { type: "string" },
+      message: { type: "string" },
+      queue: { type: "array" }
+    },
+    additionalProperties: true
+  },
+  invoke_bilibili_downloader: DELEGATED_JOB_OUTPUT_SCHEMA,
+  invoke_ytdlp_downloader: DELEGATED_JOB_OUTPUT_SCHEMA,
+  invoke_torrent_downloader: DELEGATED_JOB_OUTPUT_SCHEMA,
+  invoke_aria2_downloader: DELEGATED_JOB_OUTPUT_SCHEMA,
+  import_bilibili_video: DELEGATED_JOB_OUTPUT_SCHEMA,
+  download_yyets_episodes: DELEGATED_JOB_OUTPUT_SCHEMA,
+  get_bot_job_status: {
+    type: "object",
+    required: ["jobs"],
+    properties: {
+      jobs: { type: "array", items: { type: "object" } },
+      missing: { type: "array" },
+      childJobs: { type: "array" },
+      recovery: { type: "object" }
+    },
+    additionalProperties: true
+  },
+  read_agent_trace: {
+    type: "object",
+    required: ["jobId", "events"],
+    properties: {
+      jobId: { type: "string" },
+      events: { type: "array", items: { type: "object" } },
+      suggestedActions: { type: "array" },
+      pendingConfirmation: { type: "object" },
+      childJobs: { type: "array" }
+    },
+    additionalProperties: true
+  },
+  read_bot_job_log: {
+    type: "object",
+    required: ["jobId", "log"],
+    properties: {
+      jobId: { type: "string" },
+      job: { type: "object" },
+      log: { type: "object" },
+      trace: { type: "object" },
+      childJobs: { type: "array" }
+    },
+    additionalProperties: true
+  }
 };
 
 const TOOL_CAPABILITY_TAGS = {
@@ -317,6 +569,7 @@ export function buildCapabilityDescriptors(api = {}) {
     displayName: String(bot.displayName || bot.botId || "").trim(),
     description: String(bot.description || "").trim(),
     inputSchema: bot.inputSchema && typeof bot.inputSchema === "object" ? bot.inputSchema : { type: "object", properties: {} },
+    outputSchema: BOT_OUTPUT_SCHEMAS[bot.botId] || DELEGATED_JOB_OUTPUT_SCHEMA,
     capabilities: uniqueStrings(bot.capabilities),
     permissions: uniqueStrings(Array.isArray(bot.permissions) && bot.permissions.length ? bot.permissions : BOT_PERMISSIONS[bot.botId]),
     riskLevel: normalizeRiskLevel(BOT_RISK_LEVELS[bot.botId] || "low"),
@@ -332,6 +585,7 @@ export function buildCapabilityDescriptors(api = {}) {
     displayName: String(tool.name || "").trim(),
     description: String(tool.description || "").trim(),
     inputSchema: tool.inputSchema && typeof tool.inputSchema === "object" ? tool.inputSchema : { type: "object", properties: {} },
+    outputSchema: TOOL_OUTPUT_SCHEMAS[tool.name] || { type: "object", additionalProperties: true },
     capabilities: uniqueStrings(TOOL_CAPABILITY_TAGS[tool.name]),
     permissions: uniqueStrings(TOOL_PERMISSIONS[tool.name]),
     riskLevel: normalizeRiskLevel(TOOL_RISK_LEVELS[tool.name] || "low"),
@@ -512,6 +766,17 @@ function formatCapabilityListValue(items = [], { maxItems = 4, separator = "/" }
   return `${visible.join(separator)}${suffix}`;
 }
 
+function summarizeOutputSchemaFields(outputSchema = {}, { maxItems = 5, separator = "/" } = {}) {
+  if (!outputSchema || typeof outputSchema !== "object") {
+    return "";
+  }
+  const required = uniqueStrings(outputSchema.required);
+  const properties = outputSchema.properties && typeof outputSchema.properties === "object"
+    ? Object.keys(outputSchema.properties)
+    : [];
+  return formatCapabilityListValue(required.length ? required : properties, { maxItems, separator });
+}
+
 export function formatCapabilityReport(descriptors = [], health = {}) {
   const statusLabel = {
     ok: "ok",
@@ -530,11 +795,13 @@ export function formatCapabilityReport(descriptors = [], health = {}) {
       const availability = summarizeCapabilityAvailability(item, health);
       const caps = formatCapabilityListValue(item.capabilities, { maxItems: 4, separator: ", " });
       const permissions = formatCapabilityListValue(item.permissions, { maxItems: 4, separator: ", " });
+      const returns = summarizeOutputSchemaFields(item.outputSchema, { maxItems: 5, separator: ", " });
       const metadata = [
         `risk=${item.riskLevel}`,
         `mode=${item.executionMode}`,
         caps ? `caps=${caps}` : "",
-        permissions ? `perms=${permissions}` : ""
+        permissions ? `perms=${permissions}` : "",
+        returns ? `returns=${returns}` : ""
       ].filter(Boolean).join(" · ");
       lines.push(`- [${statusLabel[availability.status] || availability.status}] ${item.id} · ${item.displayName || item.id} · ${metadata}`);
       if (availability.status !== "ok") {
@@ -591,8 +858,9 @@ export function formatCapabilityPromptSummary(descriptors = [], health = {}, opt
       const availability = summarizeCapabilityAvailability(item, health);
       const caps = formatCapabilityListValue(item.capabilities, { maxItems: 3 });
       const permissions = formatCapabilityListValue(item.permissions, { maxItems: 3 });
+      const returns = summarizeOutputSchemaFields(item.outputSchema, { maxItems: 4 });
       const examples = Array.isArray(item.examples) && item.examples.length ? ` examples=${item.examples.slice(0, 2).join(" / ")}` : "";
-      lines.push(`- ${item.id}: status=${availability.status}, risk=${item.riskLevel}, mode=${item.executionMode}${caps ? `, caps=${caps}` : ""}${permissions ? `, perms=${permissions}` : ""}.${examples}`);
+      lines.push(`- ${item.id}: status=${availability.status}, risk=${item.riskLevel}, mode=${item.executionMode}${caps ? `, caps=${caps}` : ""}${permissions ? `, perms=${permissions}` : ""}${returns ? `, returns=${returns}` : ""}.${examples}`);
     }
   }
   const workflows = selectCapabilityWorkflows(descriptors, maxWorkflows);
