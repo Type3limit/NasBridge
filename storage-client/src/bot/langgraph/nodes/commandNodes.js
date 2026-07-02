@@ -3,7 +3,7 @@ import { normalizeModelFilter } from "../../plugins/ai-chat/parsers/modelDirecti
 import { withSessionSubtitle } from "../../plugins/ai-chat/parsers/sessionDirectives.js";
 import { createAiSession, deleteAiSession, formatAiSessionLabel, listAiSessions, renameAiSession } from "../../plugins/ai-chat/services/aiSessions.js";
 import { compressAiSessionContext } from "../../plugins/ai-chat/services/compressAiSession.js";
-import { getEffectiveMultimodalModel, getEffectiveTextModel, writeAiModelSettings } from "../../plugins/ai-chat/services/modelSettings.js";
+import { getEffectiveMultimodalModel, getEffectiveTextModel, migrateStoredModelRef, writeAiModelSettings } from "../../plugins/ai-chat/services/modelSettings.js";
 import { buildCapabilityDescriptors, formatCapabilityReport } from "../../capabilities/registry.js";
 import { collectAiAgentHealth, formatHealthReport } from "../../capabilities/health.js";
 import { buildAgentTraceResult, buildBotJobLogBundle, buildBotJobStatusResult } from "../../tools/botJobStatus.js";
@@ -629,7 +629,13 @@ export async function handleAiChatCommandRoute(state = {}) {
       const filter = normalizeModelFilter(modelDirective.command.filter || "all");
       const result = await listAvailableModels({ signal: api.signal });
       const displayedModels = sortModelsForDisplay(filterModelsByCapability(result.models, filter));
-      const nextSettings = { ...modelSettings, lastListedModels: displayedModels, lastListFilter: filter };
+      const nextSettings = {
+        ...modelSettings,
+        textModel: migrateStoredModelRef(modelSettings.textModel, result.models),
+        multimodalModel: migrateStoredModelRef(modelSettings.multimodalModel, result.models),
+        lastListedModels: displayedModels,
+        lastListFilter: filter
+      };
       await writeAiModelSettings(api.appDataRoot, nextSettings);
       const body = buildAvailableModelsText(displayedModels, nextSettings, filter);
       const providerBadges = buildProviderSummaryBadges(displayedModels);

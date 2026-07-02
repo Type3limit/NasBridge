@@ -11,6 +11,30 @@ import {
   formatAgentTraceReport,
   handleAiChatCommandRoute
 } from "../../src/bot/langgraph/nodes/commandNodes.js";
+import { readAiModelSettings } from "../../src/bot/plugins/ai-chat/services/modelSettings.js";
+
+async function withEnv(vars, fn) {
+  const previous = new Map();
+  for (const [key, value] of Object.entries(vars)) {
+    previous.set(key, Object.prototype.hasOwnProperty.call(process.env, key) ? process.env[key] : undefined);
+    if (value === undefined || value === null) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of previous.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
 
 test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs", () => {
   const body = formatAgentTraceReport({
@@ -169,6 +193,83 @@ test("formatBotJobLogReport summarizes redacted log and child jobs", () => {
   assert.match(body, /OPENAI_API_KEY=\*\*\*/);
   assert.match(body, /恢复建议：修复模型后重试/);
   assert.match(body, /@ai \/job botjob_parent/);
+});
+
+test("models command refresh migrates display names to executable model refs", async () => {
+  const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-model-command-"));
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => JSON.stringify({
+        data: [
+          {
+            id: "deepseek-v4-pro",
+            name: "DeepSeek V4 Pro",
+            vendor: "OpenAI Compatible",
+            capabilities: { supports: { tool_calls: false } }
+          },
+          {
+            id: "gpt-4.1-2025-04-14",
+            name: "GPT 4.1",
+            vendor: "OpenAI Compatible",
+            capabilities: { supports: { tool_calls: true } }
+          }
+        ]
+      })
+    });
+    await withEnv({
+      AI_PROVIDER: "openai",
+      OPENAI_BASE_URL: "https://example.invalid/v1",
+      OPENAI_API_KEY: "sk-test",
+      OPENAI_MODEL: "deepseek-v4-pro"
+    }, async () => {
+      const replies = [];
+      const api = {
+        appDataRoot,
+        signal: null,
+        throwIfCancelled() {},
+        async publishChatReply(payload) {
+          replies.push(payload);
+          return {
+            id: "reply_models",
+            text: payload.text,
+            card: payload.card
+          };
+        }
+      };
+
+      const result = await handleAiChatCommandRoute({
+        prepared: {
+          api,
+          modelDirective: {
+            command: {
+              type: "list-models",
+              filter: "all"
+            }
+          },
+          modelSettings: {
+            textModel: "DeepSeek V4 Pro",
+            multimodalModel: "GPT 4.1",
+            lastListedModels: []
+          }
+        }
+      });
+
+      const settings = await readAiModelSettings(appDataRoot);
+      assert.equal(settings.textModel, "openai::deepseek-v4-pro");
+      assert.equal(settings.multimodalModel, "openai::gpt-4.1-2025-04-14");
+      assert.equal(settings.lastListedModels.length, 2);
+      assert.equal(result.result.artifacts[0].type, "model-list");
+      assert.equal(replies[0].card.title, "AI 可用模型列表");
+      assert.equal(replies[0].card.status, "succeeded");
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(appDataRoot, { recursive: true, force: true });
+  }
 });
 
 test("trace command route publishes latest agent trace report", async () => {
