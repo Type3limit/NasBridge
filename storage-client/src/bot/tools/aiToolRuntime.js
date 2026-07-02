@@ -244,6 +244,33 @@ function compactStorageFileForTool(file = {}) {
   };
 }
 
+function isVideoOrAudioStorageFile(file = {}) {
+  const mimeType = String(file.mimeType || "").toLowerCase();
+  return mimeType.startsWith("video/") || mimeType.startsWith("audio/");
+}
+
+function buildBatchVideoTagConfirmation(files = [], input = {}) {
+  const targetFiles = (Array.isArray(files) ? files : []).filter(isVideoOrAudioStorageFile);
+  return {
+    required: true,
+    operation: "invoke_video_tag",
+    riskLevel: "medium",
+    reason: "批量视频打标签会为多个视频/音频文件生成并写入 metadata tags。",
+    impact: {
+      targetFileCount: targetFiles.length,
+      changedFields: ["tags"],
+      force: input.force === true,
+      files: targetFiles.slice(0, 10).map(compactStorageFileForTool)
+    },
+    recoverability: "标签写入后可再次用 update_file_metadata 调整；force=true 可能覆盖已有标签，恢复成本更高。",
+    estimatedDuration: targetFiles.length <= 5 ? "< 1 分钟" : (targetFiles.length <= 30 ? "1-5 分钟" : "数分钟到更久，取决于视频数量和模型速度"),
+    confirmWith: {
+      confirmed: true,
+      batch: true
+    }
+  };
+}
+
 function isAnalyzableTextFile(file = {}) {
   const mimeType = String(file.mimeType || "").toLowerCase();
   const ext = path.extname(String(file.relativePath || file.path || "")).toLowerCase();
@@ -1366,7 +1393,26 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
     await api.emitProgress({ phase: "tool-tag-storage-video", label: "准备视频打标签任务", percent: 46 });
     if (input.batch === true) {
       if (input.confirmed !== true) {
-        throw new Error("批量打标签会写入多个文件的 metadata，需要先向用户确认影响范围，再以 confirmed=true 调用。");
+        const snapshot = await loadLibrarySnapshot(api);
+        const targetFiles = snapshot.files.filter(isVideoOrAudioStorageFile);
+        return safeJson({
+          status: targetFiles.length ? "confirmation_required" : "no_targets",
+          delegated: false,
+          botId: "video.tag",
+          batch: true,
+          confirmed: false,
+          requiresConfirmation: targetFiles.length > 0,
+          blocked: targetFiles.length > 0,
+          blockedReason: targetFiles.length
+            ? "批量视频打标签会写入多个文件的 metadata；本次只返回影响范围预览，未创建子任务。"
+            : "当前 NAS 索引里没有可打标签的视频/音频文件。",
+          confirmation: targetFiles.length
+            ? buildBatchVideoTagConfirmation(targetFiles, input)
+            : null,
+          nextAction: targetFiles.length
+            ? "向用户确认影响范围后，以 confirmed=true 再次调用。"
+            : "先确认文件库里已有视频/音频文件，或刷新 storage-client 索引。"
+        });
       }
       const delegatedJob = await api.invokeBot({
         botId: "video.tag",

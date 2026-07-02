@@ -120,6 +120,53 @@ test("invoke_video_tag delegates to video.tag with summary context", async () =>
   assert.equal(api.invoked[0].options.toolName, "invoke_video_tag");
 });
 
+test("invoke_video_tag batch returns confirmation preview before delegation", async () => {
+  const api = createFakeApi();
+  const raw = await executeAiToolCall(
+    {
+      name: "invoke_video_tag",
+      input: {
+        batch: true,
+        force: true
+      }
+    },
+    { chat: {}, attachments: [] },
+    api
+  );
+  const preview = JSON.parse(raw);
+
+  assert.equal(preview.status, "confirmation_required");
+  assert.equal(preview.delegated, false);
+  assert.equal(preview.requiresConfirmation, true);
+  assert.equal(preview.blocked, true);
+  assert.equal(preview.confirmation.operation, "invoke_video_tag");
+  assert.equal(preview.confirmation.impact.targetFileCount, 1);
+  assert.deepEqual(preview.confirmation.impact.changedFields, ["tags"]);
+  assert.equal(preview.confirmation.impact.force, true);
+  assert.equal(preview.confirmation.confirmWith.confirmed, true);
+  assert.equal(api.invoked.length, 0);
+
+  const confirmedRaw = await executeAiToolCall(
+    {
+      name: "invoke_video_tag",
+      input: {
+        batch: true,
+        confirmed: true
+      }
+    },
+    { chat: {}, attachments: [] },
+    api
+  );
+  const confirmed = JSON.parse(confirmedRaw);
+  assert.equal(confirmed.delegated, true);
+  assert.equal(confirmed.botId, "video.tag");
+  assert.equal(api.invoked.length, 1);
+  assert.deepEqual(api.invoked[0].trigger.parsedArgs, {
+    batch: true,
+    force: false
+  });
+});
+
 test("NAS metadata recommends standard invoke_video_analyze for unanalyzed media", async () => {
   const api = createFakeApi();
   const result = await buildLibraryMetadataResult(api, {
