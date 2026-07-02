@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  buildCapabilityArtifactSummary,
   buildCapabilityDescriptors,
   formatCapabilityReport,
   formatCapabilityPromptSummary
@@ -436,6 +437,19 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
       }
     ]
   }, { maxItems: 28 });
+  const artifact = buildCapabilityArtifactSummary(descriptors, {
+    overall: "warn",
+    generatedAt: "2026-07-02T00:00:00.000Z",
+    checks: [
+      {
+        id: "whisper",
+        label: "Whisper",
+        status: "warn",
+        detail: "D:\\Secret\\whisper model missing",
+        repairHint: "配置 D:\\Secret\\whisper.exe 和 WHISPER_MODEL_PATH=sk-should-not-leak-1234567890"
+      }
+    ]
+  });
 
   assert.match(summary, /search_library_files/);
   assert.match(summary, /read_media_summary/);
@@ -473,6 +487,18 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.doesNotMatch(summary, /C:\\Secret/);
   assert.match(blockedSummary, /invoke_video_analyze: status=warn, ready=blocked, blocker=whisper/);
   assert.match(blockedSummary, /media-summary: .*invoke_video_analyze:blocked\(whisper\)/);
+  const videoAnalyzeArtifact = artifact.capabilities.find((item) => item.id === "invoke_video_analyze");
+  assert.equal(videoAnalyzeArtifact.status, "blocked");
+  assert.equal(videoAnalyzeArtifact.readiness.ready, false);
+  assert.equal(videoAnalyzeArtifact.readiness.blocker.id, "whisper");
+  assert.match(videoAnalyzeArtifact.readiness.detail, /\[local-path\]/);
+  assert.doesNotMatch(videoAnalyzeArtifact.readiness.detail, /D:\\Secret/);
+  assert.doesNotMatch(JSON.stringify(videoAnalyzeArtifact), /sk-should-not-leak/);
+  assert.ok(videoAnalyzeArtifact.output.required.includes("status"));
+  const mediaWorkflow = artifact.workflows.find((item) => item.id === "media-summary");
+  assert.equal(mediaWorkflow.blocked, true);
+  assert.equal(mediaWorkflow.steps.find((step) => step.id === "invoke_video_analyze").status, "blocked");
+  assert.equal(mediaWorkflow.steps.find((step) => step.id === "invoke_video_analyze").blockerId, "whisper");
   assert.match(report, /video\.analyze/);
   assert.match(report, /\[blocked\] video\.analyze/);
   assert.match(report, /invoke_video_analyze · .*ready=no · blockedBy=whisper/);

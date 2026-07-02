@@ -782,6 +782,121 @@ function summarizeOutputSchemaFields(outputSchema = {}, { maxItems = 5, separato
   return formatCapabilityListValue(required.length ? required : properties, { maxItems, separator });
 }
 
+function redactCapabilityArtifactText(value = "", limit = 240) {
+  return String(value || "")
+    .trim()
+    .replace(/[A-Za-z]:[\\/][^\s；,，]+/g, "[local-path]")
+    .replace(/\\\\[^\s；,，]+/g, "[network-path]")
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted]")
+    .replace(/sk-[A-Za-z0-9_-]{8,}/gi, "sk-[redacted]")
+    .slice(0, limit);
+}
+
+function summarizeOutputSchemaContract(outputSchema = {}) {
+  if (!outputSchema || typeof outputSchema !== "object") {
+    return { required: [], fields: [] };
+  }
+  return {
+    required: uniqueStrings(outputSchema.required).slice(0, 12),
+    fields: outputSchema.properties && typeof outputSchema.properties === "object"
+      ? Object.keys(outputSchema.properties).slice(0, 24)
+      : []
+  };
+}
+
+function compactRepairHints(repairHints = []) {
+  return (Array.isArray(repairHints) ? repairHints : []).map((hint) => ({
+    id: String(hint?.id || "").trim(),
+    label: String(hint?.label || hint?.id || "").trim(),
+    hint: redactCapabilityArtifactText(hint?.hint || "", 240)
+  })).filter((hint) => hint.id || hint.label || hint.hint).slice(0, 5);
+}
+
+function compactReadinessBlocker(blocker = null) {
+  if (!blocker || typeof blocker !== "object") {
+    return null;
+  }
+  return Object.fromEntries(Object.entries({
+    id: String(blocker.id || "").trim(),
+    label: String(blocker.label || blocker.id || "").trim(),
+    status: String(blocker.status || "").trim(),
+    detail: redactCapabilityArtifactText(blocker.detail || "", 240),
+    repairHint: redactCapabilityArtifactText(blocker.repairHint || "", 240)
+  }).filter(([, value]) => value !== "" && value !== null && value !== undefined));
+}
+
+function buildCapabilityArtifactItem(item = {}, health = {}) {
+  const availability = summarizeCapabilityAvailability(item, health);
+  const readiness = summarizeCapabilityExecutionReadiness(item, health);
+  const visibleStatus = readiness.ready === false ? "blocked" : availability.status;
+  return {
+    id: String(item.id || "").trim(),
+    kind: String(item.kind || "").trim(),
+    displayName: String(item.displayName || item.id || "").trim(),
+    description: redactCapabilityArtifactText(item.description || "", 240),
+    riskLevel: String(item.riskLevel || "").trim(),
+    executionMode: String(item.executionMode || "").trim(),
+    requiresConfirmation: item.requiresConfirmation === true,
+    capabilities: uniqueStrings(item.capabilities).slice(0, 12),
+    permissions: uniqueStrings(item.permissions).slice(0, 12),
+    healthChecks: uniqueStrings(item.healthChecks).slice(0, 12),
+    output: summarizeOutputSchemaContract(item.outputSchema),
+    examples: uniqueStrings(item.examples).slice(0, 3),
+    status: visibleStatus,
+    availability: {
+      status: availability.status || "unknown",
+      detail: redactCapabilityArtifactText(availability.detail || "", 240),
+      repairHints: compactRepairHints(availability.repairHints)
+    },
+    readiness: {
+      ready: readiness.ready !== false,
+      status: readiness.ready === false ? "blocked" : (readiness.status || availability.status || "unknown"),
+      detail: redactCapabilityArtifactText(readiness.detail || "", 240),
+      blocker: compactReadinessBlocker(readiness.blocker)
+    }
+  };
+}
+
+function buildCapabilityWorkflowArtifact(workflow = {}, descriptors = [], health = {}) {
+  const byId = new Map((Array.isArray(descriptors) ? descriptors : []).map((item) => [item.id, item]));
+  const steps = (Array.isArray(workflow.availableTools) ? workflow.availableTools : []).map((toolId) => {
+    const descriptor = byId.get(toolId);
+    if (!descriptor) {
+      return null;
+    }
+    const availability = summarizeCapabilityAvailability(descriptor, health);
+    const readiness = summarizeCapabilityExecutionReadiness(descriptor, health);
+    return {
+      id: toolId,
+      status: readiness.ready === false ? "blocked" : availability.status,
+      availabilityStatus: availability.status || "unknown",
+      ready: readiness.ready !== false,
+      blockerId: readiness.ready === false ? String(readiness.blocker?.id || readiness.blocker?.label || "").trim() : ""
+    };
+  }).filter(Boolean);
+  return {
+    id: String(workflow.id || "").trim(),
+    title: String(workflow.title || workflow.id || "").trim(),
+    tools: Array.isArray(workflow.availableTools) ? workflow.availableTools : [],
+    steps,
+    blocked: steps.some((step) => step.status === "blocked"),
+    guidance: redactCapabilityArtifactText(workflow.guidance || "", 360)
+  };
+}
+
+export function buildCapabilityArtifactSummary(descriptors = [], health = {}, options = {}) {
+  const maxWorkflows = Math.max(0, Math.min(12, Number(options.maxWorkflows || 7) || 7));
+  const capabilities = (Array.isArray(descriptors) ? descriptors : []).map((item) => buildCapabilityArtifactItem(item, health));
+  return {
+    count: capabilities.length,
+    overall: String(health.overall || "unknown").trim() || "unknown",
+    generatedAt: String(health.generatedAt || "").trim(),
+    cached: health.cached === true,
+    capabilities,
+    workflows: selectCapabilityWorkflows(descriptors, maxWorkflows).map((workflow) => buildCapabilityWorkflowArtifact(workflow, descriptors, health))
+  };
+}
+
 export function formatCapabilityReport(descriptors = [], health = {}) {
   const statusLabel = {
     ok: "ok",

@@ -4,7 +4,7 @@ import { withSessionSubtitle } from "../../plugins/ai-chat/parsers/sessionDirect
 import { createAiSession, deleteAiSession, formatAiSessionLabel, listAiSessions, renameAiSession } from "../../plugins/ai-chat/services/aiSessions.js";
 import { compressAiSessionContext } from "../../plugins/ai-chat/services/compressAiSession.js";
 import { getEffectiveMultimodalModel, getEffectiveTextModel, migrateStoredModelRef, writeAiModelSettings } from "../../plugins/ai-chat/services/modelSettings.js";
-import { buildCapabilityDescriptors, formatCapabilityReport } from "../../capabilities/registry.js";
+import { buildCapabilityArtifactSummary, buildCapabilityDescriptors, formatCapabilityReport } from "../../capabilities/registry.js";
 import { collectAiAgentHealth, formatHealthReport } from "../../capabilities/health.js";
 import { buildAgentTraceResult, buildBotJobLogBundle, buildBotJobStatusResult } from "../../tools/botJobStatus.js";
 import { getDefaultTextModelName, listAvailableModels, resolveModelReference } from "../../tools/llmClient.js";
@@ -688,6 +688,7 @@ export async function handleAiChatCommandRoute(state = {}) {
       const health = await collectAiAgentHealth(api, { modelSettings, signal: api.signal });
       const descriptors = buildCapabilityDescriptors(api);
       const body = formatCapabilityReport(descriptors, health);
+      const artifact = buildCapabilityArtifactSummary(descriptors, health);
       return {
         result: {
           chatReply: await api.publishChatReply({
@@ -695,7 +696,7 @@ export async function handleAiChatCommandRoute(state = {}) {
             card: { type: "ai-answer", status: health.overall === "error" ? "failed" : "succeeded", title: "AI Agent 工具列表", subtitle: withSessionSubtitle(`共 ${descriptors.length} 项能力`, activeSession), body }
           }),
           importedFiles: [],
-          artifacts: [{ type: "agent-tools", count: descriptors.length, health }]
+          artifacts: [{ type: "agent-tools", ...artifact, health }]
         }
       };
     }

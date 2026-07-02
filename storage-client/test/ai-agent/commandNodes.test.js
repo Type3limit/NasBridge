@@ -372,6 +372,100 @@ test("models command refresh migrates display names to executable model refs", a
   }
 });
 
+test("tools command route publishes structured capability artifact", async () => {
+  const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-tools-command-"));
+  const storageRoot = path.join(appDataRoot, "storage");
+  const originalFetch = globalThis.fetch;
+  try {
+    await fs.mkdir(storageRoot, { recursive: true });
+    globalThis.fetch = async (url) => {
+      const text = String(url || "");
+      if (text.includes("/models")) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          text: async () => JSON.stringify({
+            data: [{
+              id: "deepseek-v4-pro",
+              name: "DeepSeek V4 Pro",
+              capabilities: { supports: { tool_calls: false } }
+            }]
+          }),
+          json: async () => ({})
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        text: async () => "{}",
+        json: async () => ({ sources: ["qq"] })
+      };
+    };
+
+    await withEnv({
+      AI_PROVIDER: "openai",
+      OPENAI_BASE_URL: "https://example.invalid/v1",
+      OPENAI_API_KEY: "sk-test",
+      OPENAI_MODEL: "deepseek-v4-pro",
+      MUSIC_LIB_BRIDGE_URL: "http://music.invalid",
+      BOT_BILIBILI_COOKIE_HEADER: undefined,
+      BOT_BILIBILI_COOKIE_FILE: undefined
+    }, async () => {
+      const replies = [];
+      const api = {
+        appDataRoot,
+        storageRoot,
+        signal: null,
+        throwIfCancelled() {},
+        async publishChatReply(payload) {
+          replies.push(payload);
+          return {
+            id: "reply_tools",
+            text: payload.text,
+            card: payload.card
+          };
+        }
+      };
+
+      const result = await handleAiChatCommandRoute({
+        prepared: {
+          api,
+          modelDirective: {
+            command: {
+              type: "list-tools"
+            }
+          },
+          modelSettings: {
+            textModel: "openai::deepseek-v4-pro",
+            lastListedModels: []
+          }
+        }
+      });
+
+      const artifact = result.result.artifacts[0];
+      assert.equal(replies[0].card.title, "AI Agent 工具列表");
+      assert.equal(artifact.type, "agent-tools");
+      assert.equal(artifact.count, artifact.capabilities.length);
+      assert.ok(artifact.health);
+      assert.ok(Array.isArray(artifact.workflows));
+      assert.ok(artifact.workflows.some((workflow) => workflow.id === "media-summary"));
+      const videoCapability = artifact.capabilities.find((item) => item.id === "invoke_video_analyze");
+      assert.equal(videoCapability.kind, "tool");
+      assert.ok(["blocked", "warn", "ok", "error", "unknown"].includes(videoCapability.status));
+      assert.equal(typeof videoCapability.readiness.ready, "boolean");
+      assert.ok(videoCapability.output.required.includes("status"));
+      assert.ok(videoCapability.permissions.includes("bot:invoke"));
+      const mediaWorkflow = artifact.workflows.find((workflow) => workflow.id === "media-summary");
+      assert.ok(mediaWorkflow.steps.some((step) => step.id === "invoke_video_analyze"));
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(appDataRoot, { recursive: true, force: true });
+  }
+});
+
 test("trace command route publishes latest agent trace report", async () => {
   const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-trace-command-"));
   const jobId = "botjob_trace_command";
