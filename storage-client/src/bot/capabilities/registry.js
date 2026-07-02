@@ -36,6 +36,18 @@ const BOT_HEALTH_CHECKS = {
   "aria2.downloader": ["storage-root", "bot-queue"]
 };
 
+const BOT_PERMISSIONS = {
+  "ai.chat": ["agent:execute", "tool:invoke", "chat:reply"],
+  "ai.multimodal-image": ["ai:model:invoke", "storage:content:read"],
+  "music.control": ["music:control"],
+  "video.analyze": ["bot:invoke", "ai:model:invoke", "storage:content:read", "storage:metadata:write"],
+  "video.tag": ["bot:invoke", "ai:model:invoke", "storage:metadata:write"],
+  "bilibili.downloader": ["bot:invoke", "network:download", "storage:file:write"],
+  "ytdlp.downloader": ["bot:invoke", "network:download", "storage:file:write"],
+  "torrent.downloader": ["bot:invoke", "network:download", "storage:file:write"],
+  "aria2.downloader": ["bot:invoke", "network:download", "storage:file:write"]
+};
+
 const TOOL_RISK_LEVELS = {
   list_storage_files: "low",
   search_library_files: "low",
@@ -67,6 +79,72 @@ const TOOL_RISK_LEVELS = {
   describe_image: "low",
   search_yyets_show: "low",
   download_yyets_episodes: "medium"
+};
+
+const TOOL_CAPABILITY_TAGS = {
+  list_storage_files: ["file-index", "file-search"],
+  search_library_files: ["file-index", "file-search"],
+  read_file_metadata: ["file-metadata", "file-access"],
+  diagnose_file_access: ["file-access", "dependency-diagnostic"],
+  read_text_excerpt: ["file-excerpt", "document-text"],
+  read_media_summary: ["media-metadata", "derived-content"],
+  analyze_file_content: ["file-analysis", "model-inference"],
+  update_file_metadata: ["metadata-write"],
+  organize_files: ["file-mutation"],
+  explain_file_access: ["file-access", "policy-explanation"],
+  get_storage_file_details: ["file-metadata", "derived-content"],
+  invoke_video_analyze: ["media-analysis", "bot-delegation"],
+  analyze_storage_video: ["media-analysis", "bot-delegation"],
+  invoke_video_tag: ["media-tagging", "metadata-write", "bot-delegation"],
+  tag_storage_video: ["media-tagging", "metadata-write", "bot-delegation"],
+  invoke_music_control: ["music-control", "bot-delegation"],
+  invoke_bilibili_downloader: ["download", "bot-delegation"],
+  invoke_ytdlp_downloader: ["download", "bot-delegation"],
+  invoke_torrent_downloader: ["download", "bot-delegation"],
+  invoke_aria2_downloader: ["download", "bot-delegation"],
+  import_bilibili_video: ["download", "bot-delegation"],
+  search_bilibili_video: ["web-search", "bilibili-search"],
+  search_web: ["web-search"],
+  read_chat_history: ["chat-history"],
+  get_bot_job_status: ["job-diagnostic"],
+  read_agent_trace: ["agent-trace"],
+  read_bot_job_log: ["job-log"],
+  describe_image: ["image-analysis", "model-inference"],
+  search_yyets_show: ["web-search", "resource-search"],
+  download_yyets_episodes: ["download", "bot-delegation"]
+};
+
+const TOOL_PERMISSIONS = {
+  list_storage_files: ["storage:index:read"],
+  search_library_files: ["storage:index:read"],
+  read_file_metadata: ["storage:metadata:read"],
+  diagnose_file_access: ["storage:metadata:read"],
+  read_text_excerpt: ["storage:content:read"],
+  read_media_summary: ["storage:derived:read"],
+  analyze_file_content: ["ai:model:invoke", "storage:content:read", "bot:invoke"],
+  update_file_metadata: ["storage:metadata:write"],
+  organize_files: ["storage:file:move", "storage:file:rename"],
+  explain_file_access: ["storage:policy:read"],
+  get_storage_file_details: ["storage:metadata:read", "storage:derived:read"],
+  invoke_video_analyze: ["bot:invoke", "ai:model:invoke", "storage:content:read", "storage:metadata:write"],
+  analyze_storage_video: ["bot:invoke", "ai:model:invoke", "storage:content:read", "storage:metadata:write"],
+  invoke_video_tag: ["bot:invoke", "ai:model:invoke", "storage:metadata:write"],
+  tag_storage_video: ["bot:invoke", "ai:model:invoke", "storage:metadata:write"],
+  invoke_music_control: ["bot:invoke", "music:control"],
+  invoke_bilibili_downloader: ["bot:invoke", "network:download", "storage:file:write"],
+  invoke_ytdlp_downloader: ["bot:invoke", "network:download", "storage:file:write"],
+  invoke_torrent_downloader: ["bot:invoke", "network:download", "storage:file:write"],
+  invoke_aria2_downloader: ["bot:invoke", "network:download", "storage:file:write"],
+  import_bilibili_video: ["bot:invoke", "network:download", "storage:file:write"],
+  search_bilibili_video: ["network:search"],
+  search_web: ["network:search"],
+  read_chat_history: ["chat:history:read"],
+  get_bot_job_status: ["job:status:read"],
+  read_agent_trace: ["job:trace:read"],
+  read_bot_job_log: ["job:log:read"],
+  describe_image: ["ai:model:invoke", "storage:content:read"],
+  search_yyets_show: ["network:search"],
+  download_yyets_episodes: ["bot:invoke", "network:download", "storage:file:write"]
 };
 
 const TOOL_HEALTH_CHECKS = {
@@ -217,6 +295,20 @@ function normalizeRiskLevel(value = "low") {
   return ["low", "medium", "high"].includes(value) ? value : "low";
 }
 
+function uniqueStrings(items = []) {
+  const seen = new Set();
+  const result = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const value = String(item || "").trim();
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
 export function buildCapabilityDescriptors(api = {}) {
   const bots = typeof api.listBots === "function" ? api.listBots() : [];
   const botCapabilities = bots.map((bot) => ({
@@ -225,8 +317,8 @@ export function buildCapabilityDescriptors(api = {}) {
     displayName: String(bot.displayName || bot.botId || "").trim(),
     description: String(bot.description || "").trim(),
     inputSchema: bot.inputSchema && typeof bot.inputSchema === "object" ? bot.inputSchema : { type: "object", properties: {} },
-    capabilities: Array.isArray(bot.capabilities) ? bot.capabilities.map((item) => String(item || "").trim()).filter(Boolean) : [],
-    permissions: Array.isArray(bot.permissions) ? bot.permissions : [],
+    capabilities: uniqueStrings(bot.capabilities),
+    permissions: uniqueStrings(Array.isArray(bot.permissions) && bot.permissions.length ? bot.permissions : BOT_PERMISSIONS[bot.botId]),
     riskLevel: normalizeRiskLevel(BOT_RISK_LEVELS[bot.botId] || "low"),
     executionMode: BOT_EXECUTION_MODES[bot.botId] || "async-job",
     requiresConfirmation: BOT_RISK_LEVELS[bot.botId] === "high",
@@ -240,8 +332,8 @@ export function buildCapabilityDescriptors(api = {}) {
     displayName: String(tool.name || "").trim(),
     description: String(tool.description || "").trim(),
     inputSchema: tool.inputSchema && typeof tool.inputSchema === "object" ? tool.inputSchema : { type: "object", properties: {} },
-    capabilities: [],
-    permissions: [],
+    capabilities: uniqueStrings(TOOL_CAPABILITY_TAGS[tool.name]),
+    permissions: uniqueStrings(TOOL_PERMISSIONS[tool.name]),
     riskLevel: normalizeRiskLevel(TOOL_RISK_LEVELS[tool.name] || "low"),
     executionMode: [
       "analyze_file_content",
@@ -410,6 +502,16 @@ export function summarizeCapabilityExecutionReadiness(descriptor = {}, health = 
   };
 }
 
+function formatCapabilityListValue(items = [], { maxItems = 4, separator = "/" } = {}) {
+  const values = uniqueStrings(items);
+  if (!values.length) {
+    return "";
+  }
+  const visible = values.slice(0, maxItems);
+  const suffix = values.length > visible.length ? `${separator}+${values.length - visible.length}` : "";
+  return `${visible.join(separator)}${suffix}`;
+}
+
 export function formatCapabilityReport(descriptors = [], health = {}) {
   const statusLabel = {
     ok: "ok",
@@ -426,8 +528,15 @@ export function formatCapabilityReport(descriptors = [], health = {}) {
     lines.push("", kind === "bot" ? "Bot:" : "Tools:");
     for (const item of items) {
       const availability = summarizeCapabilityAvailability(item, health);
-      const caps = item.capabilities.length ? ` · ${item.capabilities.join(", ")}` : "";
-      lines.push(`- [${statusLabel[availability.status] || availability.status}] ${item.id} · ${item.displayName || item.id} · risk=${item.riskLevel} · mode=${item.executionMode}${caps}`);
+      const caps = formatCapabilityListValue(item.capabilities, { maxItems: 4, separator: ", " });
+      const permissions = formatCapabilityListValue(item.permissions, { maxItems: 4, separator: ", " });
+      const metadata = [
+        `risk=${item.riskLevel}`,
+        `mode=${item.executionMode}`,
+        caps ? `caps=${caps}` : "",
+        permissions ? `perms=${permissions}` : ""
+      ].filter(Boolean).join(" · ");
+      lines.push(`- [${statusLabel[availability.status] || availability.status}] ${item.id} · ${item.displayName || item.id} · ${metadata}`);
       if (availability.status !== "ok") {
         lines.push(`  - ${availability.detail}`);
         for (const hint of (Array.isArray(availability.repairHints) ? availability.repairHints : []).slice(0, 3)) {
@@ -480,8 +589,10 @@ export function formatCapabilityPromptSummary(descriptors = [], health = {}, opt
     lines.push("Core capabilities available to consider:");
     for (const item of selected) {
       const availability = summarizeCapabilityAvailability(item, health);
+      const caps = formatCapabilityListValue(item.capabilities, { maxItems: 3 });
+      const permissions = formatCapabilityListValue(item.permissions, { maxItems: 3 });
       const examples = Array.isArray(item.examples) && item.examples.length ? ` examples=${item.examples.slice(0, 2).join(" / ")}` : "";
-      lines.push(`- ${item.id}: status=${availability.status}, risk=${item.riskLevel}, mode=${item.executionMode}.${examples}`);
+      lines.push(`- ${item.id}: status=${availability.status}, risk=${item.riskLevel}, mode=${item.executionMode}${caps ? `, caps=${caps}` : ""}${permissions ? `, perms=${permissions}` : ""}.${examples}`);
     }
   }
   const workflows = selectCapabilityWorkflows(descriptors, maxWorkflows);

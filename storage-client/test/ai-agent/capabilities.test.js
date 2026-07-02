@@ -363,6 +363,13 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.ok(byId.get("analyze_file_content").healthChecks.includes("document-text"));
   assert.deepEqual(byId.get("invoke_music_control").healthChecks, ["music-bridge", "qq-music-cookie"]);
   assert.ok(byId.get("invoke_bilibili_downloader").healthChecks.includes("bilibili-auth"));
+  assert.ok(byId.get("video.analyze").permissions.includes("storage:metadata:write"));
+  assert.ok(byId.get("read_text_excerpt").capabilities.includes("file-excerpt"));
+  assert.ok(byId.get("read_text_excerpt").permissions.includes("storage:content:read"));
+  assert.ok(byId.get("update_file_metadata").permissions.includes("storage:metadata:write"));
+  assert.ok(byId.get("organize_files").capabilities.includes("file-mutation"));
+  assert.ok(byId.get("organize_files").permissions.includes("storage:file:move"));
+  assert.ok(byId.get("invoke_bilibili_downloader").permissions.includes("network:download"));
 
   const summary = formatCapabilityPromptSummary(descriptors, {
     overall: "warn",
@@ -421,6 +428,10 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(summary, /invoke_bilibili_downloader/);
   assert.match(summary, /invoke_torrent_downloader/);
   assert.match(summary, /invoke_aria2_downloader/);
+  assert.match(summary, /perms=storage:index:read/);
+  assert.match(summary, /caps=file-mutation/);
+  assert.match(summary, /perms=storage:file:move\/storage:file:rename/);
+  assert.match(summary, /perms=bot:invoke\/network:download\/storage:file:write/);
   assert.match(summary, /Recommended task workflows/);
   assert.match(summary, /media-summary: search_library_files -> read_media_summary -> invoke_video_analyze -> get_bot_job_status/);
   assert.match(summary, /hasAiSummary=false/);
@@ -439,6 +450,9 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(summary, /\[local-path\]/);
   assert.doesNotMatch(summary, /C:\\Secret/);
   assert.match(report, /video\.analyze/);
+  assert.match(report, /perms=storage:content:read/);
+  assert.match(report, /caps=file-mutation/);
+  assert.match(report, /perms=storage:file:move, storage:file:rename/);
   assert.match(report, /常用工作流/);
   assert.match(report, /media-summary · Summarize NAS video\/audio: search_library_files -> read_media_summary -> invoke_video_analyze -> get_bot_job_status/);
   assert.match(report, /hasAiSummary=false/);
