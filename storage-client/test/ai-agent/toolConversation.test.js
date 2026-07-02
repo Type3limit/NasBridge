@@ -574,6 +574,64 @@ test("tool execution preflight blocks image analysis when vision model is unavai
   assert.match(api.logs.join("\n"), /tool-call-blocked analyze_file_content: ai-vision-model/);
 });
 
+test("failed file access tools surface recoverable fallback actions in trace", async () => {
+  const api = createFakeApi();
+  await assert.rejects(
+    () => executePendingToolCallsRound({
+      pendingToolCalls: [
+        {
+          id: "call_excerpt_video",
+          name: "read_text_excerpt",
+          input: {
+            fileId: "client:Videos/demo.mp4",
+            maxChars: 2000
+          }
+        }
+      ],
+      planningMessages: [
+        {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              id: "call_excerpt_video",
+              type: "function",
+              function: {
+                name: "read_text_excerpt",
+                arguments: JSON.stringify({
+                  fileId: "client:Videos/demo.mp4",
+                  maxChars: 2000
+                })
+              }
+            }
+          ]
+        }
+      ],
+      recentMessages: [],
+      context: { chat: {}, attachments: [] },
+      api,
+      round: 0
+    }),
+    /不是可直接读取的文本类型/
+  );
+
+  assert.equal(api.toolEvents[0].status, "failed");
+  assert.equal(api.toolEvents[0].inputSummary.tool, "read_text_excerpt");
+  assert.deepEqual(api.toolEvents[0].inputSummary.identifiers, ["client:Videos/demo.mp4"]);
+  assert.match(api.toolEvents[0].errorSummary.message, /不是可直接读取的文本类型/);
+  assert.equal(api.toolEvents[0].resultSummary.status, "failed");
+  assert.deepEqual(api.toolEvents[0].resultSummary.fallbackActions.map((action) => action.tool), [
+    "diagnose_file_access",
+    "read_media_summary"
+  ]);
+  assert.deepEqual(api.toolEvents[0].resultSummary.fallbackActions[0].input, {
+    fileId: "client:Videos/demo.mp4"
+  });
+  assert.equal(api.toolEvents[0].resultSummary.fallbackActions[1].input.includeTranscriptExcerpt, true);
+  assert.deepEqual(api.toolEvents[0].resultSummary.repairCommands, ["@ai /file-access", "@ai /tools"]);
+  assert.doesNotMatch(JSON.stringify(api.toolEvents[0]), /D:[/\\]NAS/);
+});
+
 test("delegated tool results write structured job refs into tool trace events", async () => {
   const api = createFakeApi();
   api.botId = "ai.chat";

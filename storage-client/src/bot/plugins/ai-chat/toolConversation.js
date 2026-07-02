@@ -669,6 +669,19 @@ const FILE_ANALYSIS_TOOL_NAMES = new Set([
   "read_media_summary"
 ]);
 
+const FILE_ACCESS_RECOVERY_TOOL_NAMES = new Set([
+  "list_storage_files",
+  "search_library_files",
+  "read_file_metadata",
+  "diagnose_file_access",
+  "read_text_excerpt",
+  "read_media_summary",
+  "analyze_file_content",
+  "get_storage_file_details",
+  "invoke_video_analyze",
+  "analyze_storage_video"
+]);
+
 function pickSafeFileTargetInput(input = {}) {
   const fileId = String(input.fileId || "").trim();
   if (fileId && !isUnsafeLocalPath(fileId)) {
@@ -743,6 +756,91 @@ function buildBlockedToolFallbackActions(toolName = "", input = {}, blocker = {}
   return actions.slice(0, 4);
 }
 
+function addUniqueFallbackAction(actions = [], action = null) {
+  if (!action?.tool) {
+    return;
+  }
+  const key = [
+    action.tool,
+    action.contentLayer || "",
+    JSON.stringify(action.input || {})
+  ].join(":");
+  if (actions.some((item) => [
+    item.tool,
+    item.contentLayer || "",
+    JSON.stringify(item.input || {})
+  ].join(":") === key)) {
+    return;
+  }
+  actions.push(action);
+}
+
+function buildFailedFileAccessFallbackActions(toolName = "", input = {}, error = null) {
+  const normalizedTool = String(toolName || "").trim();
+  if (!FILE_ACCESS_RECOVERY_TOOL_NAMES.has(normalizedTool)) {
+    return [];
+  }
+  const message = String(error?.message || error || "").trim();
+  const targetInput = pickSafeFileTargetInput(input);
+  const hasTarget = Object.keys(targetInput).length > 0;
+  const isMissingTarget = /fileId or path is required|fileIds or paths is required/i.test(message);
+  const isNotFound = /文件未找到|file-not-found|not found|不在当前.*索引/i.test(message);
+  const isNonText = /不是可直接读取的文本类型|not.*text|binary/i.test(message);
+  const isStorageBoundary = /\[outside-storage-root\]|outside-storage-root|storage root|STORAGE_ROOT|unsafe|outside/i.test(message);
+  const actions = [];
+
+  if (isStorageBoundary) {
+    addUniqueFallbackAction(actions, {
+      tool: "explain_file_access",
+      input: { kind: "summary" },
+      contentLayer: "policy",
+      riskLevel: "low",
+      reason: "文件访问失败涉及 storage root 或路径边界；先解释当前可访问范围和限制。"
+    });
+  }
+
+  if ((isMissingTarget || isNotFound || !hasTarget) && normalizedTool !== "search_library_files") {
+    addUniqueFallbackAction(actions, {
+      tool: "search_library_files",
+      input: {
+        kind: MEDIA_ANALYSIS_TOOL_NAMES.has(normalizedTool) || isAnalyzeFileContentMediaStart(normalizedTool, input) ? "video" : "all",
+        limit: 5
+      },
+      contentLayer: "index",
+      riskLevel: "low",
+      reason: "文件定位失败时，先重新搜索 NAS 索引并取得 fileId。"
+    });
+  }
+
+  if (hasTarget && normalizedTool !== "diagnose_file_access") {
+    addUniqueFallbackAction(actions, {
+      tool: "diagnose_file_access",
+      input: targetInput,
+      contentLayer: "metadata",
+      riskLevel: "low",
+      reason: "工具执行失败后，先诊断该文件可读层级、依赖状态和下一步工具。"
+    });
+  }
+
+  if (hasTarget && isNonText && normalizedTool !== "read_media_summary") {
+    addUniqueFallbackAction(actions, {
+      tool: "read_media_summary",
+      input: {
+        ...targetInput,
+        includeSummary: true,
+        includeProbe: true,
+        includeTranscriptExcerpt: true,
+        maxChars: 4000
+      },
+      contentLayer: "derived-media",
+      riskLevel: "low",
+      reason: "目标不是可直接读取的文本；先读取已有媒体摘要、字幕和派生信息。"
+    });
+  }
+
+  return actions.slice(0, 4);
+}
+
 function buildBlockedToolRepairCommands(blocker = {}) {
   const blockerId = String(blocker?.id || "").trim();
   const commands = [];
@@ -756,6 +854,19 @@ function buildBlockedToolRepairCommands(blocker = {}) {
     commands.push("@ai /jobs");
   }
   commands.push("@ai /health", "@ai /tools");
+  return [...new Set(commands)];
+}
+
+function buildFailedFileAccessRepairCommands(toolName = "", input = {}, error = null) {
+  const fallbackActions = buildFailedFileAccessFallbackActions(toolName, input, error);
+  if (!fallbackActions.length) {
+    return [];
+  }
+  const message = String(error?.message || error || "");
+  const commands = ["@ai /file-access", "@ai /tools"];
+  if (/storage root|STORAGE_ROOT|\[outside-storage-root\]|outside-storage-root/i.test(message)) {
+    commands.unshift("@ai /health");
+  }
   return [...new Set(commands)];
 }
 
@@ -1276,6 +1387,35 @@ function summarizeToolErrorForTrace(error = null, toolName = "", api = {}) {
   }));
 }
 
+function summarizeToolFailureResultForTrace(error = null, toolName = "", api = {}, input = {}) {
+  const fallbackActions = buildFailedFileAccessFallbackActions(toolName, input, error)
+    .map(summarizeAccessActionForTrace)
+    .filter(Boolean)
+    .slice(0, 5);
+  const repairCommands = buildFailedFileAccessRepairCommands(toolName, input, error)
+    .map((item) => redactLocalPaths(String(item || "").trim()))
+    .filter(Boolean)
+    .slice(0, 5);
+  return Object.fromEntries(Object.entries({
+    status: "failed",
+    errorMessage: String(error?.message || error || "unknown error").trim().slice(0, 500),
+    fallbackActions,
+    repairCommands,
+    capability: summarizeCapabilityForTrace(toolName, api)
+  }).filter(([, value]) => {
+    if (value === null || value === undefined || value === "") {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    if (value && typeof value === "object") {
+      return Object.keys(value).length > 0;
+    }
+    return true;
+  }));
+}
+
 export function getAiToolProgress(toolName = "", round = 0) {
   const safeRound = Math.max(0, Number(round) || 0);
   const offset = Math.min(MAX_TOOL_ROUND_OFFSET, safeRound * 5);
@@ -1732,6 +1872,9 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
         });
       } catch (error) {
         const cancelled = error?.name === "AbortError" || /job cancelled/i.test(String(error?.message || ""));
+        const failureResultSummary = cancelled
+          ? null
+          : summarizeToolFailureResultForTrace(error, toolCall.name, api, toolCall.input || {});
         await recordToolExecutionEvent(traceHooks, api, {
           name: toolCall.name,
           round,
@@ -1740,7 +1883,8 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
           inputSummary,
           ...buildTraceTiming(startedAt, startedMs),
           outputPreview: String(error?.message || error || ""),
-          errorSummary: summarizeToolErrorForTrace(error, toolCall.name, api)
+          errorSummary: summarizeToolErrorForTrace(error, toolCall.name, api),
+          ...(failureResultSummary ? { resultSummary: failureResultSummary } : {})
         });
         throw error;
       }
