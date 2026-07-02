@@ -302,6 +302,52 @@ function extractPendingConfirmation(traceEvents = []) {
   return null;
 }
 
+function compactFileAccessSuggestedAction(action = null) {
+  if (!action || typeof action !== "object") {
+    return null;
+  }
+  const tool = String(action.tool || "").trim();
+  if (!tool || action.blocked === true) {
+    return null;
+  }
+  return Object.fromEntries(Object.entries({
+    id: String(action.id || "").trim(),
+    tool,
+    contentLayer: String(action.contentLayer || "").trim(),
+    riskLevel: String(action.riskLevel || "").trim(),
+    requiresConfirmation: action.requiresConfirmation === true,
+    reason: String(action.reason || "").trim().slice(0, 180)
+  }).filter(([, value]) => value !== "" && value !== null && value !== undefined));
+}
+
+function extractFileAccessSuggestedActions(traceEvents = []) {
+  const result = [];
+  const seen = new Set();
+  const events = Array.isArray(traceEvents) ? traceEvents : [];
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (String(event?.kind || "").trim() !== "tool") {
+      continue;
+    }
+    const actions = Array.isArray(event?.resultSummary?.fileAccess?.actionPlan)
+      ? event.resultSummary.fileAccess.actionPlan
+      : [];
+    for (const action of actions) {
+      const compact = compactFileAccessSuggestedAction(action);
+      const key = compact ? `${compact.tool}:${compact.contentLayer || ""}:${compact.riskLevel || ""}` : "";
+      if (!compact || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      result.push(compact);
+      if (result.length >= 5) {
+        return result;
+      }
+    }
+  }
+  return result;
+}
+
 export async function readExecutionPendingConfirmation(appDataRoot = "", jobId = "") {
   const traceEvents = await readExecutionTraceEvents(appDataRoot, jobId);
   return extractPendingConfirmation(traceEvents);
@@ -313,16 +359,20 @@ export async function readAiSessionCheckpoint(appDataRoot = "", sessionId = 0) {
     return checkpoint;
   }
   const latestSnapshot = await readExecutionSnapshot(appDataRoot, checkpoint.latestExecution.jobId);
-  const pendingConfirmation = await readExecutionPendingConfirmation(appDataRoot, checkpoint.latestExecution.jobId);
+  const traceEvents = await readExecutionTraceEvents(appDataRoot, checkpoint.latestExecution.jobId);
+  const pendingConfirmation = extractPendingConfirmation(traceEvents);
+  const fileAccessSuggestedActions = extractFileAccessSuggestedActions(traceEvents);
   return {
     ...checkpoint,
     latestSnapshot: latestSnapshot
       ? {
           ...latestSnapshot,
-          pendingConfirmation
+          pendingConfirmation,
+          fileAccessSuggestedActions
         }
       : latestSnapshot,
-    pendingConfirmation
+    pendingConfirmation,
+    fileAccessSuggestedActions
   };
 }
 

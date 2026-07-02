@@ -52,6 +52,9 @@ export function createRecoveryReplyText(recoveryGuidance = null) {
   if (recoveryAction.nextStep) {
     lines.push(`建议动作：${recoveryAction.nextStep}`);
   }
+  if (recoveryAction.suggestedNextStep && !lines.some((line) => String(line || "").includes(recoveryAction.suggestedNextStep))) {
+    lines.push(recoveryAction.suggestedNextStep);
+  }
   if (Array.isArray(recoveryAction?.retryPolicy?.blockedRetryToolNames) && recoveryAction.retryPolicy.blockedRetryToolNames.length) {
     lines.push(`本次不直接重试的工具：${recoveryAction.retryPolicy.blockedRetryToolNames.join("、")}`);
   }
@@ -82,7 +85,9 @@ export function createRecoveryArtifact(recoveryGuidance = null, session = null) 
     directRetryAllowed: recoveryAction.directRetryAllowed === true,
     pendingTools: Array.isArray(recoveryAction?.retryPolicy?.pendingToolNames) ? recoveryAction.retryPolicy.pendingToolNames : [],
     retryableTools: Array.isArray(recoveryAction?.retryPolicy?.retryableToolNames) ? recoveryAction.retryPolicy.retryableToolNames : [],
-    blockedRetryTools: Array.isArray(recoveryAction?.retryPolicy?.blockedRetryToolNames) ? recoveryAction.retryPolicy.blockedRetryToolNames : []
+    blockedRetryTools: Array.isArray(recoveryAction?.retryPolicy?.blockedRetryToolNames) ? recoveryAction.retryPolicy.blockedRetryToolNames : [],
+    fileAccessSuggestedActions: Array.isArray(recoveryAction.fileAccessSuggestedActions) ? recoveryAction.fileAccessSuggestedActions : [],
+    suggestedNextStep: recoveryAction.suggestedNextStep || ""
   };
 }
 

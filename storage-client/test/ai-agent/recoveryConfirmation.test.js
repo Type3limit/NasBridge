@@ -11,6 +11,7 @@ import {
   buildSessionRecoveryGuidance,
   isConfirmationPrompt
 } from "../../src/bot/langgraph/nodes/recoveryNodes.js";
+import { createRecoveryArtifact, createRecoveryReplyText } from "../../src/bot/plugins/ai-chat/recovery.js";
 import { createAiSession } from "../../src/bot/plugins/ai-chat/services/aiSessions.js";
 
 async function withTempDir(fn) {
@@ -114,6 +115,95 @@ async function writePendingConfirmationCheckpoint(appDataRoot, sessionId = 1) {
   })}\n`, "utf8");
 }
 
+async function writeFileAccessSuggestedActionCheckpoint(appDataRoot, sessionId = 1) {
+  const graphRoot = path.join(appDataRoot, "ai-chat-graph");
+  const jobId = "botjob_file_access_suggestion";
+  await fs.mkdir(path.join(graphRoot, "sessions"), { recursive: true });
+  await fs.mkdir(path.join(graphRoot, "executions"), { recursive: true });
+  await fs.mkdir(path.join(graphRoot, "traces"), { recursive: true });
+  await fs.writeFile(path.join(graphRoot, "sessions", `${sessionId}.json`), `${JSON.stringify({
+    savedAt: "2026-07-02T00:00:00.000Z",
+    sessionId,
+    latestExecution: {
+      jobId,
+      status: "failed",
+      route: "text",
+      traceCount: 5,
+      lastNode: "textAnswer",
+      historyPath: "",
+      replyPreview: "上次已经诊断过这个视频的可访问层。",
+      snapshotPath: path.join(graphRoot, "executions", `${jobId}.json`),
+      tracePath: path.join(graphRoot, "traces", `${jobId}.jsonl`)
+    }
+  }, null, 2)}\n`, "utf8");
+  await fs.writeFile(path.join(graphRoot, "executions", `${jobId}.json`), `${JSON.stringify({
+    savedAt: "2026-07-02T00:00:00.000Z",
+    jobId,
+    botId: "ai.chat",
+    sessionId,
+    status: "failed",
+    route: "text",
+    traceSummary: {
+      count: 5,
+      kinds: ["node", "tool"],
+      nodes: ["prepareInput", "prepareContext", "textAnswer"],
+      lastNode: "textAnswer",
+      lastStatus: "failed",
+      lastAt: "2026-07-02T00:00:00.000Z"
+    },
+    result: {
+      reply: {
+        textPreview: "上次已经诊断过这个视频的可访问层。"
+      }
+    },
+    recoveryState: {
+      toolRound: 1,
+      pendingToolNames: [],
+      planningMessages: [],
+      pendingToolCalls: []
+    }
+  }, null, 2)}\n`, "utf8");
+  await fs.writeFile(path.join(graphRoot, "traces", `${jobId}.jsonl`), `${JSON.stringify({
+    sequence: 4,
+    at: "2026-07-02T00:00:00.000Z",
+    jobId,
+    kind: "tool",
+    tool: "diagnose_file_access",
+    round: 0,
+    status: "completed",
+    resultSummary: {
+      status: "ok",
+      fileAccess: {
+        found: true,
+        contentAccess: { analyzeMode: "media" },
+        actionPlan: [
+          {
+            id: "read-media-summary",
+            tool: "read_media_summary",
+            contentLayer: "derived-media",
+            riskLevel: "low",
+            reason: "已有摘要或媒体派生信息，先读取 media summary。"
+          },
+          {
+            id: "start-media-analysis",
+            tool: "invoke_video_analyze",
+            contentLayer: "analysis",
+            riskLevel: "medium",
+            reason: "没有摘要时启动后台分析任务。"
+          },
+          {
+            id: "repair-analysis-dependencies",
+            tool: "diagnose_file_access",
+            blocked: true,
+            blockerIds: ["dependency-whisper"],
+            reason: "Whisper 未就绪。"
+          }
+        ]
+      }
+    }
+  })}\n`, "utf8");
+}
+
 test("session checkpoint exposes pending confirmation from tool trace", async () => {
   await withTempDir(async (appDataRoot) => {
     await writePendingConfirmationCheckpoint(appDataRoot, 1);
@@ -140,6 +230,30 @@ test("session checkpoint exposes pending confirmation from tool trace", async ()
       confirmed: true
     });
     assert.equal(recovered.recoveredPlanningMessages.at(-1).tool_calls[0].function.name, "invoke_video_tag");
+  });
+});
+
+test("session recovery guidance includes file access suggested actions from trace", async () => {
+  await withTempDir(async (appDataRoot) => {
+    await writeFileAccessSuggestedActionCheckpoint(appDataRoot, 1);
+    const checkpoint = await readAiSessionCheckpoint(appDataRoot, 1);
+
+    assert.deepEqual(checkpoint.fileAccessSuggestedActions.map((action) => action.tool), ["read_media_summary", "invoke_video_analyze"]);
+    assert.equal(checkpoint.latestSnapshot.fileAccessSuggestedActions[0].contentLayer, "derived-media");
+
+    const guidance = buildSessionRecoveryGuidance(checkpoint);
+    assert.equal(guidance.recoveryAction.mode, "answer-rebuild");
+    assert.deepEqual(guidance.recoveryAction.fileAccessSuggestedActions.map((action) => action.tool), ["read_media_summary", "invoke_video_analyze"]);
+    assert.match(guidance.recoveryAction.suggestedNextStep, /read_media_summary、invoke_video_analyze/);
+    assert.match(guidance.strategy, /文件访问诊断建议/);
+
+    const reply = createRecoveryReplyText(guidance);
+    assert.equal((reply.match(/文件访问诊断建议/g) || []).length, 1);
+    assert.match(reply, /read_media_summary、invoke_video_analyze/);
+
+    const artifact = createRecoveryArtifact(guidance, { id: 1 });
+    assert.deepEqual(artifact.fileAccessSuggestedActions.map((action) => action.tool), ["read_media_summary", "invoke_video_analyze"]);
+    assert.match(artifact.suggestedNextStep, /read_media_summary/);
   });
 });
 

@@ -75,6 +75,13 @@ export function buildSessionRecoveryGuidance(sessionRecovery = null) {
   const replyPreview = String(latestExecution.replyPreview || latestSnapshot?.result?.reply?.textPreview || "").trim();
   const recoveryState = latestSnapshot?.recoveryState || null;
   const pendingConfirmation = latestSnapshot?.pendingConfirmation || sessionRecovery?.pendingConfirmation || null;
+  const fileAccessSuggestedActions = Array.isArray(latestSnapshot?.fileAccessSuggestedActions)
+    ? latestSnapshot.fileAccessSuggestedActions
+    : (Array.isArray(sessionRecovery?.fileAccessSuggestedActions) ? sessionRecovery.fileAccessSuggestedActions : []);
+  const suggestedToolNames = fileAccessSuggestedActions.map((action) => String(action?.tool || "").trim()).filter(Boolean);
+  const suggestedNextStep = suggestedToolNames.length
+    ? `参考上次文件访问诊断建议，优先考虑下一步工具：${suggestedToolNames.join("、")}。`
+    : "";
   const summary = `该会话最近一次 LangGraph 执行：job=${latestExecution.jobId}，状态=${status}，路由=${route}，最后节点=${lastNode || "未知"}，上一条回复摘要：${replyPreview || "无"}。`;
   const recoveryAction = {
     mode: "resume-default",
@@ -91,7 +98,9 @@ export function buildSessionRecoveryGuidance(sessionRecovery = null) {
     recoveredPlanningMessages: [],
     recoveredPendingToolCalls: [],
     recoveredToolRound: 0,
-    pendingConfirmation
+    pendingConfirmation,
+    fileAccessSuggestedActions,
+    suggestedNextStep
   };
 
   let strategy = "延续这个会话时，应把上一次执行结果当作恢复线索，而不是盲目重复整个流程。";
@@ -156,6 +165,10 @@ export function buildSessionRecoveryGuidance(sessionRecovery = null) {
     recoveryAction.mode = "awaiting-confirmation";
     recoveryAction.route = "text";
     recoveryAction.nextStep = `等待用户确认后继续执行 ${pendingConfirmation.tool}`;
+  }
+
+  if (suggestedNextStep && !pendingConfirmation?.tool) {
+    strategy = `${strategy}${strategy.endsWith("。") ? "" : "。"}${suggestedNextStep}`;
   }
 
   return {
