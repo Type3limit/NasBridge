@@ -448,7 +448,7 @@ const CAPABILITY_EXAMPLES = {
   "video.tag": ["给这个视频生成标签"],
   "music.control": ["播放周杰伦的晴天", "暂停音乐", "查看队列"],
   "bilibili.downloader": ["去 B 站找教程并下载入库"],
-  search_library_files: ["找最近下载的视频", "查 Movies 目录里没有摘要的 mp4"],
+  search_library_files: ["找最近下载的视频", "查 Movies 目录里没有摘要的 mp4", "查最近 7 天大于 1GB 的视频"],
   diagnose_file_access: ["这个文件 AI 能读什么", "诊断这个视频为什么还不能总结"],
   read_text_excerpt: ["读取这个 PDF 的前 2000 字"],
   analyze_file_content: ["分析这个 NAS 文件", "总结这个 PDF 文档"],

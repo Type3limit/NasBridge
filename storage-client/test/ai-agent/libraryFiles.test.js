@@ -652,6 +652,67 @@ test("library search results include agent next steps and action plans", async (
   });
 });
 
+test("library search accepts human-friendly size and relative time filters", async () => {
+  await withTempDir(async (root) => {
+    const files = [
+      {
+        id: "client:Videos/recent-big.mp4",
+        clientId: "client",
+        path: "Videos/recent-big.mp4",
+        name: "recent-big.mp4",
+        size: 2 * 1024 * 1024,
+        mimeType: "video/mp4",
+        updatedAt: "2026-07-06T00:00:00.000Z"
+      },
+      {
+        id: "client:Videos/recent-small.mp4",
+        clientId: "client",
+        path: "Videos/recent-small.mp4",
+        name: "recent-small.mp4",
+        size: 256 * 1024,
+        mimeType: "video/mp4",
+        updatedAt: "2026-07-06T00:00:00.000Z"
+      },
+      {
+        id: "client:Videos/old-big.mp4",
+        clientId: "client",
+        path: "Videos/old-big.mp4",
+        name: "old-big.mp4",
+        size: 3 * 1024 * 1024,
+        mimeType: "video/mp4",
+        updatedAt: "2026-06-20T00:00:00.000Z"
+      }
+    ];
+    const api = createApi(root, files);
+    const recentLarge = await buildLibraryListResult(api, {
+      kind: "video",
+      updatedAfter: "7d",
+      minSize: "1MB",
+      referenceNow: "2026-07-08T00:00:00.000Z",
+      limit: 10
+    });
+
+    assert.equal(recentLarge.total, 1);
+    assert.equal(recentLarge.files[0].path, "Videos/recent-big.mp4");
+    assert.equal(recentLarge.filters.minSize, 1024 * 1024);
+    assert.equal(recentLarge.filters.parsedUpdatedAfter, Date.parse("2026-07-01T00:00:00.000Z"));
+    assert.equal(recentLarge.selection.confidence, "high");
+
+    const oldLarge = await buildLibraryListResult(api, {
+      kind: "video",
+      updatedBefore: "7d",
+      minSize: "1.5MB",
+      referenceNow: "2026-07-08T00:00:00.000Z",
+      limit: 10
+    });
+
+    assert.equal(oldLarge.total, 1);
+    assert.equal(oldLarge.files[0].path, "Videos/old-big.mp4");
+    assert.equal(oldLarge.filters.minSize, Math.floor(1.5 * 1024 * 1024));
+    assert.equal(oldLarge.filters.parsedUpdatedBefore, Date.parse("2026-07-01T00:00:00.000Z"));
+  });
+});
+
 test("organize_files blocks unsafe targets and requires confirmation for real moves", async () => {
   await withTempDir(async (root) => {
     const sourceRelative = "downloads/video.mp4";

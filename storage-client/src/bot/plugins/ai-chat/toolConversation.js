@@ -41,6 +41,13 @@ function validateJsonSchemaValue(value, schema = {}, pathLabel = "arguments") {
   if (!schema || typeof schema !== "object") {
     return [];
   }
+  if (Array.isArray(schema.anyOf) && schema.anyOf.length) {
+    const variantErrors = schema.anyOf.map((variant) => validateJsonSchemaValue(value, variant, pathLabel));
+    if (variantErrors.some((items) => items.length === 0)) {
+      return [];
+    }
+    return [`${pathLabel} must match one of the allowed schemas`];
+  }
   const errors = [];
   const type = Array.isArray(schema.type) ? schema.type[0] : String(schema.type || "").trim();
   if (schema.enum && Array.isArray(schema.enum) && !schema.enum.includes(value)) {

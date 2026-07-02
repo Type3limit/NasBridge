@@ -857,6 +857,7 @@ test("parseJsonToolPlan validates tools, schema arguments, and final answers", (
           query: { type: "string" },
           kind: { type: "string", enum: ["all", "video", "audio"] },
           tags: { type: "array", maxItems: 2, items: { type: "string" } },
+          minSize: { anyOf: [{ type: "number", minimum: 0 }, { type: "string" }] },
           limit: { type: "integer", minimum: 1, maximum: 80 }
         }
       }
@@ -900,6 +901,13 @@ test("parseJsonToolPlan validates tools, schema arguments, and final answers", (
   assert.equal(validTool.toolCall.name, "search_library_files");
   assert.equal(validTool.toolCall.id, "jsonplan_2_search_library_files");
   assert.deepEqual(validTool.toolCall.input, { query: "demo", kind: "video", tags: ["nas"], limit: 5 });
+
+  const validStringSize = parseJsonToolPlan(
+    JSON.stringify({ action: "call_tool", tool: "search_library_files", arguments: { query: "demo", minSize: "1GB" } }),
+    tools
+  );
+  assert.equal(validStringSize.ok, true);
+  assert.equal(validStringSize.toolCall.input.minSize, "1GB");
 
   const final = parseJsonToolPlan(
     JSON.stringify({ action: "final_answer", answer: "Done." }),

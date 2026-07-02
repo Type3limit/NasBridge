@@ -72,12 +72,111 @@ function normalizeExtensionList(input = {}) {
     .filter(Boolean);
 }
 
-function parseTimestamp(value) {
+function parseDurationMs(value = "") {
+  const text = String(value || "").trim().toLowerCase();
+  const match = text.match(/^(?:now\s*-\s*|-|last\s+)?(\d+(?:\.\d+)?)\s*(ms|millisecond|milliseconds|s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks|mo|month|months|y|yr|year|years)$/i);
+  if (!match) {
+    return null;
+  }
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount) || amount < 0) {
+    return null;
+  }
+  const unit = match[2].toLowerCase();
+  const multipliers = {
+    ms: 1,
+    millisecond: 1,
+    milliseconds: 1,
+    s: 1000,
+    sec: 1000,
+    secs: 1000,
+    second: 1000,
+    seconds: 1000,
+    m: 60 * 1000,
+    min: 60 * 1000,
+    mins: 60 * 1000,
+    minute: 60 * 1000,
+    minutes: 60 * 1000,
+    h: 60 * 60 * 1000,
+    hr: 60 * 60 * 1000,
+    hrs: 60 * 60 * 1000,
+    hour: 60 * 60 * 1000,
+    hours: 60 * 60 * 1000,
+    d: 24 * 60 * 60 * 1000,
+    day: 24 * 60 * 60 * 1000,
+    days: 24 * 60 * 60 * 1000,
+    w: 7 * 24 * 60 * 60 * 1000,
+    week: 7 * 24 * 60 * 60 * 1000,
+    weeks: 7 * 24 * 60 * 60 * 1000,
+    mo: 30 * 24 * 60 * 60 * 1000,
+    month: 30 * 24 * 60 * 60 * 1000,
+    months: 30 * 24 * 60 * 60 * 1000,
+    y: 365 * 24 * 60 * 60 * 1000,
+    yr: 365 * 24 * 60 * 60 * 1000,
+    year: 365 * 24 * 60 * 60 * 1000,
+    years: 365 * 24 * 60 * 60 * 1000
+  };
+  return Math.round(amount * (multipliers[unit] || 0));
+}
+
+function parseTimestamp(value, referenceNow = Date.now()) {
   if (value === null || value === undefined || value === "") {
     return null;
   }
-  const ts = Date.parse(String(value || ""));
+  const text = String(value || "").trim();
+  const relativeMs = parseDurationMs(text);
+  if (relativeMs !== null) {
+    const base = Date.parse(String(referenceNow || "")) || Number(referenceNow) || Date.now();
+    return base - relativeMs;
+  }
+  const ts = Date.parse(text);
   return Number.isFinite(ts) ? ts : null;
+}
+
+function parseSizeBytes(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+  }
+  const text = String(value || "").trim().toLowerCase().replace(/\s+/g, "");
+  if (!text) {
+    return null;
+  }
+  const numeric = Number(text);
+  if (Number.isFinite(numeric) && numeric >= 0) {
+    return Math.floor(numeric);
+  }
+  const match = text.match(/^(\d+(?:\.\d+)?)(b|bytes?|kb|kib|k|mb|mib|m|gb|gib|g|tb|tib|t|兆|吉|g)$/i);
+  if (!match) {
+    return null;
+  }
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount) || amount < 0) {
+    return null;
+  }
+  const unit = match[2].toLowerCase();
+  const multipliers = {
+    b: 1,
+    byte: 1,
+    bytes: 1,
+    k: 1024,
+    kb: 1024,
+    kib: 1024,
+    m: 1024 ** 2,
+    mb: 1024 ** 2,
+    mib: 1024 ** 2,
+    "兆": 1024 ** 2,
+    g: 1024 ** 3,
+    gb: 1024 ** 3,
+    gib: 1024 ** 3,
+    "吉": 1024 ** 3,
+    t: 1024 ** 4,
+    tb: 1024 ** 4,
+    tib: 1024 ** 4
+  };
+  return Math.floor(amount * (multipliers[unit] || 1));
 }
 
 function normalizeTagFilter(input = {}) {
@@ -367,12 +466,13 @@ export function filterLibraryFiles(files = [], input = {}) {
   const mimePrefix = String(input.mimePrefix || "").trim().toLowerCase();
   const extensions = normalizeExtensionList(input);
   const tagFilter = normalizeTagFilter(input);
-  const updatedAfter = parseTimestamp(input.updatedAfter || input.modifiedAfter || input.after);
-  const updatedBefore = parseTimestamp(input.updatedBefore || input.modifiedBefore || input.before);
-  const createdAfter = parseTimestamp(input.createdAfter);
-  const createdBefore = parseTimestamp(input.createdBefore);
-  const minSize = Number.isFinite(Number(input.minSize ?? input.sizeMin)) ? Number(input.minSize ?? input.sizeMin) : null;
-  const maxSize = Number.isFinite(Number(input.maxSize ?? input.sizeMax)) ? Number(input.maxSize ?? input.sizeMax) : null;
+  const referenceNow = input.referenceNow || input.now || Date.now();
+  const updatedAfter = parseTimestamp(input.updatedAfter || input.modifiedAfter || input.after, referenceNow);
+  const updatedBefore = parseTimestamp(input.updatedBefore || input.modifiedBefore || input.before, referenceNow);
+  const createdAfter = parseTimestamp(input.createdAfter, referenceNow);
+  const createdBefore = parseTimestamp(input.createdBefore, referenceNow);
+  const minSize = parseSizeBytes(input.minSize ?? input.sizeMin);
+  const maxSize = parseSizeBytes(input.maxSize ?? input.sizeMax);
   const includeSubtitles = input.includeSubtitles === true;
   const hasAiSummary = typeof input.hasAiSummary === "boolean" ? input.hasAiSummary : null;
   const hasSubtitle = typeof input.hasSubtitle === "boolean" ? input.hasSubtitle : null;
@@ -1322,12 +1422,25 @@ function buildOrganizeTargetPath(file = {}, action = {}) {
 function buildLibrarySearchSelection(page = [], total = 0, input = {}) {
   const query = String(input.query || "").trim();
   const kind = String(input.kind || "all").trim() || "all";
+  const referenceNow = input.referenceNow || input.now || Date.now();
+  const hasDateFilter = [
+    input.updatedAfter || input.modifiedAfter || input.after,
+    input.updatedBefore || input.modifiedBefore || input.before,
+    input.createdAfter,
+    input.createdBefore
+  ].some((value) => parseTimestamp(value, referenceNow) !== null);
+  const hasSizeFilter = [
+    input.minSize ?? input.sizeMin,
+    input.maxSize ?? input.sizeMax
+  ].some((value) => parseSizeBytes(value) !== null);
   const hasNarrowingFilter = Boolean(
     query ||
     kind !== "all" ||
     normalizeRelativePath(input.pathPrefix || input.folder || "") ||
     normalizeExtensionList(input).length ||
     normalizeTagFilter(input).tags.length ||
+    hasDateFilter ||
+    hasSizeFilter ||
     typeof input.hasAiSummary === "boolean" ||
     typeof input.hasSubtitle === "boolean"
   );
@@ -1343,7 +1456,7 @@ function buildLibrarySearchSelection(page = [], total = 0, input = {}) {
 function buildLibrarySearchNextActions(page = [], total = 0, input = {}) {
   if (total === 0) {
     return [
-      "没有匹配文件；放宽 kind/pathPrefix/tags/hasAiSummary/hasSubtitle 等筛选，或换关键词再次调用 search_library_files。",
+      "没有匹配文件；放宽 kind/pathPrefix/extensions/tags/updatedAfter/minSize/hasAiSummary/hasSubtitle 等筛选，或换关键词再次调用 search_library_files。",
       "如果用户提供的是模糊描述，先向用户列出当前筛选条件并询问更具体的目录、类型或文件名片段。"
     ];
   }
@@ -1483,6 +1596,7 @@ export async function buildLibraryListResult(api, input = {}) {
   const filtered = sortFiles(filterLibraryFiles(snapshot.files, input), input.sortBy, input.sortDirection);
   const page = filtered.slice(offset, offset + limit);
   const compactFiles = page.map((file, index) => compactLibraryFile(file, offset + index));
+  const referenceNow = input.referenceNow || input.now || Date.now();
   return {
     clientId: snapshot.clientId,
     total: filtered.length,
@@ -1501,8 +1615,12 @@ export async function buildLibraryListResult(api, input = {}) {
       updatedBefore: input.updatedBefore || input.modifiedBefore || input.before || "",
       createdAfter: input.createdAfter || "",
       createdBefore: input.createdBefore || "",
-      minSize: Number.isFinite(Number(input.minSize ?? input.sizeMin)) ? Number(input.minSize ?? input.sizeMin) : null,
-      maxSize: Number.isFinite(Number(input.maxSize ?? input.sizeMax)) ? Number(input.maxSize ?? input.sizeMax) : null,
+      minSize: parseSizeBytes(input.minSize ?? input.sizeMin),
+      maxSize: parseSizeBytes(input.maxSize ?? input.sizeMax),
+      parsedUpdatedAfter: parseTimestamp(input.updatedAfter || input.modifiedAfter || input.after, referenceNow),
+      parsedUpdatedBefore: parseTimestamp(input.updatedBefore || input.modifiedBefore || input.before, referenceNow),
+      parsedCreatedAfter: parseTimestamp(input.createdAfter, referenceNow),
+      parsedCreatedBefore: parseTimestamp(input.createdBefore, referenceNow),
       hasAiSummary: typeof input.hasAiSummary === "boolean" ? input.hasAiSummary : null,
       hasSubtitle: typeof input.hasSubtitle === "boolean" ? input.hasSubtitle : null
     },
