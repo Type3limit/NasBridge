@@ -1,7 +1,18 @@
 import { MAX_CARD_BODY_LENGTH } from "./constants.js";
 import { withSessionSubtitle } from "./parsers/sessionDirectives.js";
 
-const DIRECT_RETRY_TEXT_TOOLS = new Set(["read_chat_history"]);
+const DIRECT_RETRY_TEXT_TOOLS = new Set([
+  "read_chat_history",
+  "get_bot_job_status",
+  "read_agent_trace",
+  "list_storage_files",
+  "search_library_files",
+  "read_file_metadata",
+  "get_storage_file_details",
+  "read_text_excerpt",
+  "read_media_summary",
+  "explain_file_access"
+]);
 
 function getPendingToolNames(toolCalls = []) {
   return [...new Set(

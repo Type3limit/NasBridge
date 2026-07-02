@@ -176,3 +176,82 @@ test("prepare input routes explicit session confirmation to textTools", async ()
     assert.match(logs.join("\n"), /recovery scheduling: mode=confirmed-tool-call/);
   });
 });
+
+test("textTools recovery directly retries local read-only diagnostic tools", () => {
+  const pendingToolCalls = [
+    {
+      id: "call_status",
+      name: "get_bot_job_status",
+      input: { jobId: "botjob_parent" }
+    },
+    {
+      id: "call_media",
+      name: "read_media_summary",
+      input: { fileId: "client:movie.mp4" }
+    }
+  ];
+  const guidance = buildSessionRecoveryGuidance({
+    latestExecution: {
+      jobId: "botjob_recover_reads",
+      status: "failed",
+      route: "text",
+      lastNode: "textTools",
+      replyPreview: ""
+    },
+    latestSnapshot: {
+      status: "failed",
+      route: "text",
+      traceSummary: {
+        lastNode: "textTools"
+      },
+      recoveryState: {
+        toolRound: 2,
+        planningMessages: [{ role: "user", content: "刚才任务怎么样" }],
+        pendingToolCalls
+      }
+    }
+  });
+
+  assert.equal(guidance.recoveryAction.mode, "text-retry-tools");
+  assert.equal(guidance.recoveryAction.directRetryAllowed, true);
+  assert.deepEqual(guidance.recoveryAction.retryPolicy.retryableToolNames, ["get_bot_job_status", "read_media_summary"]);
+  assert.deepEqual(guidance.recoveryAction.retryPolicy.blockedRetryToolNames, []);
+  assert.equal(guidance.recoveryAction.recoveredPendingToolCalls.length, 2);
+  assert.equal(guidance.recoveryAction.recoveredToolRound, 2);
+});
+
+test("textTools recovery still replans for side-effecting delegated tools", () => {
+  const guidance = buildSessionRecoveryGuidance({
+    latestExecution: {
+      jobId: "botjob_recover_blocked",
+      status: "failed",
+      route: "text",
+      lastNode: "textTools",
+      replyPreview: ""
+    },
+    latestSnapshot: {
+      status: "failed",
+      route: "text",
+      traceSummary: {
+        lastNode: "textTools"
+      },
+      recoveryState: {
+        toolRound: 1,
+        planningMessages: [{ role: "user", content: "总结这个视频" }],
+        pendingToolCalls: [
+          {
+            id: "call_video",
+            name: "invoke_video_analyze",
+            input: { fileId: "client:movie.mp4" }
+          }
+        ]
+      }
+    }
+  });
+
+  assert.equal(guidance.recoveryAction.mode, "text-replan");
+  assert.equal(guidance.recoveryAction.directRetryAllowed, false);
+  assert.deepEqual(guidance.recoveryAction.retryPolicy.retryableToolNames, []);
+  assert.deepEqual(guidance.recoveryAction.retryPolicy.blockedRetryToolNames, ["invoke_video_analyze"]);
+  assert.match(guidance.recoveryAction.nextStep, /避免直接重试/);
+});
