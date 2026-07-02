@@ -9,6 +9,7 @@ import {
   buildDiagnoseFileAccessResult,
   buildFileAccessPolicy,
   buildFileAccessExplanation,
+  buildPublicFileAccessPolicy,
   buildLibraryMetadataResult,
   buildMediaSummaryResult,
   buildOrganizeFilesResult,
@@ -117,6 +118,9 @@ test("text excerpt reads bounded content without exposing absolute paths", async
     });
 
     assert.equal(result.excerpt.text, text.slice(4, 14));
+    assert.equal(result.policy.root, "STORAGE_ROOT");
+    assert.deepEqual(result.policy.allowedRoots, ["STORAGE_ROOT"]);
+    assert.equal(result.policy.storageRootConfigured, true);
     assert.equal(result.policy.rawAbsolutePathExposed, false);
     assert.equal(result.policy.storageRootOnly, true);
     assert.equal(result.policy.allowRawTextRead, true);
@@ -323,8 +327,11 @@ test("file access explanation exposes policy boundaries and tool list", async ()
     ]);
 
     const result = await buildFileAccessExplanation(api, { kind: "tools" });
-    assert.equal(result.policy.root, root);
-    assert.deepEqual(result.policy.allowedRoots, [root]);
+    assert.equal(result.storageRoot, "STORAGE_ROOT");
+    assert.equal(result.storageRootConfigured, true);
+    assert.equal(result.policy.root, "STORAGE_ROOT");
+    assert.deepEqual(result.policy.allowedRoots, ["STORAGE_ROOT"]);
+    assert.equal(result.policy.storageRootConfigured, true);
     assert.ok(result.policy.hiddenDirs.includes(".nas-bot"));
     assert.ok(result.policy.hiddenDirectories.includes(".nas-bot"));
     assert.equal(result.policy.maxInlineTextChars, 20_000);
@@ -333,7 +340,17 @@ test("file access explanation exposes policy boundaries and tool list", async ()
     assert.equal(result.policy.rawAbsolutePathExposed, false);
     assert.equal(result.policy.binaryReadAllowed, false);
     assert.equal(result.policy.writeRequiresConfirmation, true);
+    assert.match(result.summary, /索引、fileId 和相对路径/);
+    assert.equal(result.canAccess.indexedFiles, true);
+    assert.equal(result.canAccess.fileMetadata, true);
+    assert.equal(result.canAccess.textExcerpts, true);
+    assert.equal(result.canAccess.mediaDerivedContent, true);
+    assert.equal(result.canAccess.directBinaryRawContent, false);
+    assert.equal(result.canAccess.arbitraryLocalPaths, false);
+    assert.equal(result.canAccess.outsideStorageRoot, false);
     assert.ok(result.blockedLayers.some((item) => item.includes("STORAGE_ROOT")));
+    assert.ok(result.recommendedFirstSteps.some((item) => item.includes("diagnose_file_access")));
+    assert.ok(result.recommendedFirstSteps.some((item) => item.includes("invoke_video_analyze")));
     assert.ok(result.detail.includes("search_library_files"));
     assert.ok(result.detail.includes("diagnose_file_access"));
     assert.ok(result.detail.includes("organize_files"));
@@ -372,6 +389,8 @@ test("diagnose_file_access explains concrete file layers without exposing absolu
     });
 
     assert.equal(result.found, true);
+    assert.equal(result.policy.root, "STORAGE_ROOT");
+    assert.deepEqual(result.policy.allowedRoots, ["STORAGE_ROOT"]);
     assert.equal(result.file.path, "Videos/demo.mp4");
     assert.equal(result.safety.storageRootOnly, true);
     assert.equal(result.safety.absolutePathExposed, false);
@@ -502,6 +521,13 @@ test("file access policy matches the agent FileAccessPolicy contract", async () 
     assert.ok(policy.maxListResults > 0);
     assert.ok(policy.maxInlineTextChars > 0);
     assert.ok(policy.maxBatchFiles > 0);
+
+    const publicPolicy = buildPublicFileAccessPolicy(createApi(root, []));
+    assert.equal(publicPolicy.root, "STORAGE_ROOT");
+    assert.deepEqual(publicPolicy.allowedRoots, ["STORAGE_ROOT"]);
+    assert.equal(publicPolicy.rootLabel, "STORAGE_ROOT");
+    assert.equal(publicPolicy.storageRootConfigured, true);
+    assert.equal(publicPolicy.absolutePathExposed, false);
   });
 });
 

@@ -1011,6 +1011,8 @@ export function getHiddenDirectoryNames() {
   return getStorageHiddenDirectoryNames();
 }
 
+const PUBLIC_STORAGE_ROOT_LABEL = "STORAGE_ROOT";
+
 export function buildFileAccessPolicy(api = {}) {
   const root = String(api?.storageRoot || "").trim();
   return {
@@ -1030,6 +1032,19 @@ export function buildFileAccessPolicy(api = {}) {
     rawAbsolutePathExposed: false,
     storageRootOnly: true,
     writeRequiresConfirmation: true
+  };
+}
+
+export function buildPublicFileAccessPolicy(api = {}) {
+  const policy = buildFileAccessPolicy(api);
+  const storageRootConfigured = Boolean(policy.root);
+  return {
+    ...policy,
+    root: storageRootConfigured ? PUBLIC_STORAGE_ROOT_LABEL : "",
+    allowedRoots: storageRootConfigured ? [PUBLIC_STORAGE_ROOT_LABEL] : [],
+    rootLabel: PUBLIC_STORAGE_ROOT_LABEL,
+    storageRootConfigured,
+    absolutePathExposed: false
   };
 }
 
@@ -1227,7 +1242,7 @@ export async function buildTextExcerptResult(api, input = {}) {
         truncated: subtitle.truncated || startChar + text.length < subtitle.length
       },
       policy: {
-        ...buildFileAccessPolicy(api),
+        ...buildPublicFileAccessPolicy(api),
         contentLayer: "excerpt"
       }
     };
@@ -1263,7 +1278,7 @@ export async function buildTextExcerptResult(api, input = {}) {
       source: excerpt.source || source
     },
     policy: {
-      ...buildFileAccessPolicy(api),
+      ...buildPublicFileAccessPolicy(api),
       contentLayer: "excerpt"
     }
   };
@@ -1366,11 +1381,27 @@ export async function buildFileAccessExplanation(api, input = {}) {
     subtitle: snapshot.files.filter((file) => matchesKind(file, "subtitle")).length
   };
   return {
-    storageRoot: api.storageRoot || "",
+    storageRoot: api.storageRoot ? PUBLIC_STORAGE_ROOT_LABEL : "",
+    storageRootConfigured: Boolean(api.storageRoot),
     visibleFiles: snapshot.files.length,
     visibleDirectories: snapshot.directories.length,
     countsByKind,
-    policy: buildFileAccessPolicy(api),
+    summary: "AI 可以通过索引、fileId 和相对路径访问 STORAGE_ROOT 内的 NAS 文件元数据、摘要、字幕和受控片段；不能读取任意本机路径、STORAGE_ROOT 外文件或二进制原文。",
+    canAccess: {
+      indexedFiles: true,
+      fileMetadata: true,
+      textExcerpts: true,
+      documentExtracts: true,
+      subtitles: true,
+      mediaDerivedContent: true,
+      imageAnalysis: true,
+      videoAudioAnalysisViaBot: true,
+      directBinaryRawContent: false,
+      arbitraryLocalPaths: false,
+      outsideStorageRoot: false,
+      unauditedWrites: false
+    },
+    policy: buildPublicFileAccessPolicy(api),
     readableLayers: [
       "Index: 文件名、相对路径、MIME、大小、mtime、标签、摘要/字幕可用性",
       "Metadata: 单文件元数据、标签、摘要/字幕状态",
@@ -1383,6 +1414,15 @@ export async function buildFileAccessExplanation(api, input = {}) {
       "二进制原文直接塞进模型上下文",
       "未经确认的删除、移动、重命名、批量覆盖"
     ],
+    recommendedFirstSteps: [
+      "找文件: search_library_files/list_storage_files -> read_file_metadata",
+      "判断具体文件能不能读或分析: search_library_files -> diagnose_file_access",
+      "读取文本/字幕/PDF/Office 片段: diagnose_file_access -> read_text_excerpt",
+      "读取媒体摘要或技术信息: read_media_summary",
+      "生成视频/音频字幕和摘要: invoke_video_analyze 或 analyze_file_content(startAnalysis=true)",
+      "写标签/摘要: update_file_metadata；批量或覆盖前先确认",
+      "移动/重命名: organize_files dryRun=true -> 用户确认 -> confirmed=true dryRun=false"
+    ],
     actionPlan: buildGenericFileAccessActionPlan(),
     detail: kind === "tools"
       ? ["list_storage_files", "search_library_files", "read_file_metadata", "diagnose_file_access", "get_storage_file_details", "read_text_excerpt", "read_media_summary", "analyze_file_content", "update_file_metadata", "organize_files", "invoke_video_analyze", "invoke_video_tag", "analyze_storage_video"]
@@ -1393,7 +1433,7 @@ export async function buildFileAccessExplanation(api, input = {}) {
 export async function buildDiagnoseFileAccessResult(api, input = {}) {
   const snapshot = await loadLibrarySnapshot(api);
   const identifier = collectFileIdentifiers(input)[0] || "";
-  const policy = buildFileAccessPolicy(api);
+  const policy = buildPublicFileAccessPolicy(api);
   if (!identifier) {
     throw new Error("fileId or path is required");
   }
