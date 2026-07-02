@@ -222,20 +222,168 @@ function buildSmokeStatusBadges(checklist = {}) {
 }
 
 function buildSmokeCardActions(checklist = {}) {
-  const command = String(checklist.nextStep?.command || "").trim();
-  if (!command) {
-    return [];
-  }
-  const rawText = command.replace(/^@ai\b\s*/i, "").trim();
-  if (!rawText) {
-    return [];
-  }
-  return [{
-    type: "invoke-bot",
+  return buildAiChatCardActions([{
     label: "执行下一步",
+    rawText: checklist.nextStep?.command || ""
+  }]);
+}
+
+function normalizeAiChatActionRawText(value = "") {
+  return String(value || "").replace(/^@ai\b\s*/i, "").replace(/\s+/g, " ").trim();
+}
+
+function compactActionTarget(value = "", maxLength = 180) {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  return normalized.length > maxLength ? normalized.slice(0, maxLength) : normalized;
+}
+
+function buildAiChatCardAction(label = "", rawText = "") {
+  const normalizedLabel = String(label || "").trim();
+  const normalizedRawText = normalizeAiChatActionRawText(rawText);
+  if (!normalizedLabel || !normalizedRawText) {
+    return null;
+  }
+  return {
+    type: "invoke-bot",
+    label: normalizedLabel,
     botId: "ai.chat",
-    rawText
-  }];
+    rawText: normalizedRawText
+  };
+}
+
+function buildAiChatCardActions(items = [], limit = 6) {
+  const actions = [];
+  const seen = new Set();
+  for (const item of Array.isArray(items) ? items : []) {
+    const action = buildAiChatCardAction(item?.label, item?.rawText);
+    if (!action) {
+      continue;
+    }
+    const key = `${action.botId}:${action.rawText}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    actions.push(action);
+    if (actions.length >= limit) {
+      break;
+    }
+  }
+  return actions;
+}
+
+function buildFileAccessCardActions(explanation = {}) {
+  const hasFiles = Number(explanation.visibleFiles || 0) > 0;
+  return buildAiChatCardActions([
+    { label: "运行健康检查", rawText: "/health" },
+    {
+      label: hasFiles ? "搜索最近文件" : "搜索文件",
+      rawText: "找最近下载的 5 个 NAS 文件，列出 fileId、路径和下一步建议"
+    },
+    { label: "查看工具", rawText: "/tools" }
+  ]);
+}
+
+function getFileAccessActionTarget(diagnosis = {}, action = {}) {
+  const file = diagnosis.file && typeof diagnosis.file === "object" ? diagnosis.file : {};
+  const input = action.input && typeof action.input === "object" ? action.input : {};
+  return compactActionTarget(file.path || input.path || input.fileId || diagnosis.identifier || "");
+}
+
+function getFileAccessActionPriority(action = {}) {
+  const tool = String(action.tool || "").trim();
+  const priorities = {
+    read_text_excerpt: 10,
+    read_media_summary: 20,
+    invoke_video_analyze: 30,
+    analyze_storage_video: 30,
+    analyze_file_content: 40,
+    search_library_files: 50,
+    list_storage_files: 50,
+    diagnose_file_access: 60,
+    read_file_metadata: 70,
+    get_storage_file_details: 75
+  };
+  return priorities[tool] || 100;
+}
+
+function buildFileAccessActionButton(action = {}, diagnosis = {}) {
+  const tool = String(action.tool || "").trim();
+  const input = action.input && typeof action.input === "object" ? action.input : {};
+  const target = getFileAccessActionTarget(diagnosis, action);
+  const query = compactActionTarget(input.query || target || "");
+  if (!tool) {
+    return null;
+  }
+  if (action.blocked === true || action.requiresConfirmation === true || action.riskLevel === "high") {
+    return null;
+  }
+  if (tool === "search_library_files" || tool === "list_storage_files") {
+    return {
+      label: "搜索文件",
+      rawText: query
+        ? `搜索 NAS 文件 ${query}`
+        : "找最近下载的 5 个 NAS 文件，列出 fileId、路径和下一步建议"
+    };
+  }
+  if (!target) {
+    return null;
+  }
+  if (tool === "diagnose_file_access") {
+    return { label: "重新诊断", rawText: `/file-access ${target}` };
+  }
+  if (tool === "read_file_metadata" || tool === "get_storage_file_details") {
+    return { label: "读取 metadata", rawText: `读取 ${target} 的 metadata、标签和摘要状态` };
+  }
+  if (tool === "read_text_excerpt") {
+    const source = String(input.source || "").trim().toLowerCase();
+    const maxChars = Number.isFinite(Number(input.maxChars)) ? Number(input.maxChars) : 2000;
+    return {
+      label: source === "subtitle" ? "读取字幕" : "读取片段",
+      rawText: source === "subtitle"
+        ? `读取 ${target} 的字幕片段前 ${maxChars} 字`
+        : `读取 ${target} 的前 ${maxChars} 字`
+    };
+  }
+  if (tool === "read_media_summary") {
+    return { label: "读取摘要", rawText: `读取 ${target} 的已有 AI 摘要、字幕片段和媒体信息` };
+  }
+  if (tool === "invoke_video_analyze" || tool === "analyze_storage_video") {
+    return { label: "启动总结", rawText: `总结 ${target}，如果没有摘要就启动视频分析，并返回 jobId` };
+  }
+  if (tool === "analyze_file_content") {
+    const mode = String(input.mode || "").trim().toLowerCase();
+    return {
+      label: mode === "image" ? "分析图片" : "分析内容",
+      rawText: mode === "image"
+        ? `分析 ${target} 这张图片`
+        : `分析 ${target} 的内容，优先使用已允许的文本、摘要或字幕层`
+    };
+  }
+  return null;
+}
+
+function buildFileAccessDiagnosisCardActions(diagnosis = {}) {
+  const blockers = Array.isArray(diagnosis.blockers) ? diagnosis.blockers : [];
+  const planned = (Array.isArray(diagnosis.actionPlan) ? diagnosis.actionPlan : [])
+    .slice()
+    .sort((left, right) => getFileAccessActionPriority(left) - getFileAccessActionPriority(right))
+    .map((action) => buildFileAccessActionButton(action, diagnosis))
+    .filter(Boolean);
+  const fallback = [];
+  if (diagnosis.found !== true) {
+    fallback.push({
+      label: "重新搜索",
+      rawText: diagnosis.identifier
+        ? `搜索 NAS 文件 ${compactActionTarget(diagnosis.identifier)}`
+        : "找最近下载的 5 个 NAS 文件，列出 fileId、路径和下一步建议"
+    });
+  }
+  if (blockers.length) {
+    fallback.push({ label: "查看健康", rawText: "/health" });
+  }
+  fallback.push({ label: "访问边界", rawText: "/file-access" });
+  return buildAiChatCardActions([...planned, ...fallback]);
 }
 
 function buildFileAccessStatusBadges(explanation = {}) {
@@ -1346,7 +1494,8 @@ export async function handleAiChatCommandRoute(state = {}) {
               title: "AI Agent NAS 文件访问诊断",
               subtitle: withSessionSubtitle(diagnosis.file?.path || identifier || `status: ${diagnosis.status || "unknown"}`, activeSession),
               body,
-              badges: buildFileAccessDiagnosisBadges(diagnosis)
+              badges: buildFileAccessDiagnosisBadges(diagnosis),
+              actions: buildFileAccessDiagnosisCardActions(diagnosis)
             }
           }),
           importedFiles: [],
@@ -1370,7 +1519,8 @@ export async function handleAiChatCommandRoute(state = {}) {
               title: "AI Agent NAS 文件访问",
               subtitle: withSessionSubtitle(`status: ${explanation.status || "unknown"}`, activeSession),
               body,
-              badges: buildFileAccessStatusBadges(explanation)
+              badges: buildFileAccessStatusBadges(explanation),
+              actions: buildFileAccessCardActions(explanation)
             }
           }),
           importedFiles: [],

@@ -959,11 +959,17 @@ test("file access command route publishes NAS access policy without local paths"
     assert.equal(artifact.canAccess.arbitraryLocalPaths, false);
     assert.equal(artifact.canAccess.storageRootAbsolutePathInput, true);
     assert.ok(artifact.recommendedFirstSteps.some((step) => step.includes("search_library_files")));
+    assert.deepEqual(replies[0].card.actions, [
+      { type: "invoke-bot", label: "运行健康检查", botId: "ai.chat", rawText: "/health" },
+      { type: "invoke-bot", label: "搜索最近文件", botId: "ai.chat", rawText: "找最近下载的 5 个 NAS 文件，列出 fileId、路径和下一步建议" },
+      { type: "invoke-bot", label: "查看工具", botId: "ai.chat", rawText: "/tools" }
+    ]);
     assert.match(replies[0].text, /AI Agent NAS 文件访问/);
     assert.match(replies[0].text, /storageRootOnly=true/);
     assert.match(replies[0].text, /禁止|二进制|allowBinaryRead=false/);
     assert.doesNotMatch(JSON.stringify(artifact), new RegExp(escapedStorageRoot));
     assert.doesNotMatch(replies[0].text, new RegExp(escapedStorageRoot));
+    assert.doesNotMatch(JSON.stringify(replies[0].card.actions), new RegExp(escapedStorageRoot));
   } finally {
     await fs.rm(appDataRoot, { recursive: true, force: true });
   }
@@ -1016,12 +1022,20 @@ test("file access diagnose command route publishes concrete layers without local
     assert.equal(artifact.safety.binaryRawContentAllowed, false);
     assert.ok(artifact.layers.some((layer) => layer.id === "excerpt" && layer.available === true));
     assert.ok(artifact.recommendedTools.includes("read_text_excerpt"));
+    assert.ok(replies[0].card.actions.some((action) => (
+      action.type === "invoke-bot"
+      && action.botId === "ai.chat"
+      && action.label === "读取片段"
+      && /读取 Docs\/readme\.txt 的前 \d+ 字/.test(action.rawText)
+    )));
+    assert.ok(replies[0].card.actions.some((action) => action.label === "分析内容" && /Docs\/readme\.txt/.test(action.rawText)));
     assert.match(replies[0].text, /NAS 文件访问诊断/);
     assert.match(replies[0].text, /Docs\/readme\.txt/);
     assert.match(replies[0].text, /read_text_excerpt/);
     assert.match(replies[0].text, /absolutePathExposed=false/);
     assert.doesNotMatch(JSON.stringify(artifact), new RegExp(escapedStorageRoot));
     assert.doesNotMatch(replies[0].text, new RegExp(escapedStorageRoot));
+    assert.doesNotMatch(JSON.stringify(replies[0].card.actions), new RegExp(escapedStorageRoot));
   } finally {
     await fs.rm(appDataRoot, { recursive: true, force: true });
   }
