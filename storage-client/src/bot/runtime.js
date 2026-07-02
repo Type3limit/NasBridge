@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { buildInvocationContext, createBotChatMessage } from "./context.js";
 import { createBotEventBus } from "./events.js";
@@ -115,8 +116,63 @@ export class BotRuntime {
     return this.store.readLog(jobId, options);
   }
 
-  async cancelJob(jobId) {
-    const job = this.activeJobs.get(jobId) || await this.store.get(jobId);
+  async findChildJobIds(parentJobId = "") {
+    const normalizedParentJobId = String(parentJobId || "").trim();
+    if (!normalizedParentJobId) {
+      return [];
+    }
+    const childIds = new Set();
+    for (const job of this.activeJobs.values()) {
+      if (String(job?.options?.parentJobId || "").trim() === normalizedParentJobId && job?.jobId) {
+        childIds.add(String(job.jobId));
+      }
+    }
+    try {
+      const entries = await fs.promises.readdir(this.store.jobsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith(".json")) {
+          continue;
+        }
+        const jobId = entry.name.replace(/\.json$/i, "");
+        if (childIds.has(jobId)) {
+          continue;
+        }
+        try {
+          const job = await this.store.get(jobId);
+          if (String(job?.options?.parentJobId || "").trim() === normalizedParentJobId) {
+            childIds.add(jobId);
+          }
+        } catch {
+        }
+      }
+    } catch {
+    }
+    return [...childIds];
+  }
+
+  async cancelChildJobs(parentJobId = "", seen = new Set()) {
+    const childJobIds = await this.findChildJobIds(parentJobId);
+    const cancelled = [];
+    for (const childJobId of childJobIds) {
+      if (seen.has(childJobId)) {
+        continue;
+      }
+      const child = await this.cancelJob(childJobId, { cascade: true, seen });
+      if (child) {
+        cancelled.push(child);
+      }
+    }
+    return cancelled;
+  }
+
+  async cancelJob(jobId, options = {}) {
+    const normalizedJobId = String(jobId || "").trim();
+    const seen = options.seen instanceof Set ? options.seen : new Set();
+    if (!normalizedJobId || seen.has(normalizedJobId)) {
+      return null;
+    }
+    seen.add(normalizedJobId);
+    const job = this.activeJobs.get(normalizedJobId) || await this.store.get(normalizedJobId);
     if (!job) {
       return null;
     }
@@ -134,8 +190,14 @@ export class BotRuntime {
     if (controller && !controller.signal.aborted) {
       controller.abort(new Error("job cancelled"));
     }
-    this.activeJobs.set(jobId, next);
+    this.activeJobs.set(normalizedJobId, next);
     this.events.emit("job", next);
+    if (options.cascade !== false) {
+      const childJobs = await this.cancelChildJobs(normalizedJobId, seen);
+      if (childJobs.length) {
+        this.store.appendLog(normalizedJobId, `cancelled child jobs: ${childJobs.map((item) => item.jobId).join(", ")}`).catch(() => {});
+      }
+    }
     return next;
   }
 
@@ -244,7 +306,7 @@ export class BotRuntime {
   }
 
   async failJob(jobId, error, currentJob = null) {
-    const current = currentJob || this.activeJobs.get(jobId) || await this.store.get(jobId);
+    const current = this.activeJobs.get(jobId) || await this.store.get(jobId) || currentJob;
     if (!current) {
       return null;
     }
