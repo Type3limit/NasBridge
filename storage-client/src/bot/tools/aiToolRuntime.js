@@ -6,7 +6,7 @@ import { readRecentChatHistory } from "./chatHistory.js";
 import { listReferencedChatAttachments } from "./chatAssets.js";
 import { invokeMultimodalModel, invokeTextModel } from "./llmClient.js";
 import { fetchWebPageSummary, getSourcePreferenceLabel, normalizeSourcePreference, searchWeb } from "./httpFetch.js";
-import { executeDelegatedBotToolCall, getDelegatedBotToolDefinitions, isDelegatedBotToolName } from "./botToolAdapter.js";
+import { buildDelegatedJobFollowup, executeDelegatedBotToolCall, getDelegatedBotToolDefinitions, isDelegatedBotToolName } from "./botToolAdapter.js";
 import { buildRealtimeContextText } from "./realtimeContext.js";
 import { searchYYeTsShows, getYYeTsResource, extractEpisodeMagnets, sanitizeShowName } from "./yyetsApi.js";
 import { MAX_AGENT_TRACE_EVENTS, MAX_CHILD_JOB_SUMMARY_LIMIT, MAX_JOB_LOG_BYTES, MAX_JOB_STATUS_LIMIT, buildAgentTraceResult, buildBotJobStatusResult } from "./botJobStatus.js";
@@ -114,6 +114,20 @@ async function toDataUrl(attachment) {
 
 function safeJson(value) {
   return JSON.stringify(value, null, 2);
+}
+
+function buildDelegatedJobFields(botId = "", delegatedJob = {}, options = {}) {
+  const jobId = String(delegatedJob?.jobId || "").trim();
+  return {
+    botId,
+    jobId,
+    status: String(delegatedJob?.status || "queued").trim() || "queued",
+    ...buildDelegatedJobFollowup({
+      jobId,
+      botId,
+      waitForCompletion: options.waitForCompletion === true
+    })
+  };
 }
 
 function extractDirectWebUrls(text = "") {
@@ -477,9 +491,7 @@ async function buildAnalyzeFileContentResult(api = {}, input = {}) {
       return {
         mode: "media-analysis-job",
         delegated: true,
-        botId: "video.analyze",
-        jobId: delegatedJob.jobId || "",
-        status: delegatedJob.status || "queued",
+        ...buildDelegatedJobFields("video.analyze", delegatedJob),
         file: fileInfo,
         message: "已提交视频/音频转录与 AI 总结任务，完成后会写入文件 metadata。"
       };
@@ -1395,10 +1407,8 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
     }
 
     return safeJson({
-      status: delegatedJob.status || "queued",
       delegated: true,
-      botId: "video.analyze",
-      jobId: delegatedJob.jobId || "",
+      ...buildDelegatedJobFields("video.analyze", delegatedJob),
       file: {
         fileId: file.id,
         path: file.relativePath,
@@ -1454,9 +1464,7 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
       });
       return safeJson({
         delegated: true,
-        botId: "video.tag",
-        jobId: delegatedJob.jobId || "",
-        status: delegatedJob.status || "queued",
+        ...buildDelegatedJobFields("video.tag", delegatedJob),
         batch: true,
         message: "已提交批量视频打标签任务。"
       });
@@ -1515,9 +1523,7 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
 
     return safeJson({
       delegated: true,
-      botId: "video.tag",
-      jobId: delegatedJob.jobId || "",
-      status: delegatedJob.status || "queued",
+      ...buildDelegatedJobFields("video.tag", delegatedJob),
       file: {
         fileId: file.id,
         path: file.relativePath,
@@ -1567,9 +1573,7 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
 
     return safeJson({
       delegated: true,
-      botId: "music.control",
-      jobId: delegatedJob.jobId || "",
-      status: delegatedJob.status || "queued",
+      ...buildDelegatedJobFields("music.control", delegatedJob),
       prompt
     });
   }
@@ -1616,9 +1620,7 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
     });
     return safeJson({
       delegated: true,
-      botId: "bilibili.downloader",
-      jobId: delegatedJob.jobId || "",
-      status: delegatedJob.status || "queued",
+      ...buildDelegatedJobFields("bilibili.downloader", delegatedJob),
       sources: sourcesInput,
       batch: isBatch
     });
@@ -2004,13 +2006,19 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
               toolName: name
             }
           });
+          const jobFields = buildDelegatedJobFields("torrent.downloader", delegatedJob);
           dispatched.push({
             episode: item.episode,
             season_cn: item.season_cn,
             name: item.name,
             size: item.size,
             format: item.format,
-            jobId: delegatedJob.jobId || "",
+            botId: jobFields.botId,
+            jobId: jobFields.jobId,
+            status: jobFields.status,
+            logHint: jobFields.logHint,
+            nextAction: jobFields.nextAction,
+            tracking: jobFields.tracking,
             targetFolder
           });
         } catch (err) {

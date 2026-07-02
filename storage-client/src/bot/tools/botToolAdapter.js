@@ -215,6 +215,39 @@ export function isDelegatedBotToolName(name = "") {
   return Boolean(DOWNLOAD_BOT_TOOL_CONFIGS[normalizeString(name)]);
 }
 
+export function buildDelegatedJobFollowup({ jobId = "", botId = "", waitForCompletion = false } = {}) {
+  const normalizedJobId = normalizeString(jobId);
+  const normalizedBotId = normalizeString(botId);
+  if (!normalizedJobId) {
+    return {
+      logHint: "delegated job did not return a jobId",
+      nextAction: "委派任务没有返回 jobId；请检查 bot runtime 日志确认任务是否创建成功。",
+      tracking: {
+        available: false,
+        botId: normalizedBotId
+      }
+    };
+  }
+  const statusCommand = `@ai /job ${normalizedJobId}`;
+  const logCommand = `@ai /log ${normalizedJobId}`;
+  const traceCommand = `@ai /trace ${normalizedJobId}`;
+  return {
+    logHint: `get_bot_job_status jobId=${normalizedJobId}；用户命令：${statusCommand} / ${logCommand} / ${traceCommand}`,
+    nextAction: waitForCompletion
+      ? "waited-for-completion"
+      : `把 jobId=${normalizedJobId} 告诉用户；用户追问进度时调用 get_bot_job_status，或让用户运行 ${statusCommand}。`,
+    tracking: {
+      available: true,
+      botId: normalizedBotId,
+      jobId: normalizedJobId,
+      statusCommand,
+      logCommand,
+      traceCommand,
+      statusTool: "get_bot_job_status"
+    }
+  };
+}
+
 export async function executeDelegatedBotToolCall(toolName = "", api = {}, input = {}) {
   const config = DOWNLOAD_BOT_TOOL_CONFIGS[normalizeString(toolName)];
   if (!config) {
@@ -259,10 +292,11 @@ export async function executeDelegatedBotToolCall(toolName = "", api = {}, input
       quality: normalizeString(parsedArgs.quality),
       action: normalizeString(parsedArgs.action)
     },
-    logHint: jobId ? `use get_bot_job_status with jobId=${jobId}` : "delegated job did not return a jobId",
-    nextAction: input.waitForCompletion === true
-      ? "waited-for-completion"
-      : "return jobId to the user and call get_bot_job_status if they ask for progress"
+    ...buildDelegatedJobFollowup({
+      jobId,
+      botId: config.botId,
+      waitForCompletion: input.waitForCompletion === true
+    })
   };
 
   if (input.waitForCompletion === true) {

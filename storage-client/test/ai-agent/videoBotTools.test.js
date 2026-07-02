@@ -80,6 +80,9 @@ test("invoke_video_analyze delegates to video.analyze and returns a job id", asy
   assert.equal(result.delegated, true);
   assert.equal(result.botId, "video.analyze");
   assert.equal(result.jobId, "botjob_child");
+  assert.match(result.logHint, /@ai \/job botjob_child/);
+  assert.equal(result.tracking.logCommand, "@ai /log botjob_child");
+  assert.equal(result.tracking.traceCommand, "@ai /trace botjob_child");
   assert.equal(api.invoked[0].botId, "video.analyze");
   assert.deepEqual(api.invoked[0].trigger.parsedArgs, {
     fileId: "client:Videos/demo.mp4",
@@ -111,6 +114,8 @@ test("invoke_video_tag delegates to video.tag with summary context", async () =>
   assert.equal(result.delegated, true);
   assert.equal(result.botId, "video.tag");
   assert.equal(result.jobId, "botjob_child");
+  assert.match(result.logHint, /get_bot_job_status/);
+  assert.equal(result.tracking.statusCommand, "@ai /job botjob_child");
   assert.equal(api.invoked[0].botId, "video.tag");
   assert.deepEqual(api.invoked[0].trigger.parsedArgs, {
     fileId: "client:Videos/demo.mp4",
@@ -160,6 +165,7 @@ test("invoke_video_tag batch returns confirmation preview before delegation", as
   const confirmed = JSON.parse(confirmedRaw);
   assert.equal(confirmed.delegated, true);
   assert.equal(confirmed.botId, "video.tag");
+  assert.equal(confirmed.tracking.traceCommand, "@ai /trace botjob_child");
   assert.equal(api.invoked.length, 1);
   assert.deepEqual(api.invoked[0].trigger.parsedArgs, {
     batch: true,

@@ -68,6 +68,10 @@ test("executeAiToolCall delegates yt-dlp downloads with job status hints", async
   assert.equal(result.botId, "ytdlp.downloader");
   assert.equal(result.jobId, "botjob_child");
   assert.match(result.logHint, /get_bot_job_status/);
+  assert.match(result.logHint, /@ai \/job botjob_child/);
+  assert.equal(result.tracking.statusCommand, "@ai /job botjob_child");
+  assert.equal(result.tracking.logCommand, "@ai /log botjob_child");
+  assert.equal(result.tracking.traceCommand, "@ai /trace botjob_child");
   assert.equal(api.progress[0].phase, "tool-ytdlp-downloader");
   assert.equal(api.invoked[0].botId, "ytdlp.downloader");
   assert.deepEqual(api.invoked[0].trigger.parsedArgs, {
@@ -102,6 +106,7 @@ test("delegated bot tool can wait for completion when requested", async () => {
 
   assert.equal(result.status, "succeeded");
   assert.equal(result.nextAction, "waited-for-completion");
+  assert.equal(result.tracking.statusCommand, "@ai /job botjob_child");
   assert.deepEqual(result.result.importedFiles, [{ path: "downloads/file.mp4" }]);
 });
 
