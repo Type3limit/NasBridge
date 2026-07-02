@@ -437,6 +437,10 @@ test("delegated tool results write structured job refs into tool trace events", 
   assert.equal(api.toolEvents[0].resultSummary.jobId, "botjob_child");
   assert.equal(api.toolEvents[0].resultSummary.botId, "video.analyze");
   assert.equal(api.toolEvents[0].resultSummary.delegated, true);
+  assert.equal(api.toolEvents[0].resultSummary.capability.id, "invoke_video_analyze");
+  assert.equal(api.toolEvents[0].resultSummary.capability.riskLevel, "medium");
+  assert.ok(api.toolEvents[0].resultSummary.capability.permissions.includes("storage:metadata:write"));
+  assert.deepEqual(api.toolEvents[0].resultSummary.capability.output.required, ["status", "botId", "jobId"]);
   assert.deepEqual(api.toolEvents[0].resultSummary.jobRefs, [
     {
       jobId: "botjob_child",
@@ -488,6 +492,10 @@ test("tool trace summarizes NAS file access diagnostics without storage root", a
   assert.deepEqual(api.toolEvents[0].inputSummary.identifiers, ["client:Videos/demo.mp4"]);
   assert.equal(api.toolEvents[0].resultSummary.file.path, "Videos/demo.mp4");
   assert.equal(api.toolEvents[0].resultSummary.fileAccess.found, true);
+  assert.equal(api.toolEvents[0].resultSummary.capability.id, "diagnose_file_access");
+  assert.equal(api.toolEvents[0].resultSummary.capability.riskLevel, "low");
+  assert.deepEqual(api.toolEvents[0].resultSummary.capability.permissions, ["storage:metadata:read"]);
+  assert.deepEqual(api.toolEvents[0].resultSummary.capability.output.required, ["status", "file"]);
   assert.equal(api.toolEvents[0].resultSummary.fileAccess.safety.binaryRawContentAllowed, false);
   assert.ok(api.toolEvents[0].resultSummary.fileAccess.layers.some((layer) => layer.id === "metadata"));
   assert.ok(api.toolEvents[0].resultSummary.fileAccess.blockers.some((blocker) => blocker.id === "no-direct-text-layer"));
@@ -670,6 +678,9 @@ test("tool execution blocks model-supplied confirmed=true without user confirmat
   assert.match(observation.content, /confirmation_required/);
   assert.match(observation.content, /confirmed=true/);
   assert.equal(api.toolEvents[0].status, "blocked");
+  assert.equal(api.toolEvents[0].resultSummary.capability.id, "invoke_video_tag");
+  assert.equal(api.toolEvents[0].resultSummary.capability.riskLevel, "medium");
+  assert.ok(api.toolEvents[0].resultSummary.capability.permissions.includes("storage:metadata:write"));
   assert.equal(api.toolEvents[0].resultSummary.requiresConfirmation, true);
   assert.equal(api.toolEvents[0].resultSummary.blocked, true);
   assert.match(api.toolEvents[0].resultSummary.blockedReason, /confirmed=true/);

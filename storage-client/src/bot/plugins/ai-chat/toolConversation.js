@@ -311,6 +311,69 @@ function summarizeStringList(value, limit = 5) {
   return single ? [single] : [];
 }
 
+function uniqueTraceStrings(items = []) {
+  const seen = new Set();
+  const result = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const value = String(item || "").trim();
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function summarizeOutputSchemaForTrace(outputSchema = {}) {
+  if (!outputSchema || typeof outputSchema !== "object") {
+    return null;
+  }
+  const required = uniqueTraceStrings(outputSchema.required).slice(0, 8);
+  const fields = outputSchema.properties && typeof outputSchema.properties === "object"
+    ? uniqueTraceStrings(Object.keys(outputSchema.properties)).slice(0, 10)
+    : [];
+  if (!required.length && !fields.length) {
+    return null;
+  }
+  return Object.fromEntries(Object.entries({
+    required,
+    fields
+  }).filter(([, value]) => Array.isArray(value) ? value.length > 0 : value));
+}
+
+function summarizeCapabilityForTrace(toolName = "", api = {}) {
+  const normalizedName = String(toolName || "").trim();
+  if (!normalizedName) {
+    return null;
+  }
+  const descriptor = buildCapabilityDescriptors(api).find((item) => item.id === normalizedName);
+  if (!descriptor) {
+    return null;
+  }
+  return Object.fromEntries(Object.entries({
+    id: descriptor.id,
+    kind: descriptor.kind,
+    riskLevel: descriptor.riskLevel,
+    executionMode: descriptor.executionMode,
+    requiresConfirmation: descriptor.requiresConfirmation === true,
+    capabilities: uniqueTraceStrings(descriptor.capabilities).slice(0, 8),
+    permissions: uniqueTraceStrings(descriptor.permissions).slice(0, 8),
+    output: summarizeOutputSchemaForTrace(descriptor.outputSchema)
+  }).filter(([, value]) => {
+    if (value === null || value === undefined || value === "") {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    if (value && typeof value === "object") {
+      return Object.keys(value).length > 0;
+    }
+    return true;
+  }));
+}
+
 function buildToolInputSummary(toolCall = {}) {
   const input = normalizeToolInput(toolCall.input);
   const keys = Object.keys(input).filter((key) => !String(key || "").startsWith("__")).sort();
@@ -839,10 +902,11 @@ function summarizeFileAccessForTrace(parsed = {}) {
   }));
 }
 
-function summarizeToolResultForTrace(toolResult = "") {
+function summarizeToolResultForTrace(toolResult = "", toolName = "", api = {}) {
   const parsed = parseToolResultJson(toolResult);
   if (!parsed) {
-    return null;
+    const capability = summarizeCapabilityForTrace(toolName, api);
+    return capability ? { capability } : null;
   }
   const jobRefs = [];
   const seenJobRefs = new Set();
@@ -908,7 +972,8 @@ function summarizeToolResultForTrace(toolResult = "") {
         }
       : null,
     nextAction: String(parsed.nextAction || "").trim(),
-    logHint: String(parsed.logHint || "").trim()
+    logHint: String(parsed.logHint || "").trim(),
+    capability: summarizeCapabilityForTrace(toolName, api)
   };
   return Object.fromEntries(Object.entries(result).filter(([, value]) => {
     if (value === null || value === "") {
@@ -924,11 +989,20 @@ function summarizeToolResultForTrace(toolResult = "") {
   }));
 }
 
-function summarizeToolErrorForTrace(error = null) {
-  return {
+function summarizeToolErrorForTrace(error = null, toolName = "", api = {}) {
+  return Object.fromEntries(Object.entries({
     name: String(error?.name || "Error").trim(),
-    message: String(error?.message || error || "unknown error").trim().slice(0, 500)
-  };
+    message: String(error?.message || error || "unknown error").trim().slice(0, 500),
+    capability: summarizeCapabilityForTrace(toolName, api)
+  }).filter(([, value]) => {
+    if (value === null || value === undefined || value === "") {
+      return false;
+    }
+    if (value && typeof value === "object") {
+      return Object.keys(value).length > 0;
+    }
+    return true;
+  }));
 }
 
 export function getAiToolProgress(toolName = "", round = 0) {
@@ -1356,7 +1430,7 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
         inputSummary,
         ...buildTraceTiming(startedAt, startedMs),
         outputPreview: toolResult,
-        resultSummary: summarizeToolResultForTrace(toolResult)
+        resultSummary: summarizeToolResultForTrace(toolResult, toolCall.name, api)
       });
     } else {
       try {
@@ -1369,7 +1443,7 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
           inputSummary,
           ...buildTraceTiming(startedAt, startedMs),
           outputPreview: String(toolResult || ""),
-          resultSummary: summarizeToolResultForTrace(toolResult)
+          resultSummary: summarizeToolResultForTrace(toolResult, toolCall.name, api)
         });
       } catch (error) {
         const cancelled = error?.name === "AbortError" || /job cancelled/i.test(String(error?.message || ""));
@@ -1381,7 +1455,7 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
           inputSummary,
           ...buildTraceTiming(startedAt, startedMs),
           outputPreview: String(error?.message || error || ""),
-          errorSummary: summarizeToolErrorForTrace(error)
+          errorSummary: summarizeToolErrorForTrace(error, toolCall.name, api)
         });
         throw error;
       }
