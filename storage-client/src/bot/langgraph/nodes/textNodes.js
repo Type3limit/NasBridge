@@ -7,7 +7,7 @@ import { compressAiSessionContext } from "../../plugins/ai-chat/services/compres
 import { delegateBotInvocation } from "../../plugins/ai-chat/delegation.js";
 import { streamFinalAnswer } from "../../plugins/ai-chat/streaming.js";
 import { createToolAwarePlanningMessages, executePendingToolCallsRound, invokeToolAwarePlanningRound } from "../../plugins/ai-chat/toolConversation.js";
-import { MAX_TOOL_ROUNDS } from "../../plugins/ai-chat/constants.js";
+import { getMaxToolRounds } from "../../plugins/ai-chat/constants.js";
 import { getModelContextLimit } from "../../tools/llmClient.js";
 
 function logAutoCompressFailure(api, error) {
@@ -118,7 +118,7 @@ export async function handleAiChatTextPlanRoute(state = {}) {
     defaultTextModel: prepared.defaultTextModel || "",
     modelSettings: prepared.modelSettings || {},
     round: toolRound,
-    maxToolRounds: MAX_TOOL_ROUNDS
+    maxToolRounds: getMaxToolRounds()
   });
 
   return {

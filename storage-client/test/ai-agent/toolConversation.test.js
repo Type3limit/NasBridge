@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { BotJobStore } from "../../src/bot/jobStore.js";
+import { getMaxToolRounds, MAX_TOOL_ROUNDS } from "../../src/bot/plugins/ai-chat/constants.js";
 import {
   createToolAwarePlanningMessages,
   executePendingToolCallsRound,
@@ -78,6 +79,15 @@ function createJob(jobId, overrides = {}) {
     updatedAt: "2026-07-02T00:00:01.000Z"
   };
 }
+
+test("agent max tool rounds config keeps a bounded default", () => {
+  assert.equal(MAX_TOOL_ROUNDS, 4);
+  assert.equal(getMaxToolRounds({}), 4);
+  assert.equal(getMaxToolRounds({ AI_AGENT_MAX_TOOL_ROUNDS: "6" }), 6);
+  assert.equal(getMaxToolRounds({ AI_AGENT_MAX_TOOL_ROUNDS: "99" }), 8);
+  assert.equal(getMaxToolRounds({ AI_AGENT_MAX_TOOL_ROUNDS: "0" }), 1);
+  assert.equal(getMaxToolRounds({ AI_AGENT_MAX_TOOL_ROUNDS: "bad" }), 4);
+});
 
 test("JSON fallback plans, executes, observes, and finishes through tool messages", async () => {
   const api = createFakeApi();

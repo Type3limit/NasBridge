@@ -4,10 +4,20 @@ export const MAX_VISION_IMAGES = 3;
 export const MAX_INLINE_IMAGE_BYTES = 5 * 1024 * 1024;
 export const MAX_CARD_BODY_LENGTH = 1800;
 export const MAX_TOOL_ROUNDS = 4;
+export const MAX_CONFIGURABLE_TOOL_ROUNDS = 8;
 export const AI_MODEL_SETTINGS_FILE_NAME = "ai-model-settings.json";
 export const AI_SESSION_DIR_NAME = "ai-chat-sessions";
 export const AI_SESSION_INDEX_FILE_NAME = "index.json";
 export const MAX_SESSION_CONTEXT_MESSAGES = 12;
+
+export function getMaxToolRounds(env = process.env) {
+  const raw = env?.AI_AGENT_MAX_TOOL_ROUNDS ?? env?.MAX_TOOL_ROUNDS;
+  const numeric = Number(raw);
+  if (!Number.isFinite(numeric)) {
+    return MAX_TOOL_ROUNDS;
+  }
+  return Math.max(1, Math.min(MAX_CONFIGURABLE_TOOL_ROUNDS, Math.floor(numeric)));
+}
 
 export const SEARCH_PREFERENCE_ALIASES = {
   official: ["official", "官网", "官方", "site"],
