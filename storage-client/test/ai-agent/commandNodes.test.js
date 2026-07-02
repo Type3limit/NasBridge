@@ -1500,8 +1500,13 @@ test("jobs command route publishes bot job status with child jobs", async () => 
       { type: "cancel-bot-job", label: "停止生成", jobId: "botjob_parent" }
     ]);
     assert.match(result.result.chatReply.text, /ai\.chat · botjob_parent · running/);
+    assert.match(result.result.chatReply.text, /生命周期：events=/);
+    assert.match(result.result.chatReply.text, /last=running\/textTools/);
     assert.match(result.result.chatReply.text, /子任务：1 · queued 1/);
     assert.equal(result.result.artifacts[0].type, "bot-job-status");
+    assert.ok(result.result.artifacts[0].jobs[0].lifecycle.count >= 1);
+    assert.equal(result.result.artifacts[0].jobs[0].lifecycle.last.phase, "textTools");
+    assert.equal(result.result.artifacts[0].jobs[0].logTail, undefined);
     assert.equal(result.result.artifacts[0].jobs[0].childJobs[0].jobId, "botjob_child");
   } finally {
     await fs.rm(appDataRoot, { recursive: true, force: true });

@@ -1168,6 +1168,7 @@ export async function handleAiChatCommandRoute(state = {}) {
         jobId,
         limit: modelDirective.command.limit || 5,
         includeChildJobs: true,
+        includeLifecycle: true,
         includeTrace: Boolean(jobId),
         maxTraceEvents: 24
       });

@@ -1161,6 +1161,7 @@ export async function buildBotJobStatusResult(api = {}, input = {}) {
   const jobIds = explicitJobIds.length ? [...new Set(explicitJobIds)].slice(0, MAX_JOB_STATUS_LIMIT) : await listRecentJobIds(appDataRoot, limit);
   const store = input.store instanceof BotJobStore ? input.store : new BotJobStore({ rootDir: appDataRoot });
   const includeLog = input.includeLog === true;
+  const includeLifecycle = includeLog || input.includeLifecycle === true;
   const includeTrace = input.includeTrace === true;
   const includeChildJobs = Object.prototype.hasOwnProperty.call(input, "includeChildJobs")
     ? input.includeChildJobs === true
@@ -1177,13 +1178,15 @@ export async function buildBotJobStatusResult(api = {}, input = {}) {
       continue;
     }
     const summary = summarizeJob(job);
-    if (includeLog) {
+    if (includeLifecycle) {
       const log = await store.readLog(jobId, { maxBytes: logMaxBytes });
       const redactedLogContent = redactSensitiveText(log.content || "");
-      summary.logTail = {
-        truncated: log.truncated === true,
-        content: redactedLogContent
-      };
+      if (includeLog) {
+        summary.logTail = {
+          truncated: log.truncated === true,
+          content: redactedLogContent
+        };
+      }
       summary.lifecycle = buildLifecycleSummaryFromLogContent(redactedLogContent);
     }
     if (includeTrace) {
