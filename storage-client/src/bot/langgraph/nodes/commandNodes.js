@@ -701,8 +701,10 @@ function buildAgentTraceRecoveryAction(trace = {}, activeSession = null) {
 function buildAgentTraceCardActions(trace = {}, activeSession = null) {
   const jobId = String(trace?.jobId || "").trim();
   const baseActions = buildBotJobCardActions(trace?.snapshot || {}, jobId, { includeTrace: false });
+  const childActions = buildChildJobLogActions(trace?.childJobs || [], { excludeJobId: jobId });
   const recoveryAction = buildAgentTraceRecoveryAction(trace, activeSession);
-  return recoveryAction ? [recoveryAction, ...baseActions] : baseActions;
+  const actions = [...baseActions, ...childActions];
+  return recoveryAction ? [recoveryAction, ...actions] : actions;
 }
 
 function prependTraceRecoveryAction(actions = [], trace = null, activeSession = null) {
@@ -719,11 +721,41 @@ function prependTraceRecoveryAction(actions = [], trace = null, activeSession = 
 }
 
 function buildBotJobCardActionsWithRecovery(job = {}, fallbackJobId = "", activeSession = null, options = {}) {
-  const actions = buildBotJobCardActions(job, fallbackJobId, options);
   const trace = options.agentTrace && typeof options.agentTrace === "object"
     ? options.agentTrace
     : (job?.agentTrace && typeof job.agentTrace === "object" ? job.agentTrace : null);
+  const jobId = String(job?.jobId || fallbackJobId || "").trim();
+  const childJobs = Array.isArray(options.childJobs)
+    ? options.childJobs
+    : (Array.isArray(job?.childJobs) ? job.childJobs : (Array.isArray(trace?.childJobs) ? trace.childJobs : []));
+  const actions = [
+    ...buildBotJobCardActions(job, fallbackJobId, options),
+    ...buildChildJobLogActions(childJobs, { excludeJobId: jobId })
+  ];
   return prependTraceRecoveryAction(actions, trace, activeSession);
+}
+
+function buildChildJobLogActions(childJobs = [], options = {}) {
+  const excludeJobId = String(options.excludeJobId || "").trim();
+  const seen = new Set();
+  const actions = [];
+  for (const child of (Array.isArray(childJobs) ? childJobs : [])) {
+    const jobId = String(child?.jobId || "").trim();
+    if (!jobId || jobId === excludeJobId || seen.has(jobId)) {
+      continue;
+    }
+    seen.add(jobId);
+    const botId = String(child?.botId || "").trim();
+    actions.push({
+      type: "open-bot-log",
+      label: `子任务日志: ${botId || jobId}`,
+      jobId
+    });
+    if (actions.length >= 3) {
+      break;
+    }
+  }
+  return actions;
 }
 
 function buildBotJobCardActions(job = {}, fallbackJobId = "", options = {}) {
@@ -1338,7 +1370,8 @@ export async function handleAiChatCommandRoute(state = {}) {
               subtitle: withSessionSubtitle(jobId || "unknown", activeSession),
               body,
               actions: buildBotJobCardActionsWithRecovery(bundle.job || {}, bundle.jobId || jobId, activeSession, {
-                agentTrace: bundle.agentTrace || null
+                agentTrace: bundle.agentTrace || null,
+                childJobs: Array.isArray(bundle.childJobs) ? bundle.childJobs : []
               })
             }
           }),

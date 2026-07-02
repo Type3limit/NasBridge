@@ -1181,7 +1181,8 @@ test("trace command route publishes latest agent trace report", async () => {
     assert.equal(replies[0].card.title, "AI Agent Trace");
     assert.equal(replies[0].card.status, "succeeded");
     assert.deepEqual(replies[0].card.actions, [
-      { type: "open-bot-log", label: "查看日志", jobId }
+      { type: "open-bot-log", label: "查看日志", jobId },
+      { type: "open-bot-log", label: "子任务日志: video.analyze", jobId: "botjob_trace_child" }
     ]);
     assert.match(result.result.chatReply.text, /read_agent_trace/);
     assert.match(result.result.chatReply.text, /Agent 计划/);
@@ -1465,7 +1466,8 @@ test("log command route publishes redacted bot job log bundle", async () => {
     assert.deepEqual(replies[0].card.actions, [
       { type: "open-bot-log", label: "查看日志", jobId: "botjob_parent" },
       { type: "invoke-bot", label: "查看 Trace", botId: "ai.chat", rawText: "/trace botjob_parent" },
-      { type: "retry-bot-job", label: "重新生成", jobId: "botjob_parent" }
+      { type: "retry-bot-job", label: "重新生成", jobId: "botjob_parent" },
+      { type: "open-bot-log", label: "子任务日志: video.analyze", jobId: "botjob_child" }
     ]);
     assert.match(result.result.chatReply.text, /Bot 日志：botjob_parent/);
     assert.match(result.result.chatReply.text, /OPENAI_API_KEY=\*\*\*/);
@@ -1555,7 +1557,8 @@ test("jobs command route publishes bot job status with child jobs", async () => 
       { type: "continue-bot-job", label: "继续等待", jobId: "botjob_parent" },
       { type: "invoke-bot", label: "查看 Trace", botId: "ai.chat", rawText: "/trace botjob_parent" },
       { type: "open-bot-log", label: "查看日志", jobId: "botjob_parent" },
-      { type: "cancel-bot-job", label: "停止生成", jobId: "botjob_parent" }
+      { type: "cancel-bot-job", label: "停止生成", jobId: "botjob_parent" },
+      { type: "open-bot-log", label: "子任务日志: video.analyze", jobId: "botjob_child" }
     ]);
     assert.match(result.result.chatReply.text, /ai\.chat · botjob_parent · running/);
     assert.match(result.result.chatReply.text, /生命周期：events=/);
