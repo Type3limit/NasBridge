@@ -6,6 +6,50 @@ function matchesAny(text = "", patterns = []) {
   return patterns.some((pattern) => pattern.test(text));
 }
 
+function redactPromptExampleText(value = "", limit = 120) {
+  return String(value || "")
+    .replace(/[A-Za-z]:[\\/][^\s；,，]+/g, "[local-path]")
+    .replace(/\\\\[^\s；,，]+/g, "[network-path]")
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted]")
+    .replace(/sk-[A-Za-z0-9_-]{8,}/gi, "sk-[redacted]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, limit);
+}
+
+function buildMatchedCapabilityExampleLines(presets = [], descriptors = [], options = {}) {
+  const maxCapabilities = Math.max(0, Math.min(12, Number(options.maxCapabilityExamples || 8) || 8));
+  const maxExamplesPerCapability = Math.max(1, Math.min(3, Number(options.maxExamplesPerCapability || 2) || 2));
+  if (!maxCapabilities || !Array.isArray(descriptors) || !descriptors.length) {
+    return [];
+  }
+  const presetText = (Array.isArray(presets) ? presets : [])
+    .flatMap((preset) => [preset?.id, preset?.title, ...(Array.isArray(preset?.lines) ? preset.lines : [])])
+    .join("\n")
+    .toLowerCase();
+  const lines = [];
+  const seen = new Set();
+  for (const descriptor of descriptors) {
+    const id = String(descriptor?.id || "").trim();
+    if (!id || seen.has(id) || !presetText.includes(id.toLowerCase())) {
+      continue;
+    }
+    const examples = (Array.isArray(descriptor.examples) ? descriptor.examples : [])
+      .map((item) => redactPromptExampleText(item))
+      .filter(Boolean)
+      .slice(0, maxExamplesPerCapability);
+    if (!examples.length) {
+      continue;
+    }
+    seen.add(id);
+    lines.push(`- ${id}: ${examples.join(" / ")}`);
+    if (lines.length >= maxCapabilities) {
+      break;
+    }
+  }
+  return lines;
+}
+
 const ALWAYS_ON_GUIDANCE = {
   id: "agent-operating-rules",
   title: "Agent operating rules",
@@ -35,7 +79,7 @@ const TASK_PRESETS = [
     title: "Analyze or summarize media",
     triggers: [/视频|音频|字幕|转写|总结|摘要|tag|标签|video|audio|subtitle|summary/i],
     lines: [
-      "先搜索文件，再用 read_media_summary 检查 aiSummary/subtitle 是否已有，并读取时长、分辨率、音轨等 probe 信息。用户说“没总结/没有摘要”时搜索参数要带 hasAiSummary=false；用户说“没字幕/未转写”时带 hasSubtitle=false。",
+      "先用 search_library_files 搜索文件，再用 read_media_summary 检查 aiSummary/subtitle 是否已有，并读取时长、分辨率、音轨等 probe 信息。用户说“没总结/没有摘要”时搜索参数要带 hasAiSummary=false；用户说“没字幕/未转写”时带 hasSubtitle=false。",
       "没有摘要时调用 invoke_video_analyze；长视频默认 waitForCompletion=false，可设置 waitUntilPhase=transcribe 或 running 等到任务真正开始后返回 jobId/status/phase。",
       "打标签用 invoke_video_tag；批量标签必须先说明影响范围并取得 confirmed=true。"
     ]
@@ -109,13 +153,21 @@ export function selectNasAgentTaskPresets(prompt = "", options = {}) {
   return [ALWAYS_ON_GUIDANCE, ...selected.slice(0, 4)];
 }
 
-export function buildNasAgentTaskPresetPrompt({ prompt = "", includeAll = false } = {}) {
+export function buildNasAgentTaskPresetPrompt({ prompt = "", includeAll = false, descriptors = [], maxCapabilityExamples = 8 } = {}) {
   const presets = selectNasAgentTaskPresets(prompt, { includeAll });
-  return [
+  const exampleLines = buildMatchedCapabilityExampleLines(presets, descriptors, { maxCapabilityExamples });
+  const sections = [
     "NAS agent task playbooks:",
     ...presets.map((preset) => [
       `- ${preset.title} (${preset.id}):`,
       ...preset.lines.map((line) => `  - ${line}`)
-    ].join("\n"))
-  ].join("\n");
+    ].join("\n")),
+    exampleLines.length
+      ? [
+          "Capability examples matched to this task:",
+          ...exampleLines
+        ].join("\n")
+      : ""
+  ];
+  return sections.filter(Boolean).join("\n");
 }

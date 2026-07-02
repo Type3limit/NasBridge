@@ -22,6 +22,38 @@ test("video summary prompts include file search and invoke_video_analyze workflo
   assert.doesNotMatch(prompt, /analyze_storage_video/);
 });
 
+test("task playbooks inject matched capability examples only", () => {
+  const prompt = buildNasAgentTaskPresetPrompt({
+    prompt: "总结这个视频并保存摘要",
+    descriptors: [
+      {
+        id: "search_library_files",
+        examples: ["查 Movies 目录里没有摘要的 mp4"]
+      },
+      {
+        id: "read_media_summary",
+        examples: ["读取 D:\\Secret\\movie.mp4 的已有摘要"]
+      },
+      {
+        id: "invoke_video_analyze",
+        examples: ["总结这个视频并保存摘要，key=sk-should-not-leak-123456"]
+      },
+      {
+        id: "invoke_music_control",
+        examples: ["播放周杰伦的晴天"]
+      }
+    ]
+  });
+
+  assert.match(prompt, /Capability examples matched to this task/);
+  assert.match(prompt, /search_library_files: 查 Movies 目录里没有摘要的 mp4/);
+  assert.match(prompt, /read_media_summary: 读取 \[local-path\] 的已有摘要/);
+  assert.match(prompt, /invoke_video_analyze: 总结这个视频并保存摘要，key=sk-\[redacted\]/);
+  assert.doesNotMatch(prompt, /invoke_music_control/);
+  assert.doesNotMatch(prompt, /D:\\Secret/);
+  assert.doesNotMatch(prompt, /sk-should-not-leak/);
+});
+
 test("music prompts focus on invoke_music_control and QQ cookie degradation", () => {
   const prompt = buildNasAgentTaskPresetPrompt({
     prompt: "播放周杰伦的晴天，然后看一下队列"

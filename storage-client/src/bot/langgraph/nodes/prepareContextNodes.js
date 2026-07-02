@@ -22,13 +22,14 @@ export async function handleAiChatPrepareContextRoute(state = {}) {
   api.throwIfCancelled();
   let healthSnapshot = null;
   let capabilityPromptSummary = "";
+  let descriptors = [];
   try {
     healthSnapshot = await collectAiAgentHealthCached(api, {
       modelSettings: prepared.modelSettings || {},
       lightweight: true,
       signal: api.signal
     });
-    const descriptors = buildCapabilityDescriptors(api);
+    descriptors = buildCapabilityDescriptors(api);
     capabilityPromptSummary = formatCapabilityPromptSummary(descriptors, healthSnapshot);
     await api.appendLog(`agent health snapshot: overall=${healthSnapshot.overall || "unknown"} cached=${healthSnapshot.cached === true}`);
   } catch (error) {
@@ -54,7 +55,7 @@ export async function handleAiChatPrepareContextRoute(state = {}) {
   }
   const combinedHistoryMessages = [...buildSessionHistoryMessages(sessionMessages), ...historyMessages]
     .slice(-(MAX_CONTEXT_MESSAGES + MAX_SESSION_CONTEXT_MESSAGES));
-  const taskPresetPrompt = buildNasAgentTaskPresetPrompt({ prompt: toolAwarePrompt });
+  const taskPresetPrompt = buildNasAgentTaskPresetPrompt({ prompt: toolAwarePrompt, descriptors });
   const replyApi = prepared.replyApi && typeof prepared.replyApi === "object"
     ? { ...prepared.replyApi, healthSnapshot }
     : prepared.replyApi;
