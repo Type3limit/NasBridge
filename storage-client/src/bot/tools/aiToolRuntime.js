@@ -891,13 +891,14 @@ export function getAiToolDefinitions() {
     },
     {
       name: "read_media_summary",
-      description: "读取视频/音频/图片等媒体文件的派生信息：已有 AI 总结、字幕 sidecar 状态、标签和可选字幕片段。不会读取二进制原文。",
+      description: "读取视频/音频/图片等媒体文件的派生信息：已有 AI 总结、字幕 sidecar 状态、ffprobe 时长/分辨率/音轨、标签和可选字幕片段。不会读取二进制原文。",
       inputSchema: {
         type: "object",
         properties: {
           fileId: { type: "string", description: "文件 ID" },
           path: { type: "string", description: "相对路径（与 fileId 二选一）" },
           includeSummary: { type: "boolean", description: "是否返回已有 aiSummary，默认 true" },
+          includeProbe: { type: "boolean", description: "是否用 ffprobe 返回时长、分辨率、音轨等技术信息，默认 true" },
           includeTranscriptExcerpt: { type: "boolean", description: "是否返回字幕片段，默认 false" },
           includeSubtitleExcerpt: { type: "boolean", description: "includeTranscriptExcerpt 的别名" },
           startChar: { type: "integer", minimum: 0 },

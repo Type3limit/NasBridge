@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getStorageHiddenDirectoryNames, safeJoin, scanFiles } from "../../fsIndex.js";
 import { extractDocumentTextExcerpt, isExtractableDocumentPath } from "./documentText.js";
+import { probeMediaFile } from "./mediaProbe.js";
 
 export const MAX_LIBRARY_LIST_LIMIT = 80;
 export const MAX_LIBRARY_DETAIL_FILES = 20;
@@ -603,6 +604,18 @@ function buildTagsPatch(currentTags = [], input = {}) {
   return merged;
 }
 
+function redactStoragePathText(value = "", api = {}, file = {}) {
+  let text = String(value || "");
+  const replacements = [
+    String(api.storageRoot || "").trim(),
+    file?.relativePath ? safeJoin(api.storageRoot || "", file.relativePath) : ""
+  ].filter(Boolean);
+  for (const item of replacements) {
+    text = text.split(item).join(item.includes(":") || item.includes("\\") ? "[storage-path]" : String(file.relativePath || "[storage-path]"));
+  }
+  return text;
+}
+
 function buildMetadataPatch(file = {}, input = {}) {
   const patch = {};
   const changedFields = [];
@@ -917,6 +930,41 @@ export async function buildMediaSummaryResult(api, input = {}) {
   };
   if (input.includeSummary !== false) {
     result.aiSummary = file.aiSummary || "";
+  }
+  if (result.media.isMedia && input.includeProbe !== false) {
+    let absolutePath = "";
+    try {
+      absolutePath = safeJoin(api.storageRoot, file.relativePath);
+      const probe = typeof api.dependencies?.probeMediaFile === "function"
+        ? await api.dependencies.probeMediaFile({
+            file,
+            relativePath: file.relativePath,
+            absolutePath,
+            signal: api.signal
+          })
+        : await probeMediaFile({
+            filePath: absolutePath,
+            ffprobePath: api.dependencies?.ffprobePath || process.env.FFPROBE_PATH || "ffprobe",
+            signal: api.signal
+          });
+      result.media.probeAvailable = true;
+      result.media.probe = probe;
+      result.media.durationSeconds = Number(probe?.durationSeconds || 0);
+      result.media.durationLabel = String(probe?.durationLabel || "").trim();
+      result.media.resolution = String(probe?.resolution || "").trim();
+      result.media.width = Number(probe?.width || 0);
+      result.media.height = Number(probe?.height || 0);
+      result.media.videoTrackCount = Number(probe?.videoTrackCount || 0);
+      result.media.audioTrackCount = Number(probe?.audioTrackCount || 0);
+      result.media.subtitleTrackCount = Number(probe?.subtitleTrackCount || 0);
+      result.media.formatName = String(probe?.formatName || "").trim();
+      result.media.bitRate = Number(probe?.bitRate || 0);
+    } catch (error) {
+      result.media.probeAvailable = false;
+      result.media.probeError = redactStoragePathText(error?.message || error, api, file).slice(0, 500);
+    }
+  } else {
+    result.media.probeAvailable = false;
   }
   if (input.includeTranscriptExcerpt === true || input.includeSubtitleExcerpt === true) {
     try {

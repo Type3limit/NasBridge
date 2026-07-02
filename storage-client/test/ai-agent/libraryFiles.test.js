@@ -9,6 +9,7 @@ import {
   buildFileAccessPolicy,
   buildFileAccessExplanation,
   buildLibraryMetadataResult,
+  buildMediaSummaryResult,
   buildOrganizeFilesResult,
   buildTextExcerptResult,
   buildUpdateFileMetadataResult
@@ -209,6 +210,99 @@ test("text excerpt extracts Office Open XML document text", async () => {
     assert.equal(result.excerpt.format, "docx");
     assert.equal(result.excerpt.text, "NAS document");
     assert.equal(result.policy.allowBinaryRead, false);
+  });
+});
+
+test("media summary includes ffprobe-derived technical metadata without exposing absolute paths", async () => {
+  await withTempDir(async (root) => {
+    await fs.mkdir(path.join(root, "Videos"), { recursive: true });
+    const relativePath = "Videos/demo.mp4";
+    await fs.writeFile(path.join(root, relativePath), "not-real-video", "utf8");
+    const probeCalls = [];
+    const api = createApi(root, [
+      {
+        id: `client:${relativePath}`,
+        clientId: "client",
+        path: relativePath,
+        name: "demo.mp4",
+        size: 14,
+        mimeType: "video/mp4",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+        aiSummary: "A demo summary",
+        tags: ["demo"]
+      }
+    ], {
+      probeMediaFile: async ({ file, absolutePath, relativePath: probedPath }) => {
+        probeCalls.push({ fileId: file.id, absolutePath, relativePath: probedPath });
+        return {
+          durationSeconds: 125.25,
+          durationLabel: "2:05",
+          formatName: "mov,mp4,m4a,3gp,3g2,mj2",
+          bitRate: 3200000,
+          resolution: "1920x1080",
+          width: 1920,
+          height: 1080,
+          videoTrackCount: 1,
+          audioTrackCount: 2,
+          subtitleTrackCount: 1,
+          primaryVideo: { codecName: "h264", width: 1920, height: 1080 },
+          primaryAudio: { codecName: "aac", channels: 2, language: "jpn" },
+          videoStreams: [{ index: 0, codecName: "h264", width: 1920, height: 1080 }],
+          audioStreams: [
+            { index: 1, codecName: "aac", channels: 2, language: "jpn" },
+            { index: 2, codecName: "aac", channels: 2, language: "eng" }
+          ],
+          subtitleStreams: [{ index: 3, codecName: "mov_text", language: "eng" }]
+        };
+      }
+    });
+
+    const result = await buildMediaSummaryResult(api, {
+      path: relativePath
+    });
+
+    assert.equal(probeCalls.length, 1);
+    assert.equal(probeCalls[0].relativePath, relativePath);
+    assert.equal(result.media.probeAvailable, true);
+    assert.equal(result.media.durationSeconds, 125.25);
+    assert.equal(result.media.durationLabel, "2:05");
+    assert.equal(result.media.resolution, "1920x1080");
+    assert.equal(result.media.videoTrackCount, 1);
+    assert.equal(result.media.audioTrackCount, 2);
+    assert.equal(result.media.subtitleTrackCount, 1);
+    assert.equal(result.media.probe.primaryAudio.language, "jpn");
+    assert.equal(result.aiSummary, "A demo summary");
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
+  });
+});
+
+test("media summary redacts absolute paths from probe errors", async () => {
+  await withTempDir(async (root) => {
+    await fs.mkdir(path.join(root, "Videos"), { recursive: true });
+    const relativePath = "Videos/broken.mp4";
+    const absolutePath = path.join(root, relativePath);
+    await fs.writeFile(absolutePath, "broken", "utf8");
+    const api = createApi(root, [
+      {
+        id: `client:${relativePath}`,
+        clientId: "client",
+        path: relativePath,
+        name: "broken.mp4",
+        size: 6,
+        mimeType: "video/mp4",
+        updatedAt: "2026-07-01T00:00:00.000Z"
+      }
+    ], {
+      probeMediaFile: async () => {
+        throw new Error(`ffprobe failed for ${absolutePath}`);
+      }
+    });
+
+    const result = await buildMediaSummaryResult(api, { path: relativePath });
+
+    assert.equal(result.media.probeAvailable, false);
+    assert.match(result.media.probeError, /\[storage-path\]/);
+    assert.doesNotMatch(result.media.probeError, new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
   });
 });
 
