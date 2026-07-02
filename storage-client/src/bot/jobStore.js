@@ -1,6 +1,68 @@
 import fs from "node:fs";
 import path from "node:path";
 
+function compactString(value = "", maxLength = 160) {
+  return String(value || "").trim().slice(0, maxLength);
+}
+
+function normalizeProgressSnapshot(progress = null) {
+  if (!progress || typeof progress !== "object") {
+    return null;
+  }
+  const graphState = progress.graphState && typeof progress.graphState === "object"
+    ? {
+        activeNode: compactString(progress.graphState.activeNode, 80),
+        agentPhase: compactString(progress.graphState.agentPhase, 80)
+      }
+    : null;
+  return Object.fromEntries(Object.entries({
+    label: compactString(progress.label, 120),
+    percent: Number.isFinite(Number(progress.percent)) ? Math.max(0, Math.min(100, Number(progress.percent))) : null,
+    graphState: graphState && (graphState.activeNode || graphState.agentPhase) ? graphState : null
+  }).filter(([, value]) => {
+    if (value === null || value === "" || value === undefined) {
+      return false;
+    }
+    if (value && typeof value === "object") {
+      return Object.values(value).some((item) => item !== null && item !== "" && item !== undefined);
+    }
+    return true;
+  }));
+}
+
+function buildLifecycleSnapshot(job = {}) {
+  return Object.fromEntries(Object.entries({
+    botId: compactString(job.botId, 120),
+    status: compactString(job.status, 80),
+    phase: compactString(job.phase, 120),
+    progress: normalizeProgressSnapshot(job.progress),
+    startedAt: compactString(job.startedAt, 40),
+    finishedAt: compactString(job.finishedAt, 40)
+  }).filter(([, value]) => {
+    if (value === null || value === "" || value === undefined) {
+      return false;
+    }
+    if (value && typeof value === "object") {
+      return Object.keys(value).length > 0;
+    }
+    return true;
+  }));
+}
+
+function buildLifecycleLogLine(previous = null, next = {}) {
+  const nextSnapshot = buildLifecycleSnapshot(next);
+  if (!nextSnapshot.status && !nextSnapshot.phase) {
+    return "";
+  }
+  if (previous) {
+    const previousSnapshot = buildLifecycleSnapshot(previous);
+    if (JSON.stringify(previousSnapshot) === JSON.stringify(nextSnapshot)) {
+      return "";
+    }
+  }
+  return `job-lifecycle ${JSON.stringify(nextSnapshot)}`;
+}
+
 export class BotJobStore {
   constructor(options = {}) {
     this.rootDir = path.resolve(options.rootDir || path.join(process.cwd(), ".nas-bot"));
@@ -51,6 +113,7 @@ export class BotJobStore {
       throw new Error("jobId is required");
     }
     await this.init();
+    const previousJob = this.jobCache.get(job.jobId) || null;
     const next = {
       ...job,
       updatedAt: new Date().toISOString()
@@ -71,6 +134,10 @@ export class BotJobStore {
     // Update in-memory cache immediately so callers (status events, WS broadcasts) are not
     // blocked by disk I/O — the write continues in the background via the serialized queue.
     this.jobCache.set(job.jobId, next);
+    const lifecycleLine = buildLifecycleLogLine(previousJob, next);
+    if (lifecycleLine) {
+      this.appendLog(job.jobId, lifecycleLine).catch(() => {});
+    }
     return next;
   }
 

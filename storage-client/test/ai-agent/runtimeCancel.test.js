@@ -39,6 +39,19 @@ async function waitForJob(runtime, predicate, timeoutMs = 1000) {
   throw new Error("timed out waiting for job");
 }
 
+async function waitForJobLog(runtime, jobId, predicate, timeoutMs = 1000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    await runtime.store.waitForPendingLog(jobId);
+    const log = await runtime.getJobLog(jobId);
+    if (predicate(log.content || "")) {
+      return log.content;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("timed out waiting for job log");
+}
+
 test("cancelJob cascades cancellation to child bot jobs", async () => {
   await withTempDir(async (root) => {
     const plugins = {
@@ -178,5 +191,64 @@ test("runtime persists tool audit events without leaking local paths or secrets"
     const auditJson = JSON.stringify(completed.audit);
     assert.doesNotMatch(auditJson, /D:\\NAS/);
     assert.doesNotMatch(auditJson, /sk-should-redact/);
+  });
+});
+
+test("runtime writes structured lifecycle entries into job logs", async () => {
+  await withTempDir(async (root) => {
+    const plugins = {
+      lifecycle: {
+        botId: "lifecycle",
+        displayName: "Lifecycle",
+        description: "Lifecycle bot",
+        inputSchema: { type: "object", properties: {} },
+        permissions: {},
+        execute: async (context, api) => {
+          await api.emitProgress({
+            phase: "tool-plan",
+            label: "Planning tools",
+            percent: 35,
+            graphState: {
+              activeNode: "textPlan",
+              agentPhase: "Plan"
+            }
+          });
+          return { artifacts: [{ type: "text", title: "done" }] };
+        }
+      }
+    };
+    const registry = {
+      resolve: (botId) => plugins[botId] || null,
+      toPublicCatalog: () => Object.values(plugins).map((plugin) => ({
+        botId: plugin.botId,
+        displayName: plugin.displayName,
+        description: plugin.description,
+        inputSchema: plugin.inputSchema,
+        capabilities: []
+      }))
+    };
+    const runtime = await createBotRuntime({
+      clientId: "client",
+      storageRoot: root,
+      appDataRoot: path.join(root, ".nas-bot"),
+      registry,
+      concurrency: 1
+    }).init();
+
+    const job = await runtime.invoke({
+      botId: "lifecycle",
+      trigger: { type: "manual", rawText: "OPENAI_API_KEY=sk-should-not-leak-1234567890" },
+      chat: { hostClientId: "client", dayKey: "2026-07-03", historyPath: ".nas-chat-room/history/2026-07-03.jsonl" },
+      requester: { userId: "user", displayName: "User", role: "user" }
+    });
+    await waitForJob(runtime, (item) => item.jobId === job.jobId && item.status === "succeeded");
+
+    const log = await waitForJobLog(runtime, job.jobId, (content) => content.includes('"status":"succeeded"'));
+    assert.match(log, /job-lifecycle .*"status":"queued"/);
+    assert.match(log, /job-lifecycle .*"status":"running"/);
+    assert.match(log, /job-lifecycle .*"phase":"tool-plan"/);
+    assert.match(log, /job-lifecycle .*"agentPhase":"Plan"/);
+    assert.match(log, /job-lifecycle .*"status":"succeeded"/);
+    assert.doesNotMatch(log, /sk-should-not-leak/);
   });
 });
