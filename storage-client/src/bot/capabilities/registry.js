@@ -47,7 +47,9 @@ const TOOL_RISK_LEVELS = {
   organize_files: "high",
   explain_file_access: "low",
   get_storage_file_details: "low",
+  invoke_video_analyze: "medium",
   analyze_storage_video: "medium",
+  invoke_video_tag: "medium",
   tag_storage_video: "medium",
   invoke_music_control: "low",
   invoke_bilibili_downloader: "medium",
@@ -76,7 +78,9 @@ const TOOL_HEALTH_CHECKS = {
   organize_files: ["storage-root"],
   explain_file_access: ["storage-root"],
   get_storage_file_details: ["storage-root"],
+  invoke_video_analyze: ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root"],
   analyze_storage_video: ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root"],
+  invoke_video_tag: ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root"],
   tag_storage_video: ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root"],
   invoke_music_control: ["music-bridge"],
   invoke_bilibili_downloader: ["storage-root", "yt-dlp"],
@@ -101,7 +105,9 @@ const CAPABILITY_EXAMPLES = {
   "bilibili.downloader": ["去 B 站找教程并下载入库"],
   search_library_files: ["找最近下载的视频", "查 Movies 目录里没有摘要的 mp4"],
   analyze_file_content: ["分析这个 NAS 文件"],
+  invoke_video_analyze: ["总结这个视频并保存摘要"],
   analyze_storage_video: ["总结这个视频"],
+  invoke_video_tag: ["给这个视频生成标签"],
   read_media_summary: ["读取这个视频已有摘要和字幕状态"],
   update_file_metadata: ["给这个文件添加标签"],
   organize_files: ["把这几个文件移动到整理目录"],
@@ -117,7 +123,9 @@ const CAPABILITY_EXAMPLES = {
 const PROMPT_CORE_CAPABILITY_IDS = [
   "search_library_files",
   "analyze_file_content",
+  "invoke_video_analyze",
   "analyze_storage_video",
+  "invoke_video_tag",
   "tag_storage_video",
   "invoke_music_control",
   "search_web",
@@ -162,7 +170,10 @@ export function buildCapabilityDescriptors(api = {}) {
     riskLevel: normalizeRiskLevel(TOOL_RISK_LEVELS[tool.name] || "low"),
     executionMode: [
       "analyze_file_content",
+      "invoke_video_analyze",
       "analyze_storage_video",
+      "invoke_video_tag",
+      "tag_storage_video",
       "import_bilibili_video",
       "invoke_bilibili_downloader",
       "invoke_ytdlp_downloader",
@@ -238,7 +249,7 @@ export function formatCapabilityReport(descriptors = [], health = {}) {
 }
 
 export function formatCapabilityPromptSummary(descriptors = [], health = {}, options = {}) {
-  const maxItems = Math.max(4, Math.min(16, Number(options.maxItems || 11) || 11));
+  const maxItems = Math.max(4, Math.min(16, Number(options.maxItems || 14) || 14));
   const checks = Array.isArray(health.checks) ? health.checks : [];
   const nonOkChecks = checks.filter((check) => check.status && check.status !== "ok");
   const byId = new Map((Array.isArray(descriptors) ? descriptors : []).map((item) => [item.id, item]));

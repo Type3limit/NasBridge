@@ -512,7 +512,7 @@ function buildContentAccessHints(file = {}) {
     tools.push("read_media_summary");
   }
   if ((media || file.subtitleAvailable) && !file.aiSummaryAvailable) {
-    tools.push("analyze_storage_video");
+    tools.push("invoke_video_analyze");
   }
   return {
     rawTextReadable: textReadable,
@@ -898,7 +898,7 @@ export async function buildFileAccessExplanation(api, input = {}) {
       "未经确认的删除、移动、重命名、批量覆盖"
     ],
     detail: kind === "tools"
-      ? ["list_storage_files", "search_library_files", "read_file_metadata", "get_storage_file_details", "read_text_excerpt", "read_media_summary", "analyze_file_content", "update_file_metadata", "organize_files", "analyze_storage_video"]
+      ? ["list_storage_files", "search_library_files", "read_file_metadata", "get_storage_file_details", "read_text_excerpt", "read_media_summary", "analyze_file_content", "update_file_metadata", "organize_files", "invoke_video_analyze", "invoke_video_tag", "analyze_storage_video"]
       : []
   };
 }

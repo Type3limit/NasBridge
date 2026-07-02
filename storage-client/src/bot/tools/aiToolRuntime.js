@@ -990,6 +990,22 @@ export function getAiToolDefinitions() {
       }
     },
     {
+      name: "invoke_video_analyze",
+      description: "委派 video.analyze 对 NAS 中的视频/音频提取音频、Whisper 转字幕、生成 AI 总结并保存到文件元数据。已有总结时默认直接返回总结；设置 force=true 可重新总结。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          fileId: { type: "string", description: "文件 ID，优先使用 search_library_files 返回的 fileId" },
+          path: { type: "string", description: "相对路径（与 fileId 二选一）" },
+          filePath: { type: "string", description: "相对路径别名" },
+          force: { type: "boolean", description: "已有总结时是否重新跑总结，默认 false" },
+          includeSubtitle: { type: "boolean", description: "已有总结时是否同时返回字幕文本，默认 false" },
+          waitForCompletion: { type: "boolean", description: "是否等待任务完成再返回。长视频建议 false，默认 false" },
+          timeoutSeconds: { type: "integer", minimum: 5, maximum: 600 }
+        }
+      }
+    },
+    {
       name: "analyze_storage_video",
       description: "对 storage-client 中没有总结的视频/音频文件启动 video.analyze：提取音频、Whisper 转字幕、生成 AI 总结并保存到文件元数据。已有总结时默认直接返回总结；设置 force=true 可重新总结。",
       inputSchema: {
@@ -1001,6 +1017,23 @@ export function getAiToolDefinitions() {
           force: { type: "boolean", description: "已有总结时是否重新跑总结，默认 false" },
           includeSubtitle: { type: "boolean", description: "已有总结时是否同时返回字幕文本，默认 false" },
           waitForCompletion: { type: "boolean", description: "是否等待任务完成再返回。长视频建议 false，默认 false" },
+          timeoutSeconds: { type: "integer", minimum: 5, maximum: 600 }
+        }
+      }
+    },
+    {
+      name: "invoke_video_tag",
+      description: "委派 video.tag 为 NAS 中的视频/音频生成并写入 AI 标签。单文件可直接执行；批量打标签必须先向用户确认，再传 confirmed=true。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          fileId: { type: "string", description: "文件 ID，优先使用 search_library_files 返回的 fileId" },
+          path: { type: "string", description: "相对路径（与 fileId 二选一）" },
+          batch: { type: "boolean", description: "是否批量处理所有视频文件" },
+          confirmed: { type: "boolean", description: "批量写标签前必须由用户确认" },
+          force: { type: "boolean", description: "是否覆盖已有标签" },
+          aiSummary: { type: "string", description: "已有摘要，可作为打标签输入" },
+          waitForCompletion: { type: "boolean", description: "是否等待任务完成，默认 false" },
           timeoutSeconds: { type: "integer", minimum: 5, maximum: 600 }
         }
       }
@@ -1239,7 +1272,7 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
     return safeJson(await buildLibraryDetailsResult(api, input));
   }
 
-  if (name === "analyze_storage_video") {
+  if (name === "analyze_storage_video" || name === "invoke_video_analyze") {
     await api.emitProgress({ phase: "tool-analyze-storage-video", label: "定位待分析文件", percent: 46 });
     const identifier = String(input.fileId || input.path || input.filePath || "").trim();
     if (!identifier) {
@@ -1272,7 +1305,7 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
 
     const mimeType = String(file.mimeType || "").toLowerCase();
     if (!mimeType.startsWith("video/") && !mimeType.startsWith("audio/")) {
-      throw new Error(`analyze_storage_video 仅支持视频/音频文件，当前 MIME: ${file.mimeType}`);
+      throw new Error(`video analyze 仅支持视频/音频文件，当前 MIME: ${file.mimeType}`);
     }
 
     await api.emitProgress({ phase: "tool-analyze-storage-video", label: "创建视频转录与总结任务", percent: 52 });
@@ -1329,7 +1362,7 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
     });
   }
 
-  if (name === "tag_storage_video") {
+  if (name === "tag_storage_video" || name === "invoke_video_tag") {
     await api.emitProgress({ phase: "tool-tag-storage-video", label: "准备视频打标签任务", percent: 46 });
     if (input.batch === true) {
       if (input.confirmed !== true) {
@@ -1372,7 +1405,7 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
     }
     const mimeType = String(file.mimeType || "").toLowerCase();
     if (!mimeType.startsWith("video/") && !mimeType.startsWith("audio/")) {
-      throw new Error(`tag_storage_video 仅支持视频/音频文件，当前 MIME: ${file.mimeType}`);
+      throw new Error(`video tag 仅支持视频/音频文件，当前 MIME: ${file.mimeType}`);
     }
 
     const delegatedJob = await api.invokeBot({
