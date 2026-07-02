@@ -5,7 +5,7 @@ import { isImageAttachment, stripSelfMention, wantsBatchTagging, wantsVideoAnaly
 import { formatAiSessionLabel, getAiSession } from "../../plugins/ai-chat/services/aiSessions.js";
 import { getEffectiveMultimodalModel, getEffectiveTextModel, readAiModelSettings } from "../../plugins/ai-chat/services/modelSettings.js";
 import { readAiSessionCheckpoint } from "../checkpoints/aiSessionCheckpointer.js";
-import { buildConfirmedToolRecoveryState, buildSessionRecoveryGuidance, isConfirmationPrompt } from "./recoveryNodes.js";
+import { buildConfirmedToolRecoveryState, buildFileAccessSuggestedToolRecoveryState, buildSessionRecoveryGuidance, isConfirmationPrompt, isContinuationPrompt } from "./recoveryNodes.js";
 
 export async function prepareAiChatGraphState(state = {}) {
   const context = state.context;
@@ -66,6 +66,9 @@ export async function prepareAiChatGraphState(state = {}) {
     const confirmedToolRecovery = recoveryGuidance?.recoveryAction?.pendingConfirmation && isConfirmationPrompt(effectivePrompt)
       ? buildConfirmedToolRecoveryState(recoveryGuidance.recoveryAction.pendingConfirmation, effectivePrompt)
       : null;
+    const fileAccessToolRecovery = !confirmedToolRecovery && recoveryGuidance?.recoveryAction?.fileAccessSuggestedActions?.length && isContinuationPrompt(effectivePrompt)
+      ? buildFileAccessSuggestedToolRecoveryState(recoveryGuidance.recoveryAction.fileAccessSuggestedActions, effectivePrompt)
+      : null;
     if (confirmedToolRecovery) {
       recoveryGuidance = {
         ...recoveryGuidance,
@@ -73,6 +76,15 @@ export async function prepareAiChatGraphState(state = {}) {
         recoveryAction: {
           ...recoveryGuidance.recoveryAction,
           ...confirmedToolRecovery
+        }
+      };
+    } else if (fileAccessToolRecovery) {
+      recoveryGuidance = {
+        ...recoveryGuidance,
+        strategy: `用户要求继续上次 NAS 文件访问任务，先执行可安全续跑的只读工具：${fileAccessToolRecovery.recoveredPendingToolCalls.map((item) => item.name).join("、")}。`,
+        recoveryAction: {
+          ...recoveryGuidance.recoveryAction,
+          ...fileAccessToolRecovery
         }
       };
     }
@@ -158,6 +170,8 @@ export async function prepareAiChatGraphState(state = {}) {
     } else if (recoveryAction?.mode === "confirmed-tool-call" && Array.isArray(recoveryAction?.recoveredPendingToolCalls) && recoveryAction.recoveredPendingToolCalls.length) {
       route = "textTools";
     } else if (recoveryAction?.mode === "text-retry-tools" && Array.isArray(recoveryAction?.recoveredPendingToolCalls) && recoveryAction.recoveredPendingToolCalls.length) {
+      route = "textTools";
+    } else if (recoveryAction?.mode === "file-access-retry-tools" && Array.isArray(recoveryAction?.recoveredPendingToolCalls) && recoveryAction.recoveredPendingToolCalls.length) {
       route = "textTools";
     } else if (recoveryAction?.mode === "text-replan") {
       route = "text";

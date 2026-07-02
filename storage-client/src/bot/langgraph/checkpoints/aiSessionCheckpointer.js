@@ -302,6 +302,65 @@ function extractPendingConfirmation(traceEvents = []) {
   return null;
 }
 
+const SAFE_ACTION_INPUT_KEYS = new Set([
+  "fileId",
+  "fileIds",
+  "path",
+  "paths",
+  "filePath",
+  "query",
+  "kind",
+  "limit",
+  "offset",
+  "source",
+  "subtitle",
+  "allowSubtitleFallback",
+  "startChar",
+  "maxChars",
+  "includeSummary",
+  "includeProbe",
+  "includeTranscriptExcerpt",
+  "includeSubtitleExcerpt",
+  "mode",
+  "task",
+  "prompt"
+]);
+
+function isUnsafeLocalPath(value = "") {
+  const text = String(value || "").trim();
+  return /^[A-Za-z]:[\\/]/.test(text) || /^\\\\/.test(text);
+}
+
+function compactSuggestedActionInput(input = null) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return {};
+  }
+  const result = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (!SAFE_ACTION_INPUT_KEYS.has(key)) {
+      continue;
+    }
+    if (typeof value === "string") {
+      const text = value.trim().slice(0, 180);
+      if (!text || isUnsafeLocalPath(text)) {
+        continue;
+      }
+      result[key] = text;
+    } else if (typeof value === "number" || typeof value === "boolean") {
+      result[key] = value;
+    } else if (Array.isArray(value)) {
+      const items = value
+        .map((item) => String(item || "").trim().slice(0, 180))
+        .filter((item) => item && !isUnsafeLocalPath(item))
+        .slice(0, 10);
+      if (items.length) {
+        result[key] = items;
+      }
+    }
+  }
+  return result;
+}
+
 function compactFileAccessSuggestedAction(action = null) {
   if (!action || typeof action !== "object") {
     return null;
@@ -313,11 +372,20 @@ function compactFileAccessSuggestedAction(action = null) {
   return Object.fromEntries(Object.entries({
     id: String(action.id || "").trim(),
     tool,
+    input: compactSuggestedActionInput(action.input),
     contentLayer: String(action.contentLayer || "").trim(),
     riskLevel: String(action.riskLevel || "").trim(),
     requiresConfirmation: action.requiresConfirmation === true,
     reason: String(action.reason || "").trim().slice(0, 180)
-  }).filter(([, value]) => value !== "" && value !== null && value !== undefined));
+  }).filter(([, value]) => {
+    if (value === "" || value === null || value === undefined) {
+      return false;
+    }
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return Object.keys(value).length > 0;
+    }
+    return true;
+  }));
 }
 
 function extractFileAccessSuggestedActions(traceEvents = []) {

@@ -16,6 +16,10 @@ const DIRECT_RETRY_TEXT_TOOLS = new Set([
   "explain_file_access"
 ]);
 
+export function isDirectRetryTextToolName(name = "") {
+  return DIRECT_RETRY_TEXT_TOOLS.has(String(name || "").trim());
+}
+
 function getPendingToolNames(toolCalls = []) {
   return [...new Set(
     (Array.isArray(toolCalls) ? toolCalls : [])
@@ -27,6 +31,9 @@ function getPendingToolNames(toolCalls = []) {
 function getRecoveryModeLabel(mode = "") {
   if (mode === "text-retry-tools") {
     return "直连工具重试";
+  }
+  if (mode === "file-access-retry-tools") {
+    return "文件访问续跑";
   }
   if (mode === "text-replan") {
     return "重新规划文本链路";
@@ -105,8 +112,8 @@ export function createRecoveryContinuationMessage(prompt = "") {
 export function resolveTextToolsRecoveryPolicy(recoveryState = null) {
   const pendingToolCalls = Array.isArray(recoveryState?.pendingToolCalls) ? recoveryState.pendingToolCalls : [];
   const pendingToolNames = getPendingToolNames(pendingToolCalls);
-  const retryableToolNames = pendingToolNames.filter((name) => DIRECT_RETRY_TEXT_TOOLS.has(name));
-  const blockedRetryToolNames = pendingToolNames.filter((name) => !DIRECT_RETRY_TEXT_TOOLS.has(name));
+  const retryableToolNames = pendingToolNames.filter((name) => isDirectRetryTextToolName(name));
+  const blockedRetryToolNames = pendingToolNames.filter((name) => !isDirectRetryTextToolName(name));
   const hasRecoverableState = pendingToolCalls.length > 0 && Array.isArray(recoveryState?.planningMessages) && recoveryState.planningMessages.length > 0;
   return {
     hasRecoverableState,

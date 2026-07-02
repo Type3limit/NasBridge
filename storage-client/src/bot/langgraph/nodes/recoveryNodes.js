@@ -1,4 +1,4 @@
-import { createRecoveryArtifact, createRecoveryCard, createRecoveryReplyText, resolveTextToolsRecoveryPolicy } from "../../plugins/ai-chat/recovery.js";
+import { createRecoveryArtifact, createRecoveryCard, createRecoveryReplyText, isDirectRetryTextToolName, resolveTextToolsRecoveryPolicy } from "../../plugins/ai-chat/recovery.js";
 import { appendAiSessionTurn } from "../../plugins/ai-chat/services/aiSessions.js";
 
 export function isConfirmationPrompt(prompt = "") {
@@ -7,6 +7,85 @@ export function isConfirmationPrompt(prompt = "") {
     return false;
   }
   return /^(确认|同意|可以|继续|执行|开始|确定|yes|ok|okay|confirm|go ahead|proceed)([，。,.!！\s]*(执行|继续|开始|吧|即可|这个|以上|操作|任务)*)?$/.test(normalized);
+}
+
+export function isContinuationPrompt(prompt = "") {
+  const normalized = String(prompt || "").normalize("NFKC").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return /^(继续|接着|往下|下一步|continue|go on|proceed)([，。,.!！\s]*(刚才|刚刚|上次|这个|以上|的|任务|处理|执行|即可|吧)*)*$/.test(normalized);
+}
+
+function hasSuggestedActionTarget(input = {}) {
+  return Boolean(
+    String(input.fileId || input.path || input.filePath || input.query || "").trim()
+    || (Array.isArray(input.fileIds) && input.fileIds.length > 0)
+    || (Array.isArray(input.paths) && input.paths.length > 0)
+  );
+}
+
+function buildSuggestedActionToolCall(action = null, index = 0) {
+  const toolName = String(action?.tool || "").trim();
+  const input = action?.input && typeof action.input === "object" && !Array.isArray(action.input)
+    ? action.input
+    : {};
+  const riskLevel = String(action?.riskLevel || "low").trim().toLowerCase() || "low";
+  if (!toolName || !isDirectRetryTextToolName(toolName) || action?.requiresConfirmation === true || riskLevel !== "low" || !hasSuggestedActionTarget(input)) {
+    return null;
+  }
+  const id = `file_access_${toolName.replace(/[^a-z0-9_:-]/gi, "_")}_${index}`;
+  return {
+    id,
+    name: toolName,
+    input,
+    reason: action?.reason || "继续执行上次文件访问诊断建议的低风险只读工具"
+  };
+}
+
+export function buildFileAccessSuggestedToolRecoveryState(fileAccessSuggestedActions = [], prompt = "") {
+  const pendingToolCalls = (Array.isArray(fileAccessSuggestedActions) ? fileAccessSuggestedActions : [])
+    .map((action, index) => buildSuggestedActionToolCall(action, index))
+    .filter(Boolean)
+    .slice(0, 3);
+  if (!pendingToolCalls.length) {
+    return null;
+  }
+  const toolNames = pendingToolCalls.map((item) => item.name);
+  return {
+    mode: "file-access-retry-tools",
+    route: "textTools",
+    directRetryAllowed: true,
+    nextStep: `直接执行上次文件访问建议的只读工具：${toolNames.join("、")}`,
+    recoveredToolRound: 0,
+    recoveredPendingToolCalls: pendingToolCalls,
+    recoveredPlanningMessages: [
+      {
+        role: "system",
+        content: "你正在继续一个 NAS 文件访问诊断后的任务。先执行待续跑的只读工具；工具返回后，用简体中文基于真实结果回答，并说明如果下一步需要高风险或长任务操作，应先让用户确认或返回 jobId。"
+      },
+      {
+        role: "user",
+        content: [
+          "用户要求继续上一次 NAS 文件访问相关任务。",
+          prompt ? `本轮继续文本：${String(prompt || "").trim()}` : "",
+          `本次将先执行只读工具：${toolNames.join("、")}`
+        ].filter(Boolean).join("\n")
+      },
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: pendingToolCalls.map((call) => ({
+          id: call.id,
+          type: "function",
+          function: {
+            name: call.name,
+            arguments: JSON.stringify(call.input)
+          }
+        }))
+      }
+    ]
+  };
 }
 
 export function buildConfirmedToolRecoveryState(pendingConfirmation = null, prompt = "") {

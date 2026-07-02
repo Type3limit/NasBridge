@@ -461,6 +461,9 @@ function summarizeAccessLayerForTrace(layer = null) {
     if (Array.isArray(value)) {
       return value.length > 0;
     }
+    if (value && typeof value === "object") {
+      return Object.keys(value).length > 0;
+    }
     return true;
   }));
 }
@@ -486,6 +489,62 @@ function summarizeAccessBlockerForTrace(blocker = null) {
   }));
 }
 
+const SAFE_ACTION_INPUT_KEYS = new Set([
+  "fileId",
+  "fileIds",
+  "path",
+  "paths",
+  "filePath",
+  "query",
+  "kind",
+  "limit",
+  "offset",
+  "source",
+  "subtitle",
+  "allowSubtitleFallback",
+  "startChar",
+  "maxChars",
+  "includeSummary",
+  "includeProbe",
+  "includeTranscriptExcerpt",
+  "includeSubtitleExcerpt",
+  "mode",
+  "task",
+  "prompt"
+]);
+
+function isUnsafeLocalPath(value = "") {
+  const text = String(value || "").trim();
+  return /^[A-Za-z]:[\\/]/.test(text) || /^\\\\/.test(text);
+}
+
+function summarizeAccessActionInputForTrace(input = null) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return {};
+  }
+  const result = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (!SAFE_ACTION_INPUT_KEYS.has(key)) {
+      continue;
+    }
+    if (typeof value === "string") {
+      const text = value.trim();
+      if (!text || isUnsafeLocalPath(text)) {
+        continue;
+      }
+      result[key] = truncateTraceText(text, 180);
+    } else if (typeof value === "number" || typeof value === "boolean") {
+      result[key] = value;
+    } else if (Array.isArray(value)) {
+      result[key] = value
+        .map((item) => String(item || "").trim())
+        .filter((item) => item && !isUnsafeLocalPath(item))
+        .slice(0, 10);
+    }
+  }
+  return result;
+}
+
 function summarizeAccessActionForTrace(action = null) {
   if (!action || typeof action !== "object") {
     return null;
@@ -493,6 +552,7 @@ function summarizeAccessActionForTrace(action = null) {
   return Object.fromEntries(Object.entries({
     id: String(action.id || "").trim(),
     tool: String(action.tool || "").trim(),
+    input: summarizeAccessActionInputForTrace(action.input),
     contentLayer: String(action.contentLayer || "").trim(),
     riskLevel: String(action.riskLevel || "").trim(),
     requiresConfirmation: action.requiresConfirmation === true,

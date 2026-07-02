@@ -401,6 +401,10 @@ test("tool trace summarizes NAS file access diagnostics without storage root", a
   assert.ok(api.toolEvents[0].resultSummary.fileAccess.blockers.some((blocker) => blocker.id === "no-direct-text-layer"));
   assert.ok(api.toolEvents[0].resultSummary.fileAccess.actionPlan.some((action) => action.tool === "read_file_metadata"));
   assert.ok(api.toolEvents[0].resultSummary.fileAccess.actionPlan.some((action) => action.tool === "invoke_video_analyze"));
+  assert.equal(
+    api.toolEvents[0].resultSummary.fileAccess.actionPlan.find((action) => action.tool === "read_file_metadata")?.input?.fileId,
+    "client:Videos/demo.mp4"
+  );
   assert.doesNotMatch(JSON.stringify(api.toolEvents[0].resultSummary), /D:[/\\]NAS/);
 });
 

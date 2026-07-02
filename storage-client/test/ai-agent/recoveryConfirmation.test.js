@@ -8,8 +8,10 @@ import { readAiSessionCheckpoint } from "../../src/bot/langgraph/checkpoints/aiS
 import { prepareAiChatGraphState } from "../../src/bot/langgraph/nodes/prepareInputNodes.js";
 import {
   buildConfirmedToolRecoveryState,
+  buildFileAccessSuggestedToolRecoveryState,
   buildSessionRecoveryGuidance,
-  isConfirmationPrompt
+  isConfirmationPrompt,
+  isContinuationPrompt
 } from "../../src/bot/langgraph/nodes/recoveryNodes.js";
 import { createRecoveryArtifact, createRecoveryReplyText } from "../../src/bot/plugins/ai-chat/recovery.js";
 import { createAiSession } from "../../src/bot/plugins/ai-chat/services/aiSessions.js";
@@ -180,6 +182,11 @@ async function writeFileAccessSuggestedActionCheckpoint(appDataRoot, sessionId =
           {
             id: "read-media-summary",
             tool: "read_media_summary",
+            input: {
+              fileId: "client:Videos/demo.mp4",
+              includeSummary: true,
+              includeProbe: true
+            },
             contentLayer: "derived-media",
             riskLevel: "low",
             reason: "已有摘要或媒体派生信息，先读取 media summary。"
@@ -187,6 +194,10 @@ async function writeFileAccessSuggestedActionCheckpoint(appDataRoot, sessionId =
           {
             id: "start-media-analysis",
             tool: "invoke_video_analyze",
+            input: {
+              fileId: "client:Videos/demo.mp4",
+              waitForCompletion: false
+            },
             contentLayer: "analysis",
             riskLevel: "medium",
             reason: "没有摘要时启动后台分析任务。"
@@ -240,6 +251,11 @@ test("session recovery guidance includes file access suggested actions from trac
 
     assert.deepEqual(checkpoint.fileAccessSuggestedActions.map((action) => action.tool), ["read_media_summary", "invoke_video_analyze"]);
     assert.equal(checkpoint.latestSnapshot.fileAccessSuggestedActions[0].contentLayer, "derived-media");
+    assert.deepEqual(checkpoint.fileAccessSuggestedActions[0].input, {
+      fileId: "client:Videos/demo.mp4",
+      includeSummary: true,
+      includeProbe: true
+    });
 
     const guidance = buildSessionRecoveryGuidance(checkpoint);
     assert.equal(guidance.recoveryAction.mode, "answer-rebuild");
@@ -254,6 +270,50 @@ test("session recovery guidance includes file access suggested actions from trac
     const artifact = createRecoveryArtifact(guidance, { id: 1 });
     assert.deepEqual(artifact.fileAccessSuggestedActions.map((action) => action.tool), ["read_media_summary", "invoke_video_analyze"]);
     assert.match(artifact.suggestedNextStep, /read_media_summary/);
+
+    assert.equal(isContinuationPrompt("继续"), true);
+    assert.equal(isContinuationPrompt("继续刚才的任务"), true);
+    const recovered = buildFileAccessSuggestedToolRecoveryState(checkpoint.fileAccessSuggestedActions, "继续");
+    assert.equal(recovered.mode, "file-access-retry-tools");
+    assert.deepEqual(recovered.recoveredPendingToolCalls.map((item) => item.name), ["read_media_summary"]);
+    assert.deepEqual(recovered.recoveredPendingToolCalls[0].input, {
+      fileId: "client:Videos/demo.mp4",
+      includeSummary: true,
+      includeProbe: true
+    });
+    assert.equal(recovered.recoveredPlanningMessages.at(-1).tool_calls[0].function.name, "read_media_summary");
+  });
+});
+
+test("prepare input routes continuation to safe file access suggested tools", async () => {
+  await withTempDir(async (appDataRoot) => {
+    const session = await createAiSession(appDataRoot, "file access recovery");
+    await writeFileAccessSuggestedActionCheckpoint(appDataRoot, session.id);
+    const logs = [];
+    const state = await prepareAiChatGraphState({
+      context: {
+        jobId: "botjob_next_file_access",
+        trigger: {
+          rawText: `@ai #${session.id} 继续`
+        },
+        attachments: []
+      },
+      api: {
+        appDataRoot,
+        throwIfCancelled: () => {},
+        appendLog: async (line) => logs.push(line),
+        emitProgress: async () => {},
+        listBots: () => []
+      },
+      hooks: {}
+    });
+
+    assert.equal(state.route, "textTools");
+    assert.equal(state.pendingToolCalls.length, 1);
+    assert.equal(state.pendingToolCalls[0].name, "read_media_summary");
+    assert.equal(state.pendingToolCalls[0].input.fileId, "client:Videos/demo.mp4");
+    assert.equal(state.prepared.recoveryGuidance.recoveryAction.mode, "file-access-retry-tools");
+    assert.match(logs.join("\n"), /recovery scheduling: mode=file-access-retry-tools/);
   });
 });
 

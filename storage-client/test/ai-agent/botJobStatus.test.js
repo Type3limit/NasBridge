@@ -489,6 +489,11 @@ test("agent trace result surfaces file access suggested actions from tool traces
             {
               id: "read-media-summary",
               tool: "read_media_summary",
+              input: {
+                fileId: "client:movie.mp4",
+                includeSummary: true,
+                includeProbe: true
+              },
               contentLayer: "derived-media",
               riskLevel: "low",
               reason: "已有派生信息，先读取媒体摘要。"
@@ -520,9 +525,11 @@ test("agent trace result surfaces file access suggested actions from tool traces
 
   assert.equal(trace.recoveryHint.mode, "answer-rebuild");
   assert.equal(trace.recoveryHint.suggestedAction.tool, "read_media_summary");
+  assert.equal(trace.recoveryHint.suggestedAction.input.fileId, "client:movie.mp4");
   assert.deepEqual(trace.recoveryHint.suggestedActions.map((action) => action.tool), ["read_media_summary", "update_file_metadata"]);
   assert.equal(trace.recoveryHint.suggestedActions[1].requiresConfirmation, true);
   assert.match(trace.recoveryHint.suggestedNextAction, /read_media_summary/);
   assert.equal(trace.timeline[0].resultSummary.fileAccess.actionPlan[0].tool, "read_media_summary");
+  assert.equal(trace.timeline[0].resultSummary.fileAccess.actionPlan[0].input.fileId, "client:movie.mp4");
   assert.equal(trace.timeline[0].resultSummary.fileAccess.actionPlan[2].blocked, true);
 });
