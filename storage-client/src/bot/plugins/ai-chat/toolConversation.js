@@ -42,6 +42,41 @@ export function getAiToolProgress(toolName = "", round = 0) {
       percent: 42 + offset
     };
   }
+  if (normalized === "search_library_files") {
+    return {
+      phase: "tool-search-library-files",
+      label: safeRound > 0 ? `继续搜索 NAS 文件（第 ${safeRound + 1} 轮）` : "搜索 NAS 文件库",
+      percent: 42 + offset
+    };
+  }
+  if (normalized === "read_file_metadata") {
+    return {
+      phase: "tool-read-file-metadata",
+      label: safeRound > 0 ? `继续读取文件元数据（第 ${safeRound + 1} 轮）` : "读取 NAS 文件元数据",
+      percent: 43 + offset
+    };
+  }
+  if (normalized === "read_text_excerpt") {
+    return {
+      phase: "tool-read-text-excerpt",
+      label: safeRound > 0 ? `继续读取文本片段（第 ${safeRound + 1} 轮）` : "读取受控文本片段",
+      percent: 45 + offset
+    };
+  }
+  if (normalized === "read_media_summary") {
+    return {
+      phase: "tool-read-media-summary",
+      label: safeRound > 0 ? `继续读取媒体摘要（第 ${safeRound + 1} 轮）` : "读取媒体派生摘要",
+      percent: 45 + offset
+    };
+  }
+  if (normalized === "explain_file_access") {
+    return {
+      phase: "tool-explain-file-access",
+      label: "说明 NAS 文件访问边界",
+      percent: 42 + offset
+    };
+  }
   if (normalized === "get_storage_file_details") {
     return {
       phase: "tool-get-storage-file-details",

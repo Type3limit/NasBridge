@@ -9,8 +9,13 @@ import { searchYYeTsShows, getYYeTsResource, extractEpisodeMagnets, sanitizeShow
 import {
   MAX_LIBRARY_DETAIL_FILES,
   MAX_LIBRARY_LIST_LIMIT,
+  MAX_TEXT_EXCERPT_CHARS,
+  buildFileAccessExplanation,
   buildLibraryDetailsResult,
   buildLibraryListResult,
+  buildLibraryMetadataResult,
+  buildMediaSummaryResult,
+  buildTextExcerptResult,
   loadLibrarySnapshot,
   readSubtitleForFile,
   resolveLibraryFile
@@ -432,6 +437,82 @@ export function getAiToolDefinitions() {
       }
     },
     {
+      name: "search_library_files",
+      description: "按关键词、目录、类型、标签、摘要状态搜索 NAS 文件库。它是 list_storage_files 的语义化别名，适合用户说“找文件/查目录/最近下载”时调用。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "按文件名、路径、标签或总结内容模糊搜索" },
+          kind: { type: "string", enum: ["all", "video", "audio", "image", "document", "subtitle"] },
+          pathPrefix: { type: "string", description: "目录前缀，例如 Movies/ 或 Bilibili/教程" },
+          mimePrefix: { type: "string", description: "MIME 前缀，例如 video/、audio/、image/" },
+          hasAiSummary: { type: "boolean" },
+          hasSubtitle: { type: "boolean" },
+          includeSubtitles: { type: "boolean" },
+          limit: { type: "integer", minimum: 1, maximum: MAX_LIBRARY_LIST_LIMIT },
+          offset: { type: "integer", minimum: 0 },
+          sortBy: { type: "string", enum: ["updatedAt", "createdAt", "name", "path", "size", "mimeType"] },
+          sortDirection: { type: "string", enum: ["asc", "desc"] }
+        }
+      }
+    },
+    {
+      name: "read_file_metadata",
+      description: "读取一个或多个 NAS 文件的元数据和可访问层级，不返回正文内容。用于决定下一步该读文本片段、读取媒体摘要，还是启动分析任务。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          fileId: { type: "string", description: "单个文件 ID" },
+          fileIds: { type: "array", items: { type: "string" }, maxItems: MAX_LIBRARY_DETAIL_FILES },
+          path: { type: "string", description: "单个相对路径" },
+          paths: { type: "array", items: { type: "string" }, maxItems: MAX_LIBRARY_DETAIL_FILES }
+        }
+      }
+    },
+    {
+      name: "read_text_excerpt",
+      description: "受控读取文本类文件或字幕 sidecar 的片段。只接受 fileId/相对路径，不暴露绝对路径；视频/音频默认读取字幕片段而不是二进制内容。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          fileId: { type: "string", description: "文件 ID，优先使用 list_storage_files/search_library_files 返回的 fileId" },
+          path: { type: "string", description: "相对路径（与 fileId 二选一）" },
+          source: { type: "string", enum: ["file", "subtitle"], description: "读取原文本文件还是字幕 sidecar" },
+          subtitle: { type: "boolean", description: "source=subtitle 的别名" },
+          allowSubtitleFallback: { type: "boolean", description: "非文本媒体有字幕时是否自动读字幕，默认 true" },
+          startChar: { type: "integer", minimum: 0 },
+          offset: { type: "integer", minimum: 0, description: "startChar 的别名" },
+          maxChars: { type: "integer", minimum: 1, maximum: MAX_TEXT_EXCERPT_CHARS }
+        }
+      }
+    },
+    {
+      name: "read_media_summary",
+      description: "读取视频/音频/图片等媒体文件的派生信息：已有 AI 总结、字幕 sidecar 状态、标签和可选字幕片段。不会读取二进制原文。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          fileId: { type: "string", description: "文件 ID" },
+          path: { type: "string", description: "相对路径（与 fileId 二选一）" },
+          includeSummary: { type: "boolean", description: "是否返回已有 aiSummary，默认 true" },
+          includeTranscriptExcerpt: { type: "boolean", description: "是否返回字幕片段，默认 false" },
+          includeSubtitleExcerpt: { type: "boolean", description: "includeTranscriptExcerpt 的别名" },
+          startChar: { type: "integer", minimum: 0 },
+          maxChars: { type: "integer", minimum: 1, maximum: MAX_TEXT_EXCERPT_CHARS }
+        }
+      }
+    },
+    {
+      name: "explain_file_access",
+      description: "说明 AI 当前对 NAS 文件库能访问什么、不能访问什么、读写风险边界和可用工具。用户询问权限/可访问性时调用。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          kind: { type: "string", enum: ["summary", "tools"], description: "summary 返回边界摘要；tools 额外返回工具列表" }
+        }
+      }
+    },
+    {
       name: "get_storage_file_details",
       description: "批量读取 storage-client 文件详情。可直接返回已有 AI 总结，也可读取对应字幕 sidecar（.srt/.vtt/.ass 等）的文本内容。",
       inputSchema: {
@@ -605,6 +686,31 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
   if (name === "list_storage_files") {
     await api.emitProgress({ phase: "tool-list-storage-files", label: "读取存储文件索引", percent: 42 });
     return safeJson(await buildLibraryListResult(api, input));
+  }
+
+  if (name === "search_library_files") {
+    await api.emitProgress({ phase: "tool-search-library-files", label: "搜索 NAS 文件索引", percent: 42 });
+    return safeJson(await buildLibraryListResult(api, input));
+  }
+
+  if (name === "read_file_metadata") {
+    await api.emitProgress({ phase: "tool-read-file-metadata", label: "读取 NAS 文件元数据", percent: 43 });
+    return safeJson(await buildLibraryMetadataResult(api, input));
+  }
+
+  if (name === "read_text_excerpt") {
+    await api.emitProgress({ phase: "tool-read-text-excerpt", label: "读取受控文本片段", percent: 45 });
+    return safeJson(await buildTextExcerptResult(api, input));
+  }
+
+  if (name === "read_media_summary") {
+    await api.emitProgress({ phase: "tool-read-media-summary", label: "读取媒体派生摘要", percent: 45 });
+    return safeJson(await buildMediaSummaryResult(api, input));
+  }
+
+  if (name === "explain_file_access") {
+    await api.emitProgress({ phase: "tool-explain-file-access", label: "整理 NAS 文件访问边界", percent: 42 });
+    return safeJson(await buildFileAccessExplanation(api, input));
   }
 
   if (name === "get_storage_file_details") {

@@ -38,6 +38,11 @@ const BOT_HEALTH_CHECKS = {
 
 const TOOL_RISK_LEVELS = {
   list_storage_files: "low",
+  search_library_files: "low",
+  read_file_metadata: "low",
+  read_text_excerpt: "low",
+  read_media_summary: "low",
+  explain_file_access: "low",
   get_storage_file_details: "low",
   analyze_storage_video: "medium",
   import_bilibili_video: "medium",
@@ -51,6 +56,11 @@ const TOOL_RISK_LEVELS = {
 
 const TOOL_HEALTH_CHECKS = {
   list_storage_files: ["storage-root"],
+  search_library_files: ["storage-root"],
+  read_file_metadata: ["storage-root"],
+  read_text_excerpt: ["storage-root"],
+  read_media_summary: ["storage-root"],
+  explain_file_access: ["storage-root"],
   get_storage_file_details: ["storage-root"],
   analyze_storage_video: ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root"],
   import_bilibili_video: ["storage-root", "yt-dlp"],

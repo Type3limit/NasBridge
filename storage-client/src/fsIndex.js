@@ -100,7 +100,8 @@ export function safeJoin(rootDir, relativePath) {
   const normalized = relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
   const target = path.resolve(rootDir, normalized);
   const rootResolved = path.resolve(rootDir);
-  if (!target.startsWith(rootResolved)) {
+  const relative = path.relative(rootResolved, target);
+  if (relative && (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))) {
     throw new Error("invalid path");
   }
   return target;
