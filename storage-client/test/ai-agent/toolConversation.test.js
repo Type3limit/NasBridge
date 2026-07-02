@@ -230,8 +230,10 @@ test("native tool-call unsupported errors recover into JSON fallback", async () 
     historyMessages: []
   });
   let callCount = 0;
+  const modelCalls = [];
   const modelInvoker = async (request) => {
     callCount += 1;
+    modelCalls.push(request);
     if (request.toolChoice === "auto") {
       throw new Error("tools are not supported by this model");
     }
@@ -262,6 +264,13 @@ test("native tool-call unsupported errors recover into JSON fallback", async () 
   assert.equal(planned.result.fallback, "json-plan");
   assert.equal(planned.pendingToolCalls.length, 1);
   assert.equal(planned.pendingToolCalls[0].name, "search_library_files");
+  const nativeRequest = modelCalls.find((request) => request.toolChoice === "auto");
+  const nativeSearchTool = nativeRequest.tools.find((tool) => tool.name === "search_library_files");
+  const nativeAnalyzeTool = nativeRequest.tools.find((tool) => tool.name === "invoke_video_analyze");
+  const nativeOrganizeTool = nativeRequest.tools.find((tool) => tool.name === "organize_files");
+  assert.match(nativeSearchTool.description, /Capability metadata: .*risk=low.*returns=total\/files/);
+  assert.match(nativeAnalyzeTool.description, /Capability metadata: .*mode=async-job.*health=.*bot-queue/);
+  assert.match(nativeOrganizeTool.description, /Capability metadata: .*requiresConfirmation=true.*returns=operation\/actions/);
   assert.equal(api.agentEvents[0].detail.maxToolRounds, 4);
   assert.equal(api.agentEvents[0].detail.allowMoreToolCalls, true);
   assert.equal(api.agentEvents[1].phase, "decide_continue_or_finish");

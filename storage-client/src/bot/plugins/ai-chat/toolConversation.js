@@ -167,6 +167,49 @@ function compactToolDefinitionsForJsonFallback(tools = [], descriptors = []) {
   }).filter((tool) => tool.name);
 }
 
+function formatOutputSummaryForToolDescription(output = null) {
+  if (!output || typeof output !== "object") {
+    return "";
+  }
+  const required = uniqueTraceStrings(output.required).slice(0, 5);
+  const fields = uniqueTraceStrings(output.fields).slice(0, 5);
+  const values = required.length ? required : fields;
+  return values.length ? values.join("/") : "";
+}
+
+function formatCapabilityMetadataForToolDescription(descriptor = null) {
+  const metadata = compactCapabilityMetadataForJsonFallback(descriptor);
+  if (!Object.keys(metadata).length) {
+    return "";
+  }
+  const bits = [
+    metadata.riskLevel ? `risk=${metadata.riskLevel}` : "",
+    metadata.executionMode ? `mode=${metadata.executionMode}` : "",
+    metadata.requiresConfirmation ? "requiresConfirmation=true" : "",
+    Array.isArray(metadata.healthChecks) && metadata.healthChecks.length ? `health=${metadata.healthChecks.slice(0, 6).join("/")}` : "",
+    Array.isArray(metadata.capabilities) && metadata.capabilities.length ? `caps=${metadata.capabilities.slice(0, 4).join("/")}` : "",
+    Array.isArray(metadata.permissions) && metadata.permissions.length ? `perms=${metadata.permissions.slice(0, 4).join("/")}` : "",
+    formatOutputSummaryForToolDescription(metadata.output) ? `returns=${formatOutputSummaryForToolDescription(metadata.output)}` : ""
+  ].filter(Boolean);
+  return bits.length ? `Capability metadata: ${bits.join("; ")}.` : "";
+}
+
+function decorateToolDefinitionsForPlanning(tools = [], descriptors = []) {
+  const byId = new Map((Array.isArray(descriptors) ? descriptors : [])
+    .map((descriptor) => [String(descriptor?.id || "").trim(), descriptor])
+    .filter(([id]) => id));
+  return (Array.isArray(tools) ? tools : []).map((tool) => {
+    const name = String(tool?.name || "").trim();
+    const descriptor = byId.get(name) || null;
+    const metadata = formatCapabilityMetadataForToolDescription(descriptor);
+    const description = [String(tool?.description || "").trim(), metadata].filter(Boolean).join("\n");
+    return {
+      ...tool,
+      description
+    };
+  });
+}
+
 function findCachedModel(modelRef = "", modelSettings = {}) {
   const models = Array.isArray(modelSettings?.lastListedModels) ? modelSettings.lastListedModels : [];
   if (!models.length) {
@@ -1557,14 +1600,16 @@ export async function invokeToolAwarePlanningRound({ messages, recentMessages, c
     throw new Error("AI tool-call exceeded max rounds");
   }
   const allowMoreToolCalls = round < maxToolRounds;
-  const tools = allowMoreToolCalls ? getAiToolDefinitions() : [];
+  const baseTools = allowMoreToolCalls ? getAiToolDefinitions() : [];
+  const capabilityDescriptors = buildCapabilityDescriptors(api);
+  const plannerTools = decorateToolDefinitionsForPlanning(baseTools, capabilityDescriptors);
   const planningMessages = Array.isArray(messages) ? [...messages] : [];
   const model = modelOverride || defaultTextModel || "";
   const useJsonFallback = allowMoreToolCalls && shouldUseJsonToolFallback({ model, modelSettings });
   if (useJsonFallback) {
     return invokeJsonFallbackPlanningRound({
       planningMessages,
-      tools,
+      tools: baseTools,
       allowMoreToolCalls,
       api,
       model,
@@ -1587,17 +1632,17 @@ export async function invokeToolAwarePlanningRound({ messages, recentMessages, c
     result = await modelInvoker({
       model: model || undefined,
       messages: planningMessages,
-      tools,
+      tools: plannerTools,
       toolChoice: allowMoreToolCalls ? "auto" : "none",
       signal: api.signal,
       maxTokens: 1000,
       temperature: 0.25
     });
   } catch (error) {
-    if (allowMoreToolCalls && tools.length && isNativeToolUnsupportedError(error)) {
+    if (allowMoreToolCalls && baseTools.length && isNativeToolUnsupportedError(error)) {
       return invokeJsonFallbackPlanningRound({
         planningMessages,
-        tools,
+        tools: baseTools,
         allowMoreToolCalls,
         api,
         model,
