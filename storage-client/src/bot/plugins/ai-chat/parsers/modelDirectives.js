@@ -119,6 +119,17 @@ export function parseModelDirective(rawPrompt = "") {
     };
   }
 
+  if (/^\/(?:smoke|smoke-test|self-test|agent\s+smoke)\s*$/i.test(prompt)) {
+    return {
+      prompt: "",
+      modelOverride: "",
+      inspectOnly: false,
+      command: {
+        type: "smoke"
+      }
+    };
+  }
+
   const traceCommand = prompt.match(/^\/(?:trace|timeline|(?:agent|job)\s+trace)(?:\s+([^\s]+))?\s*$/i);
   if (traceCommand) {
     const jobId = String(traceCommand[1] || "").trim();

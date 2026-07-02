@@ -1,4 +1,5 @@
 import { buildAvailableModelChoices, buildAvailableModelsText, buildModelUsageText, buildUseListedModelText, filterModelsByCapability, getModelFilterLabel, sortModelsForDisplay } from "../../plugins/ai-chat/formatters/models.js";
+import { buildAiAgentSmokeChecklist, formatAiAgentSmokeReport } from "../../plugins/ai-chat/formatters/smoke.js";
 import { normalizeModelFilter } from "../../plugins/ai-chat/parsers/modelDirectives.js";
 import { withSessionSubtitle } from "../../plugins/ai-chat/parsers/sessionDirectives.js";
 import { createAiSession, deleteAiSession, formatAiSessionLabel, listAiSessions, renameAiSession } from "../../plugins/ai-chat/services/aiSessions.js";
@@ -121,6 +122,18 @@ function buildCapabilityStatusBadges(artifact = {}) {
     Number.isFinite(Number(artifact.count))
       ? { label: `能力 ${Number(artifact.count)}`, color: "informative", appearance: "tint" }
       : null,
+    counts.blocked ? createStatusBadge("blocked", counts.blocked) : null,
+    counts.error ? createStatusBadge("error", counts.error) : null,
+    counts.warn ? createStatusBadge("warn", counts.warn) : null,
+    counts.ok ? createStatusBadge("ok", counts.ok) : null,
+    counts.unknown ? createStatusBadge("unknown", counts.unknown) : null
+  ].filter(Boolean);
+}
+
+function buildSmokeStatusBadges(checklist = {}) {
+  const counts = checklist.statusCounts || countByStatus(checklist.steps);
+  return [
+    createStatusBadge(checklist.overall || "unknown"),
     counts.blocked ? createStatusBadge("blocked", counts.blocked) : null,
     counts.error ? createStatusBadge("error", counts.error) : null,
     counts.warn ? createStatusBadge("warn", counts.warn) : null,
@@ -869,6 +882,30 @@ export async function handleAiChatCommandRoute(state = {}) {
           }),
           importedFiles: [],
           artifacts: [{ type: "agent-tools", ...artifact, health }]
+        }
+      };
+    }
+
+    if (modelDirective.command.type === "smoke") {
+      const health = await collectAiAgentHealth(api, { modelSettings, signal: api.signal });
+      const descriptors = buildCapabilityDescriptors(api);
+      const checklist = buildAiAgentSmokeChecklist({ health, descriptors, modelSettings });
+      const body = formatAiAgentSmokeReport(checklist);
+      return {
+        result: {
+          chatReply: await api.publishChatReply({
+            text: body,
+            card: {
+              type: "ai-answer",
+              status: checklist.overall === "blocked" || checklist.overall === "error" ? "failed" : "succeeded",
+              title: "AI Agent Smoke Checklist",
+              subtitle: withSessionSubtitle(`overall: ${checklist.overall}`, activeSession),
+              body,
+              badges: buildSmokeStatusBadges(checklist)
+            }
+          }),
+          importedFiles: [],
+          artifacts: [{ type: "agent-smoke-checklist", ...checklist }]
         }
       };
     }

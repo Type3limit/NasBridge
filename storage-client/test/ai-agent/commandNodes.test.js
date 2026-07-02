@@ -750,6 +750,104 @@ test("tools command route publishes structured capability artifact", async () =>
   }
 });
 
+test("smoke command route publishes local agent smoke checklist", async () => {
+  const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-smoke-command-"));
+  const storageRoot = path.join(appDataRoot, "storage");
+  const originalFetch = globalThis.fetch;
+  try {
+    await fs.mkdir(storageRoot, { recursive: true });
+    globalThis.fetch = async (url) => {
+      const text = String(url || "");
+      if (text.includes("/models")) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          text: async () => JSON.stringify({
+            data: [{
+              id: "deepseek-v4-pro",
+              name: "DeepSeek V4 Pro",
+              capabilities: { supports: { tool_calls: false } }
+            }]
+          }),
+          json: async () => ({})
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        text: async () => "{}",
+        json: async () => ({ sources: ["qq"] })
+      };
+    };
+
+    await withEnv({
+      AI_PROVIDER: "openai",
+      OPENAI_BASE_URL: "https://example.invalid/v1",
+      OPENAI_API_KEY: "sk-test",
+      OPENAI_MODEL: "deepseek-v4-pro",
+      MUSIC_LIB_BRIDGE_URL: "http://music.invalid",
+      BOT_BILIBILI_COOKIE_HEADER: undefined,
+      BOT_BILIBILI_COOKIE_FILE: undefined
+    }, async () => {
+      const replies = [];
+      const api = {
+        appDataRoot,
+        storageRoot,
+        signal: null,
+        throwIfCancelled() {},
+        async publishChatReply(payload) {
+          replies.push(payload);
+          return {
+            id: "reply_smoke",
+            text: payload.text,
+            card: payload.card
+          };
+        }
+      };
+
+      const result = await handleAiChatCommandRoute({
+        prepared: {
+          api,
+          modelDirective: {
+            command: {
+              type: "smoke"
+            }
+          },
+          modelSettings: {
+            textModel: "openai::deepseek-v4-pro",
+            lastListedModels: [{
+              id: "openai::deepseek-v4-pro",
+              modelId: "deepseek-v4-pro",
+              provider: "openai",
+              name: "DeepSeek V4 Pro"
+            }]
+          }
+        }
+      });
+
+      const artifact = result.result.artifacts[0];
+      assert.equal(replies[0].card.title, "AI Agent Smoke Checklist");
+      assert.ok(Array.isArray(replies[0].card.badges));
+      assert.equal(artifact.type, "agent-smoke-checklist");
+      assert.ok(["ok", "warn", "blocked"].includes(artifact.overall));
+      assert.ok(artifact.steps.some((step) => step.id === "health" && step.command === "@ai /health"));
+      assert.ok(artifact.steps.some((step) => step.id === "models" && step.command === "@ai /models refresh"));
+      assert.ok(artifact.steps.some((step) => step.id === "file-search" && step.requiredCapabilities.includes("search_library_files")));
+      assert.ok(artifact.steps.some((step) => step.id === "video-summary" && step.requiredCapabilities.includes("invoke_video_analyze")));
+      assert.ok(artifact.steps.some((step) => step.id === "music-playback" && step.command.includes("播放")));
+      assert.match(replies[0].text, /AI Agent Smoke Checklist/);
+      assert.match(replies[0].text, /@ai \/jobs/);
+      assert.doesNotMatch(JSON.stringify(artifact), new RegExp(storageRoot.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
+      assert.doesNotMatch(JSON.stringify(artifact), /sk-test/);
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(appDataRoot, { recursive: true, force: true });
+  }
+});
+
 test("trace command route publishes latest agent trace report", async () => {
   const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-trace-command-"));
   const jobId = "botjob_trace_command";
