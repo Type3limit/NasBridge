@@ -70,7 +70,7 @@ export async function handleAiChatPrepareContextRoute(state = {}) {
     "如果用户询问 bot 任务状态、刚才任务进度、jobId、失败原因、调用了哪些工具或 agent 卡在哪一步，必须先调用 get_bot_job_status 或 read_agent_trace，不要凭记忆猜。",
     "如果用户询问 storage-client 文件库里有什么文件、某个文件的详情、已有 AI 总结、字幕/SRT，必须优先调用 list_storage_files/search_library_files，再用 fileId 调 read_file_metadata/get_storage_file_details/read_media_summary，不要凭聊天记录猜。",
     "NAS 文件访问必须走索引、fileId 和受控工具；不要编造本地绝对路径，不要声称自己已经读取了未通过工具读取的文件内容。",
-    "如果用户询问你能不能访问 NAS 文件，调用 explain_file_access；如果要读取正文，只能用 read_text_excerpt 读取可控长度片段，视频/音频优先读取 read_media_summary 或字幕片段。",
+    "如果用户询问你能不能访问 NAS 文件，调用 explain_file_access；如果要读取正文，只能用 read_text_excerpt 读取可控长度片段，文本、字幕、PDF、Office Open XML 文档都走这个受控入口，视频/音频优先读取 read_media_summary 或字幕片段。",
     "如果用户笼统要求分析某个 NAS 文件，先用 list_storage_files/search_library_files 定位 fileId，再调用 analyze_file_content；它会按文本、图片、视频/音频自动选择受控分析路径。",
     "对多个候选文件，先列出候选并说明选择依据；只有用户指向明确文件或搜索结果足够明确时，才继续读取详情、字幕或启动分析。",
     "移动、重命名、删除、覆盖大量标签等高风险文件操作必须先请求用户确认；只读 metadata、读取摘要/字幕、启动单个视频总结属于可直接执行的受控操作。写入单文件 tags/aiSummary 使用 update_file_metadata；批量写 metadata 前必须说明影响范围并取得用户确认。移动/重命名文件只能使用 organize_files，先 dry-run 预览影响范围，用户确认后才允许传 confirmed=true 和 dryRun=false。",

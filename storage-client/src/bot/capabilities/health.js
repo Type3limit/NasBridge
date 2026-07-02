@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getEffectiveMultimodalModel, getEffectiveTextModel } from "../plugins/ai-chat/services/modelSettings.js";
 import { listAvailableModels, parseModelRef } from "../tools/llmClient.js";
+import { getDocumentTextExtractionHealth } from "../tools/documentText.js";
 import { buildFileAccessPolicy, loadLibrarySnapshot } from "../tools/libraryFiles.js";
 
 const healthCache = new Map();
@@ -40,7 +41,10 @@ function buildHealthCacheKey(api = {}, options = {}) {
     String(process.env.PLAYWRIGHT_BROWSERS_PATH || "").trim(),
     String(process.env.WHISPER_CPP_PATH || "").trim(),
     String(process.env.WHISPER_MODEL_PATH || "").trim(),
-    String(process.env.YT_DLP_PATH || "").trim()
+    String(process.env.YT_DLP_PATH || "").trim(),
+    String(process.env.PDF_TO_TEXT_PATH || "").trim(),
+    String(process.env.PDFTOTEXT_PATH || "").trim(),
+    String(process.env.POPPLER_PDFTOTEXT_PATH || "").trim()
   ].join("|");
 }
 
@@ -573,6 +577,7 @@ export async function collectAiAgentHealth(api = {}, options = {}) {
   checks.push(aiModelResult.check);
   checks.push(buildToolCallRoutingCheck(options.modelSettings || {}, aiModelResult.models || [], aiModelResult.source || "模型列表"));
   checks.push(await checkStorage(api));
+  checks.push(await getDocumentTextExtractionHealth({ pdfToTextPath: api.dependencies?.pdfToTextPath || "" }));
   checks.push(await checkCommandOrPath("ffmpeg", "ffmpeg", api.dependencies?.ffmpegPath || process.env.FFMPEG_PATH || "ffmpeg"));
   checks.push(await checkCommandOrPath("ffprobe", "ffprobe", api.dependencies?.ffprobePath || process.env.FFPROBE_PATH || "ffprobe"));
   checks.push(await checkWhisper());

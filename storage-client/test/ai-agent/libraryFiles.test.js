@@ -8,6 +8,7 @@ import path from "node:path";
 import {
   buildFileAccessPolicy,
   buildFileAccessExplanation,
+  buildLibraryMetadataResult,
   buildOrganizeFilesResult,
   buildTextExcerptResult,
   buildUpdateFileMetadataResult
@@ -35,6 +36,59 @@ function createApi(root, files, extraDependencies = {}) {
       ...extraDependencies
     }
   };
+}
+
+function writeUInt32(buffer, value, offset) {
+  buffer.writeUInt32LE(value >>> 0, offset);
+}
+
+function createStoredZip(entries = []) {
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+  for (const entry of entries) {
+    const name = Buffer.from(String(entry.name || ""), "utf8");
+    const data = Buffer.from(String(entry.content || ""), "utf8");
+    const local = Buffer.alloc(30 + name.length);
+    writeUInt32(local, 0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0x0800, 6);
+    local.writeUInt16LE(0, 8);
+    writeUInt32(local, 0, 14);
+    writeUInt32(local, data.length, 18);
+    writeUInt32(local, data.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    local.writeUInt16LE(0, 28);
+    name.copy(local, 30);
+    localParts.push(local, data);
+
+    const central = Buffer.alloc(46 + name.length);
+    writeUInt32(central, 0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0x0800, 8);
+    central.writeUInt16LE(0, 10);
+    writeUInt32(central, 0, 16);
+    writeUInt32(central, data.length, 20);
+    writeUInt32(central, data.length, 24);
+    central.writeUInt16LE(name.length, 28);
+    central.writeUInt16LE(0, 30);
+    central.writeUInt16LE(0, 32);
+    writeUInt32(central, offset, 42);
+    name.copy(central, 46);
+    centralParts.push(central);
+
+    offset += local.length + data.length;
+  }
+  const centralOffset = offset;
+  const central = Buffer.concat(centralParts);
+  const eocd = Buffer.alloc(22);
+  writeUInt32(eocd, 0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  writeUInt32(eocd, central.length, 12);
+  writeUInt32(eocd, centralOffset, 16);
+  return Buffer.concat([...localParts, central, eocd]);
 }
 
 test("text excerpt reads bounded content without exposing absolute paths", async () => {
@@ -67,6 +121,94 @@ test("text excerpt reads bounded content without exposing absolute paths", async
     assert.equal(result.policy.allowBinaryRead, false);
     assert.equal(result.policy.maxInlineTextChars, 20_000);
     assert.doesNotMatch(JSON.stringify(result), new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
+  });
+});
+
+test("text excerpt extracts PDF content through the document layer", async () => {
+  await withTempDir(async (root) => {
+    await fs.mkdir(path.join(root, "docs"), { recursive: true });
+    const pdf = [
+      "%PDF-1.4",
+      "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj",
+      "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj",
+      "3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R >> endobj",
+      "4 0 obj << /Length 72 >>",
+      "stream",
+      "BT /F1 12 Tf 72 720 Td (Hello PDF excerpt from NAS agent) Tj ET",
+      "endstream",
+      "endobj",
+      "%%EOF"
+    ].join("\n");
+    await fs.writeFile(path.join(root, "docs", "paper.pdf"), pdf, "latin1");
+    const api = createApi(root, [
+      {
+        id: "client:docs/paper.pdf",
+        clientId: "client",
+        path: "docs/paper.pdf",
+        name: "paper.pdf",
+        size: Buffer.byteLength(pdf),
+        mimeType: "application/pdf",
+        updatedAt: "2026-07-01T00:00:00.000Z"
+      }
+    ]);
+
+    const result = await buildTextExcerptResult(api, {
+      path: "docs/paper.pdf",
+      maxChars: 16
+    });
+
+    assert.equal(result.excerpt.source, "document");
+    assert.equal(result.excerpt.format, "pdf");
+    assert.match(result.excerpt.extractor, /pdf/);
+    assert.equal(result.excerpt.text, "Hello PDF excerp");
+    assert.equal(result.excerpt.truncated, true);
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
+
+    const metadata = await buildLibraryMetadataResult(api, { path: "docs/paper.pdf" });
+    assert.equal(metadata.files[0].contentAccess.documentTextExtractable, true);
+    assert.equal(metadata.files[0].contentAccess.textReadable, true);
+    assert.ok(metadata.files[0].contentAccess.recommendedTools.includes("read_text_excerpt"));
+  });
+});
+
+test("text excerpt extracts Office Open XML document text", async () => {
+  await withTempDir(async (root) => {
+    await fs.mkdir(path.join(root, "docs"), { recursive: true });
+    const docx = createStoredZip([
+      {
+        name: "word/document.xml",
+        content: [
+          "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+          "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">",
+          "<w:body><w:p><w:r><w:t>Alpha NAS document</w:t></w:r></w:p>",
+          "<w:p><w:r><w:t>Beta excerpt text</w:t></w:r></w:p></w:body></w:document>"
+        ].join("")
+      }
+    ]);
+    await fs.writeFile(path.join(root, "docs", "report.docx"), docx);
+    const api = createApi(root, [
+      {
+        id: "client:docs/report.docx",
+        clientId: "client",
+        path: "docs/report.docx",
+        name: "report.docx",
+        size: docx.length,
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        updatedAt: "2026-07-01T00:00:00.000Z"
+      }
+    ]);
+
+    const result = await buildTextExcerptResult(api, {
+      fileId: "client:docs/report.docx",
+      startChar: 6,
+      maxChars: 12
+    });
+
+    assert.equal(result.excerpt.source, "document");
+    assert.equal(result.excerpt.extractor, "ooxml");
+    assert.equal(result.excerpt.format, "docx");
+    assert.equal(result.excerpt.text, "NAS document");
+    assert.equal(result.policy.allowBinaryRead, false);
   });
 });
 

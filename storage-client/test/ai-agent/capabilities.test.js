@@ -161,6 +161,8 @@ test("health cache uses isolated local dependencies and caches the second snapsh
         assert.ok(storageCheck.policy.hiddenDirs.includes(".nas-bot"));
         assert.equal(checks.get("ai-tool-call").status, "ok");
         assert.match(checks.get("ai-tool-call").detail, /JSON plan fallback/);
+        assert.equal(checks.get("document-text").status, "ok");
+        assert.match(checks.get("document-text").detail, /Office Open XML/);
         assert.equal(checks.get("qq-music-cookie").status, "ok");
         assert.equal(checks.get("bilibili-auth").status, "ok");
         assert.equal(checks.get("bot-queue").status, "ok");
@@ -284,6 +286,8 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.equal(byId.get("organize_files").riskLevel, "high");
   assert.equal(byId.get("organize_files").requiresConfirmation, true);
   assert.ok(byId.get("ai.chat").healthChecks.includes("ai-tool-call"));
+  assert.ok(byId.get("read_text_excerpt").healthChecks.includes("document-text"));
+  assert.ok(byId.get("analyze_file_content").healthChecks.includes("document-text"));
   assert.deepEqual(byId.get("invoke_music_control").healthChecks, ["music-bridge", "qq-music-cookie"]);
   assert.ok(byId.get("invoke_bilibili_downloader").healthChecks.includes("bilibili-auth"));
 

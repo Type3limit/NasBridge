@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getStorageHiddenDirectoryNames, safeJoin, scanFiles } from "../../fsIndex.js";
+import { extractDocumentTextExcerpt, isExtractableDocumentPath } from "./documentText.js";
 
 export const MAX_LIBRARY_LIST_LIMIT = 80;
 export const MAX_LIBRARY_DETAIL_FILES = 20;
@@ -112,6 +113,10 @@ function isLikelyTextFile(file = {}) {
     mimeType.includes("csv") ||
     RAW_TEXT_EXTS.has(ext)
   );
+}
+
+export function isDocumentTextExtractable(file = {}) {
+  return isExtractableDocumentPath(file.relativePath || file.path || file.name || "", file.mimeType || "");
 }
 
 function isMediaFile(file = {}) {
@@ -468,6 +473,28 @@ async function readTextExcerptRelative(storageRoot, relativePath = "", options =
 
   const maxChars = clampInteger(options.maxChars || 8_000, 1, MAX_TEXT_EXCERPT_CHARS);
   const startChar = clampInteger(options.startChar || options.offset || 0, 0, Number.MAX_SAFE_INTEGER);
+  if (isExtractableDocumentPath(normalized, options.mimeType || "")) {
+    const documentExcerpt = await extractDocumentTextExcerpt(absolutePath, {
+      ...options,
+      relativePath: normalized,
+      maxChars,
+      startChar,
+      maxAllowedChars: MAX_TEXT_EXCERPT_CHARS
+    });
+    return {
+      path: normalized,
+      source: "document",
+      text: documentExcerpt.text,
+      startChar: documentExcerpt.startChar,
+      nextStartChar: documentExcerpt.nextStartChar,
+      length: documentExcerpt.length,
+      fileSize: stat.size,
+      truncated: documentExcerpt.truncated,
+      extractor: documentExcerpt.extractor,
+      format: documentExcerpt.format,
+      sourceTruncated: documentExcerpt.sourceTruncated === true
+    };
+  }
   const approximateByteOffset = Math.max(0, startChar);
   const readLength = Math.min(MAX_TEXT_EXCERPT_READ_BYTES, Math.max(maxChars * 4 + 4096, 4096));
 
@@ -530,7 +557,9 @@ function collectFileIdentifiers(input = {}) {
 }
 
 function buildContentAccessHints(file = {}) {
-  const textReadable = isLikelyTextFile(file);
+  const rawTextReadable = isLikelyTextFile(file);
+  const documentTextExtractable = isDocumentTextExtractable(file);
+  const textReadable = rawTextReadable || documentTextExtractable;
   const media = isMediaFile(file);
   const tools = ["read_file_metadata", "analyze_file_content"];
   if (textReadable) {
@@ -543,7 +572,9 @@ function buildContentAccessHints(file = {}) {
     tools.push("invoke_video_analyze");
   }
   return {
-    rawTextReadable: textReadable,
+    rawTextReadable,
+    documentTextExtractable,
+    textReadable,
     media,
     subtitleAvailable: Boolean(file.subtitleAvailable),
     aiSummaryAvailable: Boolean(file.aiSummaryAvailable),
@@ -816,7 +847,7 @@ export async function buildTextExcerptResult(api, input = {}) {
     };
   }
 
-  if (!isLikelyTextFile(file)) {
+  if (!isLikelyTextFile(file) && !isDocumentTextExtractable(file)) {
     if (file.subtitleAvailable && input.allowSubtitleFallback !== false) {
       const subtitle = await readSubtitleForFile(api, file, input.maxChars || input.subtitleMaxChars || MAX_TEXT_EXCERPT_CHARS);
       if (subtitle) {
@@ -831,7 +862,8 @@ export async function buildTextExcerptResult(api, input = {}) {
 
   const excerpt = await readTextExcerptRelative(api.storageRoot, targetPath, {
     maxChars: input.maxChars,
-    startChar: input.startChar ?? input.offset
+    startChar: input.startChar ?? input.offset,
+    mimeType: source === "file" ? file.mimeType : ""
   });
   return {
     file: {
@@ -842,7 +874,7 @@ export async function buildTextExcerptResult(api, input = {}) {
     },
     excerpt: {
       ...excerpt,
-      source
+      source: excerpt.source || source
     },
     policy: {
       ...buildFileAccessPolicy(api),
@@ -921,7 +953,7 @@ export async function buildFileAccessExplanation(api, input = {}) {
     readableLayers: [
       "Index: 文件名、相对路径、MIME、大小、mtime、标签、摘要/字幕可用性",
       "Metadata: 单文件元数据、标签、摘要/字幕状态",
-      "Excerpt: 文本、字幕、Markdown、JSON 等可控长度片段",
+      "Excerpt: 文本、字幕、Markdown、JSON、PDF、Office Open XML 等可控长度片段",
       "Derived: 既有 AI summary、字幕 sidecar、媒体派生信息"
     ],
     blockedLayers: [

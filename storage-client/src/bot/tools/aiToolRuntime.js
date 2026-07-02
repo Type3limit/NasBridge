@@ -24,6 +24,7 @@ import {
   buildOrganizeFilesResult,
   buildTextExcerptResult,
   buildUpdateFileMetadataResult,
+  isDocumentTextExtractable,
   loadLibrarySnapshot,
   readSubtitleForFile,
   resolveLibraryFile
@@ -298,7 +299,7 @@ function resolveAnalyzeMode(file = {}, requestedMode = "auto") {
   if (mimeType.startsWith("video/") || mimeType.startsWith("audio/")) {
     return "media";
   }
-  if (isAnalyzableTextFile(file)) {
+  if (isAnalyzableTextFile(file) || isDocumentTextExtractable(file)) {
     return "text";
   }
   if (file.aiSummaryAvailable || file.subtitleAvailable) {
@@ -873,13 +874,13 @@ export function getAiToolDefinitions() {
     },
     {
       name: "read_text_excerpt",
-      description: "受控读取文本类文件或字幕 sidecar 的片段。只接受 fileId/相对路径，不暴露绝对路径；视频/音频默认读取字幕片段而不是二进制内容。",
+      description: "受控读取文本类文件、PDF/Office 文档抽取文本或字幕 sidecar 的片段。只接受 fileId/相对路径，不暴露绝对路径；视频/音频默认读取字幕片段而不是二进制内容。",
       inputSchema: {
         type: "object",
         properties: {
           fileId: { type: "string", description: "文件 ID，优先使用 list_storage_files/search_library_files 返回的 fileId" },
           path: { type: "string", description: "相对路径（与 fileId 二选一）" },
-          source: { type: "string", enum: ["file", "subtitle"], description: "读取原文本文件还是字幕 sidecar" },
+          source: { type: "string", enum: ["file", "subtitle", "document"], description: "读取原文本文件、文档抽取文本还是字幕 sidecar" },
           subtitle: { type: "boolean", description: "source=subtitle 的别名" },
           allowSubtitleFallback: { type: "boolean", description: "非文本媒体有字幕时是否自动读字幕，默认 true" },
           startChar: { type: "integer", minimum: 0 },
@@ -906,7 +907,7 @@ export function getAiToolDefinitions() {
     },
     {
       name: "analyze_file_content",
-      description: "统一分析 NAS 文件内容：文本读取受控片段并总结，图片调用多模态模型，视频/音频优先复用已有摘要/字幕或按需委派 video.analyze。",
+      description: "统一分析 NAS 文件内容：文本/PDF/Office 文档读取受控片段并总结，图片调用多模态模型，视频/音频优先复用已有摘要/字幕或按需委派 video.analyze。",
       inputSchema: {
         type: "object",
         properties: {
@@ -916,7 +917,7 @@ export function getAiToolDefinitions() {
           mode: { type: "string", enum: ["auto", "text", "image", "media"], description: "分析模式；默认 auto，会按 MIME 和派生信息自动选择" },
           task: { type: "string", description: "用户希望完成的分析任务" },
           prompt: { type: "string", description: "task 的别名" },
-          source: { type: "string", enum: ["file", "subtitle"], description: "文本模式下读取原文件还是字幕 sidecar" },
+          source: { type: "string", enum: ["file", "subtitle", "document"], description: "文本模式下读取原文件、文档抽取文本还是字幕 sidecar" },
           subtitle: { type: "boolean", description: "文本模式下读取字幕 sidecar" },
           allowSubtitleFallback: { type: "boolean", description: "非文本媒体有字幕时是否自动读字幕，默认 true" },
           startChar: { type: "integer", minimum: 0 },

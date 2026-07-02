@@ -26,7 +26,7 @@ const TASK_PRESETS = [
     lines: [
       "调用 search_library_files/list_storage_files 定位候选文件，优先使用 kind/pathPrefix/tags/hasAiSummary/hasSubtitle 过滤。",
       "多个候选时先列出候选和选择依据；只有目标明确后再读 metadata、摘要或正文片段。",
-      "读取详情用 read_file_metadata/read_media_summary/get_storage_file_details；正文片段用 read_text_excerpt。"
+      "读取详情用 read_file_metadata/read_media_summary/get_storage_file_details；正文、PDF、Office 文档片段用 read_text_excerpt。"
     ]
   },
   {
@@ -44,8 +44,8 @@ const TASK_PRESETS = [
     title: "Analyze a NAS file",
     triggers: [/分析|阅读|读取|文档|图片|pdf|markdown|内容|analy[sz]e|read|document|image/i],
     lines: [
-      "目标文件明确后优先调用 analyze_file_content；它会按文本、图片、媒体类型选择受控分析路径。",
-      "大文本只读取片段，必要时分页/抽样；图片走视觉模型；视频/音频优先复用字幕/摘要。"
+      "目标文件明确后优先调用 analyze_file_content；它会按文本、PDF/Office 文档、图片、媒体类型选择受控分析路径。",
+      "大文本和文档只读取抽取片段，必要时分页/抽样；图片走视觉模型；视频/音频优先复用字幕/摘要。"
     ]
   },
   {
