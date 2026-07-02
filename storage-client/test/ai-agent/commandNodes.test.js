@@ -194,8 +194,17 @@ test("formatBotJobStatusReport summarizes jobs, child jobs, and recovery hints",
         progress: { label: "Whisper failed", percent: 12 }
       }],
       agentTrace: {
+        snapshot: {
+          sessionId: 7
+        },
         recoveryHint: {
-          nextAction: "修复 Whisper 后重试"
+          nextAction: "修复 Whisper 后重试",
+          canContinueDirectly: true,
+          requiresUserConfirmation: false,
+          suggestedActions: [
+            { tool: "read_media_summary" },
+            { tool: "read_text_excerpt" }
+          ]
         }
       }
     }]
@@ -206,6 +215,8 @@ test("formatBotJobStatusReport summarizes jobs, child jobs, and recovery hints",
   assert.match(body, /子任务：1 · failed 1/);
   assert.match(body, /video\.analyze · botjob_child · failed/);
   assert.match(body, /恢复建议：修复 Whisper 后重试/);
+  assert.match(body, /建议工具：read_media_summary、read_text_excerpt/);
+  assert.match(body, /可继续：@ai #7 继续/);
   assert.match(body, /@ai \/trace <jobId>/);
 });
 
@@ -232,7 +243,13 @@ test("formatBotJobLogReport summarizes redacted log and child jobs", () => {
     }],
     agentTrace: {
       recoveryHint: {
-        nextAction: "修复模型后重试"
+        nextAction: "等待用户确认后继续执行 update_file_metadata",
+        requiresUserConfirmation: true,
+        tool: "update_file_metadata",
+        targetFileCount: 2,
+        suggestedActions: [
+          { tool: "update_file_metadata" }
+        ]
       }
     }
   });
@@ -241,7 +258,9 @@ test("formatBotJobLogReport summarizes redacted log and child jobs", () => {
   assert.match(body, /ai\.chat · botjob_parent · failed/);
   assert.match(body, /video\.analyze · botjob_child · failed/);
   assert.match(body, /OPENAI_API_KEY=\*\*\*/);
-  assert.match(body, /恢复建议：修复模型后重试/);
+  assert.match(body, /恢复建议：等待用户确认后继续执行 update_file_metadata/);
+  assert.match(body, /建议工具：update_file_metadata/);
+  assert.match(body, /需要确认：update_file_metadata 影响文件数 2/);
   assert.match(body, /@ai \/job botjob_parent/);
 });
 

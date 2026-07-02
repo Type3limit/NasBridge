@@ -272,6 +272,30 @@ function formatBotJobLine(job = {}, prefix = "-") {
   return `${prefix} ${parts.join(" · ")}`;
 }
 
+function formatRecoveryHintLines(trace = null, indent = "") {
+  const hint = trace?.recoveryHint || null;
+  if (!hint || typeof hint !== "object") {
+    return [];
+  }
+  const lines = [];
+  if (hint.nextAction) {
+    lines.push(`${indent}恢复建议：${hint.nextAction}`);
+  }
+  const suggestedTools = Array.isArray(hint.suggestedActions)
+    ? hint.suggestedActions.map((action) => action?.tool || action?.id).filter(Boolean)
+    : [];
+  if (suggestedTools.length) {
+    lines.push(`${indent}建议工具：${suggestedTools.join("、")}`);
+  }
+  const sessionId = trace?.snapshot?.sessionId ?? null;
+  if (hint.canContinueDirectly === true && hint.requiresUserConfirmation !== true && sessionId !== null && sessionId !== undefined && sessionId !== "") {
+    lines.push(`${indent}可继续：@ai #${sessionId} 继续`);
+  } else if (hint.requiresUserConfirmation === true) {
+    lines.push(`${indent}需要确认：${hint.tool ? `${hint.tool} ` : ""}${hint.targetFileCount != null ? `影响文件数 ${hint.targetFileCount}` : "等待用户确认"}`);
+  }
+  return lines;
+}
+
 export function formatBotJobStatusReport(status = {}) {
   const jobs = Array.isArray(status.jobs) ? status.jobs : [];
   const missing = Array.isArray(status.missing) ? status.missing : [];
@@ -297,9 +321,7 @@ export function formatBotJobStatusReport(status = {}) {
       }
     }
     const trace = job.agentTrace;
-    if (trace?.recoveryHint?.nextAction) {
-      lines.push(`  恢复建议：${trace.recoveryHint.nextAction}`);
-    }
+    lines.push(...formatRecoveryHintLines(trace, "  "));
   }
   lines.push("");
   lines.push("查看 agent 执行细节：@ai /trace <jobId>");
@@ -323,9 +345,7 @@ export function formatBotJobLogReport(bundle = {}) {
     }
   }
   const trace = bundle.agentTrace;
-  if (trace?.recoveryHint?.nextAction) {
-    lines.push(`恢复建议：${trace.recoveryHint.nextAction}`);
-  }
+  lines.push(...formatRecoveryHintLines(trace));
   const content = String(bundle.log?.content || "").trim();
   lines.push("");
   lines.push(bundle.log?.truncated ? "日志尾部（已截断）:" : "日志:");
