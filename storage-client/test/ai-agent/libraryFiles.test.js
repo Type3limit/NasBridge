@@ -519,6 +519,20 @@ test("diagnose_file_access reports missing files as searchable instead of readin
   });
 });
 
+test("file metadata reports missing files as searchable", async () => {
+  await withTempDir(async (root) => {
+    const result = await buildLibraryMetadataResult(createApi(root, []), {
+      path: "missing.mp4"
+    });
+
+    assert.equal(result.count, 0);
+    assert.deepEqual(result.missing, ["missing.mp4"]);
+    assert.match(result.nextActions[0], /search_library_files/);
+    assert.deepEqual(result.actionPlan, []);
+    assert.equal(result.policy.contentLayer, "metadata");
+  });
+});
+
 test("image metadata recommends visual analysis rather than video analyze", async () => {
   await withTempDir(async (root) => {
     const api = createApi(root, [
@@ -541,6 +555,12 @@ test("image metadata recommends visual analysis rather than video analyze", asyn
     assert.equal(result.files[0].contentAccess.videoOrAudio, false);
     assert.ok(result.files[0].contentAccess.recommendedTools.includes("analyze_file_content"));
     assert.ok(!result.files[0].contentAccess.recommendedTools.includes("invoke_video_analyze"));
+    assert.equal(result.policy.root, "STORAGE_ROOT");
+    assert.ok(result.files[0].nextActions.some((item) => item.includes("analyze_file_content")));
+    assert.ok(result.files[0].actionPlan.some((action) => action.tool === "analyze_file_content"));
+    assert.ok(!result.files[0].actionPlan.some((action) => action.tool === "invoke_video_analyze"));
+    assert.equal(result.actionPlan[0].tool, "analyze_file_content");
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
   });
 });
 

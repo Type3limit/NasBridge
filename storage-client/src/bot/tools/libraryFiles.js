@@ -890,7 +890,7 @@ function buildConcreteFileAccessActionPlan(file = {}, hints = {}, pathSafe = tru
     })
   ];
 
-  if (hints.aiSummaryAvailable || hints.media) {
+  if (hints.aiSummaryAvailable || (hints.media && !hints.image)) {
     actions.push(buildAccessAction({
       id: "read-media-summary",
       tool: "read_media_summary",
@@ -1420,6 +1420,62 @@ function buildLibrarySearchActionPlan(page = [], total = 0, input = {}) {
   ];
 }
 
+function buildMetadataAccessProfile(api = {}, file = {}) {
+  let pathSafe = true;
+  try {
+    safeJoin(api.storageRoot, file.relativePath);
+  } catch {
+    pathSafe = false;
+  }
+  const hiddenDirectory = isHiddenRelativePath(file.relativePath);
+  const hints = buildContentAccessHints(file);
+  const analyzeMode = inferAnalyzeAccessMode(file, hints);
+  const analysisDependencies = buildDependencyStatus(getAnalysisDependencyRequirements(analyzeMode, hints), api, {
+    blockingWarnIds: analyzeMode === "media" && hints.videoOrAudio && !hints.aiSummaryAvailable ? ["whisper"] : []
+  });
+  const actionPlan = buildConcreteFileAccessActionPlan(file, hints, pathSafe, hiddenDirectory, analysisDependencies)
+    .filter((action) => action.id !== "read-metadata");
+  return {
+    contentAccess: hints,
+    dependencies: {
+      analysis: analysisDependencies
+    },
+    nextActions: buildAccessNextActions(file, hints, pathSafe, hiddenDirectory, analysisDependencies),
+    actionPlan
+  };
+}
+
+function buildMetadataResultNextActions(files = [], missing = []) {
+  if (!files.length) {
+    return missing.length
+      ? [`未找到 ${missing.length} 个文件；先调用 search_library_files 重新定位候选文件。`]
+      : ["没有可用文件 metadata；先调用 search_library_files 定位文件。"];
+  }
+  if (files.length === 1) {
+    return Array.isArray(files[0].nextActions) ? files[0].nextActions : [];
+  }
+  return [
+    `已读取 ${files.length} 个文件 metadata；根据 contentAccess、tags、aiSummary/subtitle 状态选择目标文件。`,
+    "目标明确后调用该文件 actionPlan 中的 read_media_summary、read_text_excerpt、analyze_file_content 或 diagnose_file_access。"
+  ];
+}
+
+function buildMetadataResultActionPlan(files = []) {
+  if (!files.length) {
+    return [];
+  }
+  if (files.length === 1) {
+    return Array.isArray(files[0].actionPlan) ? files[0].actionPlan : [];
+  }
+  return files.slice(0, 3).map((file, index) => buildAccessAction({
+    id: `diagnose-candidate-${index + 1}`,
+    tool: "diagnose_file_access",
+    input: { fileId: file.fileId },
+    reason: "多文件 metadata 已读取；对候选文件进一步诊断可访问层级和依赖状态。",
+    contentLayer: "metadata"
+  }));
+}
+
 export async function buildLibraryListResult(api, input = {}) {
   const snapshot = await loadLibrarySnapshot(api);
   const offset = clampInteger(input.offset || 0, 0, Number.MAX_SAFE_INTEGER);
@@ -1471,6 +1527,7 @@ export async function buildLibraryMetadataResult(api, input = {}) {
       missing.push(identifier);
       continue;
     }
+    const profile = buildMetadataAccessProfile(api, file);
     files.push({
       fileId: file.id,
       clientId: file.clientId,
@@ -1482,12 +1539,21 @@ export async function buildLibraryMetadataResult(api, input = {}) {
       updatedAt: file.updatedAt,
       tags: file.tags || [],
       subtitlePath: file.subtitlePath || "",
-      contentAccess: buildContentAccessHints(file)
+      contentAccess: profile.contentAccess,
+      dependencies: profile.dependencies,
+      nextActions: profile.nextActions,
+      actionPlan: profile.actionPlan
     });
   }
   return {
     count: files.length,
     missing,
+    policy: {
+      ...buildPublicFileAccessPolicy(api),
+      contentLayer: "metadata"
+    },
+    nextActions: buildMetadataResultNextActions(files, missing),
+    actionPlan: buildMetadataResultActionPlan(files),
     files
   };
 }
