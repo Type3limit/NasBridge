@@ -4,7 +4,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { BotJobStore } from "../../src/bot/jobStore.js";
 import {
+  formatBotJobStatusReport,
   formatAgentTraceReport,
   handleAiChatCommandRoute
 } from "../../src/bot/langgraph/nodes/commandNodes.js";
@@ -91,6 +93,45 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
   assert.match(body, /invoke_video_analyze: 1 次/);
   assert.match(body, /video\.analyze:botjob_child/);
   assert.match(body, /最近步骤/);
+});
+
+test("formatBotJobStatusReport summarizes jobs, child jobs, and recovery hints", () => {
+  const body = formatBotJobStatusReport({
+    recent: false,
+    count: 1,
+    missing: [],
+    jobs: [{
+      jobId: "botjob_parent",
+      botId: "ai.chat",
+      status: "failed",
+      phase: "textTools",
+      progress: {
+        label: "Running",
+        percent: 50
+      },
+      childJobCount: 1,
+      childJobStatusCounts: { failed: 1 },
+      childJobs: [{
+        jobId: "botjob_child",
+        botId: "video.analyze",
+        status: "failed",
+        phase: "failed",
+        progress: { label: "Whisper failed", percent: 12 }
+      }],
+      agentTrace: {
+        recoveryHint: {
+          nextAction: "修复 Whisper 后重试"
+        }
+      }
+    }]
+  });
+
+  assert.match(body, /Bot 任务状态：1/);
+  assert.match(body, /ai\.chat · botjob_parent · failed/);
+  assert.match(body, /子任务：1 · failed 1/);
+  assert.match(body, /video\.analyze · botjob_child · failed/);
+  assert.match(body, /恢复建议：修复 Whisper 后重试/);
+  assert.match(body, /@ai \/trace <jobId>/);
 });
 
 test("trace command route publishes latest agent trace report", async () => {
@@ -196,6 +237,84 @@ test("trace command route publishes latest agent trace report", async () => {
     assert.equal(result.result.artifacts[0].planSummary.rounds[0].plans[0].pendingTools[0].name, "read_agent_trace");
     assert.equal(result.result.artifacts[0].childJobCount, 1);
     assert.equal(result.result.artifacts[0].childJobs[0].jobId, "botjob_trace_child");
+  } finally {
+    await fs.rm(appDataRoot, { recursive: true, force: true });
+  }
+});
+
+test("jobs command route publishes bot job status with child jobs", async () => {
+  const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-jobs-command-"));
+  try {
+    const store = new BotJobStore({ rootDir: appDataRoot });
+    await store.save({
+      jobId: "botjob_parent",
+      botId: "ai.chat",
+      status: "running",
+      phase: "textTools",
+      progress: { label: "Agent running", percent: 40, details: null },
+      input: {},
+      options: {},
+      result: {},
+      audit: {},
+      createdAt: "2026-07-02T00:00:00.000Z",
+      updatedAt: "2026-07-02T00:00:01.000Z"
+    });
+    await store.save({
+      jobId: "botjob_child",
+      botId: "video.analyze",
+      status: "queued",
+      phase: "queued",
+      progress: { label: "Queued", percent: 0, details: null },
+      input: {},
+      options: {
+        parentJobId: "botjob_parent",
+        delegatedBy: "ai.chat",
+        toolName: "invoke_video_analyze"
+      },
+      result: {},
+      audit: {},
+      createdAt: "2026-07-02T00:00:02.000Z",
+      updatedAt: "2026-07-02T00:00:02.000Z"
+    });
+    await store.waitForPendingWrite("botjob_parent");
+    await store.waitForPendingWrite("botjob_child");
+
+    const replies = [];
+    const api = {
+      appDataRoot,
+      signal: null,
+      throwIfCancelled() {},
+      getJob: (jobId) => store.get(jobId),
+      async publishChatReply(payload) {
+        replies.push(payload);
+        return {
+          id: "reply_jobs",
+          text: payload.text,
+          card: payload.card
+        };
+      }
+    };
+
+    const result = await handleAiChatCommandRoute({
+      prepared: {
+        api,
+        modelDirective: {
+          command: {
+            type: "jobs",
+            jobId: "botjob_parent",
+            limit: 1
+          }
+        },
+        modelSettings: {}
+      }
+    });
+
+    assert.equal(replies[0].card.title, "Bot 任务状态");
+    assert.equal(replies[0].card.status, "succeeded");
+    assert.match(result.result.chatReply.text, /ai\.chat · botjob_parent · running/);
+    assert.match(result.result.chatReply.text, /子任务：1 · queued 1/);
+    assert.equal(result.result.artifacts[0].type, "bot-job-status");
+    assert.equal(result.result.artifacts[0].jobs[0].childJobs[0].jobId, "botjob_child");
   } finally {
     await fs.rm(appDataRoot, { recursive: true, force: true });
   }

@@ -65,6 +65,7 @@ export function buildModelUsageText(settings = {}) {
     "Agent 自检：",
     "- @ai /health",
     "- @ai /tools",
+    "- @ai /jobs 或 @ai /job <jobId>",
     "- @ai /trace 或 @ai /trace <jobId>",
     "显式联网搜索：",
     "- @ai /search OpenAI 最新模型",

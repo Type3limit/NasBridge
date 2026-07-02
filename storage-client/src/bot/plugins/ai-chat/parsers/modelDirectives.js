@@ -124,6 +124,34 @@ export function parseModelDirective(rawPrompt = "") {
     };
   }
 
+  const jobsCommand = prompt.match(/^\/jobs(?:\s+(\d+))?\s*$/i);
+  if (jobsCommand) {
+    return {
+      prompt: "",
+      modelOverride: "",
+      inspectOnly: false,
+      command: {
+        type: "jobs",
+        jobId: "",
+        limit: Number.parseInt(jobsCommand[1] || "5", 10)
+      }
+    };
+  }
+
+  const jobStatusCommand = prompt.match(/^\/job(?:\s+status)?\s+([A-Za-z0-9_-]+)\s*$/i);
+  if (jobStatusCommand?.[1]) {
+    return {
+      prompt: "",
+      modelOverride: "",
+      inspectOnly: false,
+      command: {
+        type: "jobs",
+        jobId: String(jobStatusCommand[1] || "").trim(),
+        limit: 1
+      }
+    };
+  }
+
   const setAllCommand = prompt.match(/^\/model\s+set-all\s+([\s\S]+?)\s*$/i);
   if (setAllCommand?.[1]) {
     return {

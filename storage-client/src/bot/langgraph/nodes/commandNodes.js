@@ -6,7 +6,7 @@ import { compressAiSessionContext } from "../../plugins/ai-chat/services/compres
 import { getEffectiveMultimodalModel, getEffectiveTextModel, writeAiModelSettings } from "../../plugins/ai-chat/services/modelSettings.js";
 import { buildCapabilityDescriptors, formatCapabilityReport } from "../../capabilities/registry.js";
 import { collectAiAgentHealth, formatHealthReport } from "../../capabilities/health.js";
-import { buildAgentTraceResult } from "../../tools/botJobStatus.js";
+import { buildAgentTraceResult, buildBotJobStatusResult } from "../../tools/botJobStatus.js";
 import { getDefaultTextModelName, listAvailableModels, resolveModelReference } from "../../tools/llmClient.js";
 
 const MODEL_PROVIDER_SEPARATOR = "::";
@@ -184,6 +184,56 @@ function formatChildJobSummary(trace = {}) {
     ].filter(Boolean);
     lines.push(`- ${parts.join(" · ")}`);
   }
+  return lines.join("\n");
+}
+
+function formatBotJobLine(job = {}, prefix = "-") {
+  const progress = job.progress?.label
+    ? `${job.progress.label}${job.progress.percent != null ? ` ${job.progress.percent}%` : ""}`
+    : "";
+  const error = job.error?.message ? `error=${job.error.message}` : "";
+  const parts = [
+    job.botId || "bot",
+    job.jobId || "",
+    job.status || "",
+    job.phase || "",
+    progress,
+    error
+  ].filter(Boolean);
+  return `${prefix} ${parts.join(" · ")}`;
+}
+
+export function formatBotJobStatusReport(status = {}) {
+  const jobs = Array.isArray(status.jobs) ? status.jobs : [];
+  const missing = Array.isArray(status.missing) ? status.missing : [];
+  if (!jobs.length && !missing.length) {
+    return status.recent
+      ? "最近没有可显示的 bot 任务。"
+      : "没有找到指定的 bot 任务。";
+  }
+  const lines = [
+    status.recent ? `最近 bot 任务：${jobs.length}` : `Bot 任务状态：${jobs.length}`
+  ];
+  if (missing.length) {
+    lines.push(`未找到：${missing.join("、")}`);
+  }
+  for (const job of jobs) {
+    lines.push(formatBotJobLine(job));
+    const childCount = Number(job.childJobCount || 0);
+    if (childCount > 0) {
+      const counts = formatStatusCounts(job.childJobStatusCounts || {});
+      lines.push(`  子任务：${childCount}${counts ? ` · ${counts}` : ""}`);
+      for (const child of (Array.isArray(job.childJobs) ? job.childJobs : []).slice(0, 5)) {
+        lines.push(formatBotJobLine(child, "  -"));
+      }
+    }
+    const trace = job.agentTrace;
+    if (trace?.recoveryHint?.nextAction) {
+      lines.push(`  恢复建议：${trace.recoveryHint.nextAction}`);
+    }
+  }
+  lines.push("");
+  lines.push("查看 agent 执行细节：@ai /trace <jobId>");
   return lines.join("\n");
 }
 
@@ -431,6 +481,40 @@ export async function handleAiChatCommandRoute(state = {}) {
             childJobCount: trace.childJobCount || 0,
             childJobStatusCounts: trace.childJobStatusCounts || {},
             childJobs: Array.isArray(trace.childJobs) ? trace.childJobs : []
+          }]
+        }
+      };
+    }
+
+    if (modelDirective.command.type === "jobs") {
+      const jobId = String(modelDirective.command.jobId || "").trim();
+      const status = await buildBotJobStatusResult(api, {
+        jobId,
+        limit: modelDirective.command.limit || 5,
+        includeChildJobs: true,
+        includeTrace: Boolean(jobId),
+        maxTraceEvents: 24
+      });
+      const body = formatBotJobStatusReport(status);
+      return {
+        result: {
+          chatReply: await api.publishChatReply({
+            text: body,
+            card: {
+              type: "ai-answer",
+              status: status.missing?.length && !status.jobs?.length ? "failed" : "succeeded",
+              title: jobId ? "Bot 任务状态" : "最近 Bot 任务",
+              subtitle: withSessionSubtitle(jobId || `共 ${status.count || 0} 个任务`, activeSession),
+              body
+            }
+          }),
+          importedFiles: [],
+          artifacts: [{
+            type: "bot-job-status",
+            recent: status.recent === true,
+            count: status.count || 0,
+            missing: status.missing || [],
+            jobs: status.jobs || []
           }]
         }
       };
