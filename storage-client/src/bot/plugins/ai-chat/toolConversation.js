@@ -1,4 +1,5 @@
 import { executeAiToolCall, getAiToolDefinitions } from "../../tools/aiToolRuntime.js";
+import { buildCapabilityDescriptors, summarizeCapabilityExecutionReadiness } from "../../capabilities/registry.js";
 import { invokeTextModel, parseModelRef } from "../../tools/llmClient.js";
 
 const MAX_TOOL_ROUND_OFFSET = 8;
@@ -244,6 +245,67 @@ async function recordAgentObservationEvent(api = {}, { round = 0, toolName = "",
     },
     outputPreview: previewText(observation)
   });
+}
+
+function redactLocalPaths(value = "") {
+  return String(value || "")
+    .replace(/[A-Za-z]:[\\/][^\s；,，]+/g, "[local-path]")
+    .replace(/\\\\[^\\/\s；,，]+[\\/][^\s；,，]+/g, "[network-path]");
+}
+
+function buildHealthRepairHint(checkId = "") {
+  const normalized = String(checkId || "").trim();
+  if (normalized === "whisper") {
+    return "配置 WHISPER_CPP_PATH 和 WHISPER_MODEL_PATH 后再启动视频/音频转录分析。";
+  }
+  if (normalized === "ffmpeg" || normalized === "ffprobe") {
+    return "配置 FFMPEG_PATH/FFPROBE_PATH，或确认 ffmpeg/ffprobe 在 PATH 中可执行。";
+  }
+  if (normalized === "music-bridge") {
+    return "先启动 music-lib-bridge，再重试音乐控制工具。";
+  }
+  if (normalized === "storage-root") {
+    return "检查 STORAGE_ROOT 是否存在且 storage-client 有读写权限。";
+  }
+  if (normalized === "ai-model") {
+    return "运行 @ai /models 刷新模型列表，并用 @ai /model use 选择可用模型。";
+  }
+  if (normalized === "yt-dlp") {
+    return "配置 YT_DLP_PATH，或确认 yt-dlp 在 PATH 中可执行。";
+  }
+  return "先运行 @ai /health 查看依赖状态，修复对应项后再重试。";
+}
+
+function buildToolExecutionPreflightResult(toolCall = {}, api = {}, healthSnapshot = null) {
+  if (!healthSnapshot || !Array.isArray(healthSnapshot.checks) || !healthSnapshot.checks.length) {
+    return null;
+  }
+  const toolName = String(toolCall?.name || "").trim();
+  if (!toolName) {
+    return null;
+  }
+  const descriptor = buildCapabilityDescriptors(api).find((item) => item.id === toolName);
+  if (!descriptor) {
+    return null;
+  }
+  const readiness = summarizeCapabilityExecutionReadiness(descriptor, healthSnapshot);
+  if (readiness.ready !== false) {
+    return null;
+  }
+  const blocker = readiness.blocker || {};
+  return {
+    status: "blocked",
+    tool: toolName,
+    reason: "required capability dependency is unavailable",
+    healthOverall: String(healthSnapshot.overall || "unknown"),
+    blocker: {
+      id: String(blocker.id || "").trim(),
+      label: String(blocker.label || blocker.id || "").trim(),
+      status: String(blocker.status || readiness.status || "error").trim(),
+      detail: redactLocalPaths(blocker.detail || readiness.detail || "")
+    },
+    nextAction: buildHealthRepairHint(blocker.id)
+  };
 }
 
 export function getAiToolProgress(toolName = "", round = 0) {
@@ -592,7 +654,7 @@ export async function invokeToolAwarePlanningRound({ messages, recentMessages, c
   };
 }
 
-export async function executePendingToolCallsRound({ pendingToolCalls, planningMessages, recentMessages, context, api, round = 0 }) {
+export async function executePendingToolCallsRound({ pendingToolCalls, planningMessages, recentMessages, context, api, round = 0, healthSnapshot = null }) {
   const nextMessages = Array.isArray(planningMessages) ? [...planningMessages] : [];
   const traceHooks = api?.traceHooks;
   for (const toolCall of Array.isArray(pendingToolCalls) ? pendingToolCalls : []) {
@@ -600,29 +662,43 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
     await api.appendLog(`${fallbackMode ? "json-tool-call" : "tool-call"} ${toolCall.name}: ${JSON.stringify(toolCall.input || {})}`);
     await api.emitProgress(getAiToolProgress(toolCall.name, round));
     let toolResult = "";
-    try {
-      toolResult = await executeAiToolCall(toolCall, context, api, { recentMessages });
+    const blockedResult = buildToolExecutionPreflightResult(toolCall, api, healthSnapshot);
+    const toolStatus = blockedResult ? "blocked" : "completed";
+    if (blockedResult) {
+      toolResult = JSON.stringify(blockedResult, null, 2);
+      await api.appendLog(`tool-call-blocked ${toolCall.name}: ${blockedResult.blocker.id || "health"} ${blockedResult.blocker.status || "unavailable"}`);
       await traceHooks?.recordToolEvent?.({
         name: toolCall.name,
         round,
-        status: "completed",
+        status: "blocked",
         input: fallbackMode ? { ...(toolCall.input || {}), __fallback: fallbackMode } : (toolCall.input || {}),
-        outputPreview: String(toolResult || "")
+        outputPreview: toolResult
       });
-    } catch (error) {
-      const cancelled = error?.name === "AbortError" || /job cancelled/i.test(String(error?.message || ""));
-      await traceHooks?.recordToolEvent?.({
-        name: toolCall.name,
-        round,
-        status: cancelled ? "cancelled" : "failed",
-        input: fallbackMode ? { ...(toolCall.input || {}), __fallback: fallbackMode } : (toolCall.input || {}),
-        outputPreview: String(error?.message || error || "")
-      });
-      throw error;
+    } else {
+      try {
+        toolResult = await executeAiToolCall(toolCall, context, api, { recentMessages });
+        await traceHooks?.recordToolEvent?.({
+          name: toolCall.name,
+          round,
+          status: "completed",
+          input: fallbackMode ? { ...(toolCall.input || {}), __fallback: fallbackMode } : (toolCall.input || {}),
+          outputPreview: String(toolResult || "")
+        });
+      } catch (error) {
+        const cancelled = error?.name === "AbortError" || /job cancelled/i.test(String(error?.message || ""));
+        await traceHooks?.recordToolEvent?.({
+          name: toolCall.name,
+          round,
+          status: cancelled ? "cancelled" : "failed",
+          input: fallbackMode ? { ...(toolCall.input || {}), __fallback: fallbackMode } : (toolCall.input || {}),
+          outputPreview: String(error?.message || error || "")
+        });
+        throw error;
+      }
     }
     if (fallbackMode) {
       const observationContent = [
-        `工具 ${toolCall.name} 已执行。`,
+        blockedResult ? `工具 ${toolCall.name} 因依赖不可用被阻止。` : `工具 ${toolCall.name} 已执行。`,
         toolCall.reason ? `调用原因：${toolCall.reason}` : "",
         "工具返回 JSON：",
         toolResult
@@ -635,7 +711,7 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
         round,
         toolName: toolCall.name,
         fallback: fallbackMode,
-        status: "observed",
+        status: toolStatus === "blocked" ? "blocked" : "observed",
         observation: observationContent
       });
     } else {
@@ -648,7 +724,7 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
         round,
         toolName: toolCall.name,
         fallback: "",
-        status: "observed",
+        status: toolStatus === "blocked" ? "blocked" : "observed",
         observation: toolResult
       });
     }
@@ -689,7 +765,8 @@ export async function runToolAwareConversation({ systemPrompt, effectivePrompt, 
       recentMessages,
       context,
       api,
-      round
+      round,
+      healthSnapshot: api.healthSnapshot || null
     });
     messages.splice(0, messages.length, ...nextMessages);
   }

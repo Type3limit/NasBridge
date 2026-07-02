@@ -201,6 +201,65 @@ test("native tool-call unsupported errors recover into JSON fallback", async () 
   assert.match(api.logs.join("\n"), /json-tool-fallback round=0/);
 });
 
+test("tool execution preflight blocks unavailable hard dependencies without creating child jobs", async () => {
+  const api = createFakeApi();
+  let invoked = false;
+  api.invokeBot = async () => {
+    invoked = true;
+    throw new Error("invokeBot should not be called when preflight blocks the tool");
+  };
+  const observedMessages = await executePendingToolCallsRound({
+    pendingToolCalls: [
+      {
+        id: "call_1",
+        name: "invoke_video_analyze",
+        input: { fileId: "client:Videos/demo.mp4" }
+      }
+    ],
+    planningMessages: [
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call_1",
+            type: "function",
+            function: {
+              name: "invoke_video_analyze",
+              arguments: JSON.stringify({ fileId: "client:Videos/demo.mp4" })
+            }
+          }
+        ]
+      }
+    ],
+    recentMessages: [],
+    context: { chat: {}, attachments: [] },
+    api,
+    round: 0,
+    healthSnapshot: {
+      overall: "warn",
+      checks: [
+        { id: "ai-model", label: "AI 模型", status: "ok", detail: "文本模型可用" },
+        { id: "ffmpeg", label: "ffmpeg", status: "ok", detail: "ffmpeg.exe" },
+        { id: "ffprobe", label: "ffprobe", status: "ok", detail: "ffprobe.exe" },
+        { id: "storage-root", label: "NAS 文件访问", status: "ok", detail: "D:\\NAS；可读写" },
+        { id: "whisper", label: "Whisper", status: "warn", detail: "WHISPER_CPP_PATH 或 WHISPER_MODEL_PATH 未配置" }
+      ]
+    }
+  });
+
+  assert.equal(invoked, false);
+  const observation = observedMessages.at(-1);
+  assert.equal(observation.role, "tool");
+  assert.equal(observation.tool_call_id, "call_1");
+  assert.match(observation.content, /"status": "blocked"/);
+  assert.match(observation.content, /"id": "whisper"/);
+  assert.match(observation.content, /WHISPER_CPP_PATH/);
+  assert.doesNotMatch(observation.content, /D:\\NAS/);
+  assert.equal(api.toolEvents[0].status, "blocked");
+  assert.match(api.logs.join("\n"), /tool-call-blocked invoke_video_analyze/);
+});
+
 test("parseJsonToolPlan rejects unknown tools and accepts final answers", () => {
   const tools = [{ name: "search_library_files", inputSchema: { type: "object" } }];
 

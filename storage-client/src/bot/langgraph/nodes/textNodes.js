@@ -138,7 +138,8 @@ export async function handleAiChatTextToolsRoute(state = {}) {
     recentMessages: Array.isArray(prepared.recentMessages) ? prepared.recentMessages : [],
     context: prepared.context,
     api: prepared.replyApi,
-    round: currentRound
+    round: currentRound,
+    healthSnapshot: prepared.healthSnapshot || null
   });
 
   const recoveryAction = prepared.recoveryGuidance?.recoveryAction || null;

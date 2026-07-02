@@ -98,6 +98,17 @@ const TOOL_HEALTH_CHECKS = {
   download_yyets_episodes: ["storage-root"]
 };
 
+const BLOCKING_WARN_HEALTH_CHECKS = {
+  "video.analyze": ["whisper"],
+  "video.tag": ["whisper"],
+  "music.control": ["music-bridge"],
+  invoke_video_analyze: ["whisper"],
+  analyze_storage_video: ["whisper"],
+  invoke_video_tag: ["whisper"],
+  tag_storage_video: ["whisper"],
+  invoke_music_control: ["music-bridge"]
+};
+
 const CAPABILITY_EXAMPLES = {
   "video.analyze": ["总结这个视频并保存摘要"],
   "video.tag": ["给这个视频生成标签"],
@@ -220,6 +231,31 @@ export function summarizeCapabilityAvailability(descriptor = {}, health = {}) {
     return { status: "warn", detail: `${warning.label}: ${warning.detail}` };
   }
   return { status: "ok", detail: "依赖就绪" };
+}
+
+export function summarizeCapabilityExecutionReadiness(descriptor = {}, health = {}) {
+  const checks = new Map((Array.isArray(health.checks) ? health.checks : []).map((check) => [check.id, check]));
+  const related = (Array.isArray(descriptor.healthChecks) ? descriptor.healthChecks : [])
+    .map((id) => checks.get(id))
+    .filter(Boolean);
+  const blockingWarnIds = new Set(BLOCKING_WARN_HEALTH_CHECKS[descriptor.id] || []);
+  const blocker = related.find((check) => (
+    check.status === "error"
+    || (check.status === "warn" && blockingWarnIds.has(check.id))
+  ));
+  if (!blocker) {
+    return {
+      ready: true,
+      status: summarizeCapabilityAvailability(descriptor, health).status,
+      detail: "依赖就绪"
+    };
+  }
+  return {
+    ready: false,
+    status: blocker.status || "error",
+    blocker,
+    detail: `${blocker.label || blocker.id}: ${blocker.detail || blocker.status || "unavailable"}`
+  };
 }
 
 export function formatCapabilityReport(descriptors = [], health = {}) {
