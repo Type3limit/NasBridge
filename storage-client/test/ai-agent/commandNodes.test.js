@@ -167,6 +167,7 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
   assert.match(body, /tools=invoke_video_analyze/);
   assert.match(body, /子任务: failed 1/);
   assert.match(body, /video\.analyze · botjob_child · failed/);
+  assert.match(body, /命令：@ai \/job botjob_child · @ai \/log botjob_child · @ai \/trace botjob_child/);
   assert.match(body, /invoke_video_analyze: 1 次/);
   assert.match(body, /video\.analyze:botjob_child/);
   assert.match(body, /最近步骤/);
@@ -222,6 +223,7 @@ test("formatBotJobStatusReport summarizes jobs, child jobs, and recovery hints",
   assert.match(body, /ai\.chat · botjob_parent · failed/);
   assert.match(body, /子任务：1 · failed 1/);
   assert.match(body, /video\.analyze · botjob_child · failed/);
+  assert.match(body, /命令：@ai \/job botjob_child · @ai \/log botjob_child · @ai \/trace botjob_child/);
   assert.match(body, /恢复建议：修复 Whisper 后重试/);
   assert.match(body, /建议工具：read_media_summary、read_text_excerpt/);
   assert.match(body, /可继续：@ai #7 继续/);
@@ -265,6 +267,7 @@ test("formatBotJobLogReport summarizes redacted log and child jobs", () => {
   assert.match(body, /Bot 日志：botjob_parent/);
   assert.match(body, /ai\.chat · botjob_parent · failed/);
   assert.match(body, /video\.analyze · botjob_child · failed/);
+  assert.match(body, /命令：@ai \/job botjob_child · @ai \/log botjob_child · @ai \/trace botjob_child/);
   assert.match(body, /OPENAI_API_KEY=\*\*\*/);
   assert.match(body, /恢复建议：等待用户确认后继续执行 update_file_metadata/);
   assert.match(body, /建议工具：update_file_metadata/);
@@ -452,6 +455,7 @@ test("trace command route publishes latest agent trace report", async () => {
     assert.equal(result.result.artifacts[0].planSummary.rounds[0].plans[0].pendingTools[0].name, "read_agent_trace");
     assert.equal(result.result.artifacts[0].childJobCount, 1);
     assert.equal(result.result.artifacts[0].childJobs[0].jobId, "botjob_trace_child");
+    assert.equal(result.result.artifacts[0].childJobs[0].tracking.logCommand, "@ai /log botjob_trace_child");
   } finally {
     await fs.rm(appDataRoot, { recursive: true, force: true });
   }

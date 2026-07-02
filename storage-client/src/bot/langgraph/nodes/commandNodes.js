@@ -255,8 +255,33 @@ function formatChildJobSummary(trace = {}) {
       error
     ].filter(Boolean);
     lines.push(`- ${parts.join(" · ")}`);
+    const commands = formatJobTrackingLine(job, "  ");
+    if (commands) {
+      lines.push(commands);
+    }
   }
   return lines.join("\n");
+}
+
+function getJobTrackingCommands(job = {}) {
+  const jobId = String(job.jobId || "").trim();
+  if (!jobId) {
+    return null;
+  }
+  const tracking = job.tracking && typeof job.tracking === "object" ? job.tracking : {};
+  return {
+    statusCommand: String(tracking.statusCommand || `@ai /job ${jobId}`).trim(),
+    logCommand: String(tracking.logCommand || `@ai /log ${jobId}`).trim(),
+    traceCommand: String(tracking.traceCommand || `@ai /trace ${jobId}`).trim()
+  };
+}
+
+function formatJobTrackingLine(job = {}, prefix = "  ") {
+  const commands = getJobTrackingCommands(job);
+  if (!commands) {
+    return "";
+  }
+  return `${prefix}命令：${commands.statusCommand} · ${commands.logCommand} · ${commands.traceCommand}`;
 }
 
 function formatBotJobLine(job = {}, prefix = "-") {
@@ -321,6 +346,10 @@ export function formatBotJobStatusReport(status = {}) {
       lines.push(`  子任务：${childCount}${counts ? ` · ${counts}` : ""}`);
       for (const child of (Array.isArray(job.childJobs) ? job.childJobs : []).slice(0, 5)) {
         lines.push(formatBotJobLine(child, "  -"));
+        const commands = formatJobTrackingLine(child, "    ");
+        if (commands) {
+          lines.push(commands);
+        }
       }
     }
     const trace = job.agentTrace;
@@ -345,6 +374,10 @@ export function formatBotJobLogReport(bundle = {}) {
     lines.push(`子任务：${childJobs.length}`);
     for (const child of childJobs.slice(0, 5)) {
       lines.push(formatBotJobLine(child, "  -"));
+      const commands = formatJobTrackingLine(child, "    ");
+      if (commands) {
+        lines.push(commands);
+      }
     }
   }
   const trace = bundle.agentTrace;

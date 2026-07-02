@@ -79,9 +79,22 @@ function summarizeJobResult(result = null) {
   };
 }
 
-function summarizeJob(job = {}) {
+function buildJobTracking(jobId = "") {
+  const normalizedJobId = String(jobId || "").trim();
+  if (!normalizedJobId) {
+    return null;
+  }
   return {
-    jobId: String(job.jobId || "").trim(),
+    statusCommand: `@ai /job ${normalizedJobId}`,
+    logCommand: `@ai /log ${normalizedJobId}`,
+    traceCommand: `@ai /trace ${normalizedJobId}`
+  };
+}
+
+function summarizeJob(job = {}) {
+  const jobId = String(job.jobId || "").trim();
+  return {
+    jobId,
     botId: String(job.botId || "").trim(),
     status: String(job.status || "").trim(),
     phase: String(job.phase || "").trim(),
@@ -109,6 +122,7 @@ function summarizeJob(job = {}) {
         }
       : null,
     result: summarizeJobResult(job.result),
+    tracking: buildJobTracking(jobId),
     audit: {
       permissionsUsed: Array.isArray(job.audit?.permissionsUsed)
         ? job.audit.permissionsUsed.map((item) => String(item || "").trim()).filter(Boolean)

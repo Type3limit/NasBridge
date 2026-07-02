@@ -122,6 +122,7 @@ test("bot job log bundle includes redacted log, agent trace, and delegated child
   assert.equal(bundle.childJobs.length, 1);
   assert.equal(bundle.childJobs[0].jobId, "botjob_child");
   assert.equal(bundle.childJobs[0].botId, "video.analyze");
+  assert.equal(bundle.childJobs[0].tracking.logCommand, "@ai /log botjob_child");
   assert.equal(bundle.agentTrace.events.length, 1);
   assert.equal(bundle.agentTrace.events[0].input.apiKey, "***");
   assert.equal(bundle.agentTrace.events[0].input.fileId, "file_1");
@@ -139,6 +140,7 @@ test("bot job log bundle includes redacted log, agent trace, and delegated child
   assert.equal(bundle.agentTrace.childJobCount, 1);
   assert.equal(bundle.agentTrace.childJobs[0].jobId, "botjob_child");
   assert.equal(bundle.agentTrace.childJobs[0].botId, "video.analyze");
+  assert.equal(bundle.agentTrace.childJobs[0].tracking.traceCommand, "@ai /trace botjob_child");
   assert.equal(bundle.agentTrace.childJobStatusCounts.queued, 1);
 });
 
@@ -227,6 +229,7 @@ test("bot job status includes delegated child jobs for an explicit parent job", 
   assert.equal(status.jobs[0].childJobs[0].jobId, "botjob_child");
   assert.equal(status.jobs[0].childJobs[0].botId, "video.analyze");
   assert.equal(status.jobs[0].childJobs[0].progress.label, "Whisper transcribing");
+  assert.equal(status.jobs[0].childJobs[0].tracking.logCommand, "@ai /log botjob_child");
 });
 
 test("agent trace result includes delegated child job summaries by default", async () => {
@@ -268,6 +271,7 @@ test("agent trace result includes delegated child job summaries by default", asy
   assert.equal(trace.childJobs[0].botId, "video.analyze");
   assert.equal(trace.childJobs[0].status, "failed");
   assert.equal(trace.childJobs[0].progress.label, "Whisper failed");
+  assert.equal(trace.childJobs[0].tracking.statusCommand, "@ai /job botjob_trace_child");
   assert.match(trace.childJobs[0].error.message, /WHISPER_MODEL_PATH/);
 });
 
