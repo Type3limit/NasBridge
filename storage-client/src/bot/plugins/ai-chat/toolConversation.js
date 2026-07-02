@@ -996,7 +996,7 @@ function summarizeToolFileRef(file = null) {
   return {
     fileId: String(file.fileId || file.id || "").trim(),
     path: String(file.path || file.relativePath || "").trim(),
-    name: String(file.name || "").trim(),
+    name: String(file.name || file.fileName || "").trim(),
     mimeType: String(file.mimeType || "").trim()
   };
 }
@@ -1315,9 +1315,28 @@ function summarizeToolResultForTrace(toolResult = "", toolName = "", api = {}) {
       pushJobRef(job, { delegated: true });
     }
   }
-  const files = Array.isArray(parsed.files)
-    ? parsed.files.map(summarizeToolFileRef).filter((item) => item?.fileId || item?.path).slice(0, 5)
-    : [];
+  const fileSources = [
+    ...(Array.isArray(parsed.files) ? parsed.files : []),
+    ...(Array.isArray(parsed.importedFiles) ? parsed.importedFiles : []),
+    ...(Array.isArray(parsed.result?.importedFiles) ? parsed.result.importedFiles : [])
+  ];
+  const seenFiles = new Set();
+  const files = [];
+  for (const file of fileSources) {
+    const ref = summarizeToolFileRef(file);
+    if (!ref?.fileId && !ref?.path) {
+      continue;
+    }
+    const key = ref.fileId || ref.path;
+    if (seenFiles.has(key)) {
+      continue;
+    }
+    seenFiles.add(key);
+    files.push(ref);
+    if (files.length >= 5) {
+      break;
+    }
+  }
   const result = {
     status,
     delegated: parsed.delegated === true,
@@ -1329,7 +1348,10 @@ function summarizeToolResultForTrace(toolResult = "", toolName = "", api = {}) {
     counts: {
       count: Number.isFinite(parsed.count) ? Number(parsed.count) : null,
       total: Number.isFinite(parsed.total) ? Number(parsed.total) : null,
-      missing: Array.isArray(parsed.missing) ? parsed.missing.length : null
+      missing: Array.isArray(parsed.missing) ? parsed.missing.length : null,
+      importedFiles: Number.isFinite(Number(parsed.importedFileCount))
+        ? Number(parsed.importedFileCount)
+        : (Array.isArray(parsed.importedFiles) ? parsed.importedFiles.length : null)
     },
     log: summarizeLogForTrace(parsed.log),
     lifecycle: summarizeLifecycleForTrace(parsed.lifecycle),

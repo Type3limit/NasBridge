@@ -190,10 +190,19 @@ test("executeAiToolCall can wait for a music control phase without waiting for c
 
 test("delegated bot tool can wait for completion when requested", async () => {
   const api = createFakeApi({
+    clientId: "client",
     getJob: async (jobId) => ({
       jobId,
       status: "succeeded",
-      result: { importedFiles: [{ path: "downloads/file.mp4" }] }
+      result: {
+        importedFiles: [{
+          absolutePath: "D:\\NAS\\downloads\\file.mp4",
+          relativePath: "downloads/file.mp4",
+          fileName: "file.mp4",
+          size: 1024,
+          mimeType: "video/mp4"
+        }]
+      }
     })
   });
 
@@ -207,7 +216,17 @@ test("delegated bot tool can wait for completion when requested", async () => {
   assert.equal(result.status, "succeeded");
   assert.equal(result.nextAction, "waited-for-completion");
   assert.equal(result.tracking.statusCommand, "@ai /job botjob_child");
-  assert.deepEqual(result.result.importedFiles, [{ path: "downloads/file.mp4" }]);
+  assert.equal(result.importedFileCount, 1);
+  assert.deepEqual(result.importedFiles, [{
+    fileId: "client:downloads/file.mp4",
+    path: "downloads/file.mp4",
+    name: "file.mp4",
+    size: 1024,
+    mimeType: "video/mp4"
+  }]);
+  assert.deepEqual(result.files, result.importedFiles);
+  assert.deepEqual(result.result.importedFiles, result.importedFiles);
+  assert.equal(JSON.stringify(result).includes("D:\\NAS"), false);
 });
 
 test("delegated bot tool can wait until a phase without leaking control args", async () => {

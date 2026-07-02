@@ -704,6 +704,85 @@ test("delegated tool results write structured job refs into tool trace events", 
   assert.equal(api.toolEvents[0].resultSummary.file.path, "Videos/demo.mp4");
 });
 
+test("delegated download completion surfaces sanitized imported files in trace", async () => {
+  const api = createFakeApi();
+  api.botId = "ai.chat";
+  api.jobId = "botjob_parent";
+  api.invokeBot = async (request) => {
+    assert.equal(request.botId, "ytdlp.downloader");
+    assert.equal(request.options.parentJobId, "botjob_parent");
+    return { jobId: "botjob_download", status: "queued" };
+  };
+  api.getJob = async (jobId) => ({
+    jobId,
+    botId: "ytdlp.downloader",
+    status: "succeeded",
+    phase: "done",
+    result: {
+      importedFiles: [{
+        absolutePath: "D:\\NAS\\downloads\\clip.mp4",
+        relativePath: "downloads/clip.mp4",
+        fileName: "clip.mp4",
+        size: 2048,
+        mimeType: "video/mp4"
+      }]
+    }
+  });
+
+  const observedMessages = await executePendingToolCallsRound({
+    pendingToolCalls: [
+      {
+        id: "call_download",
+        name: "invoke_ytdlp_downloader",
+        input: {
+          url: "https://example.com/watch?v=clip",
+          waitForCompletion: true,
+          timeoutSeconds: 5
+        }
+      }
+    ],
+    planningMessages: [
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call_download",
+            type: "function",
+            function: {
+              name: "invoke_ytdlp_downloader",
+              arguments: JSON.stringify({
+                url: "https://example.com/watch?v=clip",
+                waitForCompletion: true,
+                timeoutSeconds: 5
+              })
+            }
+          }
+        ]
+      }
+    ],
+    recentMessages: [],
+    context: { chat: {}, attachments: [] },
+    api,
+    round: 0
+  });
+
+  const observation = observedMessages.at(-1);
+  assert.equal(observation.role, "tool");
+  assert.match(observation.content, /downloads\/clip\.mp4/);
+  assert.doesNotMatch(observation.content, /D:[/\\]NAS/);
+  assert.equal(api.toolEvents[0].status, "completed");
+  assert.equal(api.toolEvents[0].resultSummary.jobId, "botjob_download");
+  assert.equal(api.toolEvents[0].resultSummary.counts.importedFiles, 1);
+  assert.deepEqual(api.toolEvents[0].resultSummary.files, [{
+    fileId: "client:downloads/clip.mp4",
+    path: "downloads/clip.mp4",
+    name: "clip.mp4",
+    mimeType: "video/mp4"
+  }]);
+  assert.doesNotMatch(JSON.stringify(api.toolEvents[0]), /D:[/\\]NAS/);
+});
+
 test("tool trace summarizes NAS file access diagnostics without storage root", async () => {
   const api = createFakeApi();
 

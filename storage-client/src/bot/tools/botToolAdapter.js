@@ -110,6 +110,49 @@ function normalizeString(value = "") {
   return String(value || "").trim();
 }
 
+function basenameFromRelativePath(value = "") {
+  const parts = normalizeString(value).replace(/\\/g, "/").split("/").filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : "";
+}
+
+function compactImportedFile(file = {}, api = {}) {
+  if (!file || typeof file !== "object") {
+    return null;
+  }
+  const relativePath = normalizeString(file.relativePath || file.path).replace(/\\/g, "/").replace(/^\/+/, "");
+  const fileName = normalizeString(file.fileName || file.name || basenameFromRelativePath(relativePath));
+  if (!relativePath && !fileName) {
+    return null;
+  }
+  const clientId = normalizeString(file.clientId || api.clientId);
+  const fileId = normalizeString(file.fileId || file.id || (clientId && relativePath ? `${clientId}:${relativePath}` : ""));
+  return {
+    fileId,
+    path: relativePath,
+    name: fileName,
+    size: Number.isFinite(Number(file.size)) ? Number(file.size) : 0,
+    mimeType: normalizeString(file.mimeType)
+  };
+}
+
+function compactImportedFiles(files = [], api = {}) {
+  return (Array.isArray(files) ? files : [])
+    .map((file) => compactImportedFile(file, api))
+    .filter(Boolean)
+    .slice(0, 20);
+}
+
+function sanitizeDelegatedResult(result = {}, api = {}) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return {};
+  }
+  const sanitized = { ...result };
+  if (Array.isArray(result.importedFiles)) {
+    sanitized.importedFiles = compactImportedFiles(result.importedFiles, api);
+  }
+  return sanitized;
+}
+
 function normalizeWaitUntilPhase(value = "") {
   return normalizeString(value).slice(0, 80);
 }
@@ -426,10 +469,15 @@ export async function executeDelegatedBotToolCall(toolName = "", api = {}, input
     const completedJob = await waitForDelegatedJob(api, jobId, {
       timeoutSeconds: input.timeoutSeconds
     });
+    const sanitizedResult = sanitizeDelegatedResult(completedJob.result || {}, api);
+    const importedFiles = compactImportedFiles(completedJob.result?.importedFiles, api);
     return {
       ...base,
       status: completedJob.status || base.status,
-      result: completedJob.result || {},
+      result: sanitizedResult,
+      importedFiles,
+      files: importedFiles,
+      importedFileCount: importedFiles.length,
       error: completedJob.error || null
     };
   }

@@ -58,7 +58,10 @@ const DELEGATED_JOB_OUTPUT_SCHEMA = {
     jobId: { type: "string" },
     logHint: { type: "string" },
     nextAction: { type: "string" },
-    tracking: { type: "object" }
+    tracking: { type: "object" },
+    importedFiles: { type: "array", items: { type: "object" } },
+    files: { type: "array", items: { type: "object" } },
+    importedFileCount: { type: "integer" }
   },
   additionalProperties: true
 };
