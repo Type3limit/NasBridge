@@ -88,6 +88,106 @@ test("executeAiToolCall delegates yt-dlp downloads with job status hints", async
   });
 });
 
+test("executeAiToolCall delegates music control with tracking when waiting by default", async () => {
+  const api = createFakeApi({
+    getJob: async (jobId) => ({
+      jobId,
+      botId: "music.control",
+      status: "succeeded",
+      phase: "done",
+      result: {
+        artifacts: [{ type: "music-enqueue", trackId: "track_1" }],
+        chatReply: { id: "msg_music" }
+      }
+    })
+  });
+  const raw = await executeAiToolCall(
+    {
+      name: "invoke_music_control",
+      input: {
+        action: "enqueue",
+        keyword: "晴天",
+        source: "qq"
+      }
+    },
+    { chat: {}, attachments: [] },
+    api
+  );
+  const result = JSON.parse(raw);
+
+  assert.equal(result.delegated, true);
+  assert.equal(result.botId, "music.control");
+  assert.equal(result.jobId, "botjob_child");
+  assert.equal(result.status, "succeeded");
+  assert.equal(result.phase, "done");
+  assert.equal(result.prompt, "点歌 晴天 --source=qq");
+  assert.equal(result.nextAction, "waited-for-completion");
+  assert.match(result.logHint, /get_bot_job_status/);
+  assert.equal(result.tracking.statusCommand, "@ai /job botjob_child");
+  assert.equal(result.tracking.logCommand, "@ai /log botjob_child");
+  assert.equal(result.tracking.traceCommand, "@ai /trace botjob_child");
+  assert.deepEqual(result.result.artifacts, [{ type: "music-enqueue", trackId: "track_1" }]);
+  assert.equal(api.progress[0].phase, "tool-invoke-music-control");
+  assert.equal(api.progress[1].label, "等待音乐助手返回");
+  assert.equal(api.invoked[0].botId, "music.control");
+  assert.deepEqual(api.invoked[0].trigger, {
+    type: "tool-call",
+    rawText: "点歌 晴天 --source=qq",
+    parsedArgs: {
+      prompt: "点歌 晴天 --source=qq"
+    }
+  });
+  assert.deepEqual(api.invoked[0].options, {
+    delegatedBy: "ai.chat",
+    parentJobId: "botjob_parent",
+    toolName: "invoke_music_control"
+  });
+});
+
+test("executeAiToolCall can wait for a music control phase without waiting for completion", async () => {
+  const api = createFakeApi({
+    getJob: async (jobId) => ({
+      jobId,
+      botId: "music.control",
+      status: "running",
+      phase: "search",
+      progress: { label: "Searching", percent: 46 }
+    })
+  });
+  const raw = await executeAiToolCall(
+    {
+      name: "invoke_music_control",
+      input: {
+        action: "search",
+        query: "夜曲",
+        waitForCompletion: false,
+        waitUntilPhase: "search",
+        timeoutSeconds: 5
+      }
+    },
+    { chat: {}, attachments: [] },
+    api
+  );
+  const result = JSON.parse(raw);
+
+  assert.equal(result.delegated, true);
+  assert.equal(result.botId, "music.control");
+  assert.equal(result.jobId, "botjob_child");
+  assert.equal(result.status, "running");
+  assert.equal(result.phase, "search");
+  assert.equal(result.prompt, "搜歌 夜曲");
+  assert.equal(result.waitUntilPhase, "search");
+  assert.equal(result.phaseReached, true);
+  assert.equal(result.waitTimedOut, false);
+  assert.equal(result.nextAction, "waited-until-phase:search");
+  assert.equal(result.job.progress.percent, 46);
+  assert.equal(result.tracking.statusCommand, "@ai /job botjob_child");
+  assert.equal(api.progress[1].label, "等待音乐任务进入 search");
+  assert.deepEqual(api.invoked[0].trigger.parsedArgs, {
+    prompt: "搜歌 夜曲"
+  });
+});
+
 test("delegated bot tool can wait for completion when requested", async () => {
   const api = createFakeApi({
     getJob: async (jobId) => ({

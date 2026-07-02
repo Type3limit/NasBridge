@@ -1833,8 +1833,10 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
         pollIntervalMs: 700
       });
       return safeJson({
-        status: completedJob.status,
-        jobId: completedJob.jobId,
+        delegated: true,
+        ...buildDelegatedJobFields("music.control", completedJob, {
+          waitForCompletion: true
+        }),
         prompt,
         result: completedJob.result || {},
         error: completedJob.error || null

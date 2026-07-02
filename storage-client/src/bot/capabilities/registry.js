@@ -99,6 +99,22 @@ const BOT_OUTPUT_SCHEMAS = {
   "aria2.downloader": DELEGATED_JOB_OUTPUT_SCHEMA
 };
 
+const MUSIC_CONTROL_TOOL_OUTPUT_SCHEMA = {
+  type: "object",
+  required: ["status", "botId", "jobId"],
+  properties: {
+    ...DELEGATED_JOB_OUTPUT_SCHEMA.properties,
+    delegated: { type: "boolean" },
+    prompt: { type: "string" },
+    result: { type: "object" },
+    error: { type: "string" },
+    action: { type: "string" },
+    message: { type: "string" },
+    queue: { type: "array" }
+  },
+  additionalProperties: true
+};
+
 const TOOL_RISK_LEVELS = {
   list_storage_files: "low",
   search_library_files: "low",
@@ -299,17 +315,7 @@ const TOOL_OUTPUT_SCHEMAS = {
   analyze_storage_video: DELEGATED_JOB_OUTPUT_SCHEMA,
   invoke_video_tag: DELEGATED_JOB_OUTPUT_SCHEMA,
   tag_storage_video: DELEGATED_JOB_OUTPUT_SCHEMA,
-  invoke_music_control: {
-    type: "object",
-    required: ["status"],
-    properties: {
-      status: { type: "string" },
-      action: { type: "string" },
-      message: { type: "string" },
-      queue: { type: "array" }
-    },
-    additionalProperties: true
-  },
+  invoke_music_control: MUSIC_CONTROL_TOOL_OUTPUT_SCHEMA,
   invoke_bilibili_downloader: DELEGATED_JOB_OUTPUT_SCHEMA,
   invoke_ytdlp_downloader: DELEGATED_JOB_OUTPUT_SCHEMA,
   invoke_torrent_downloader: DELEGATED_JOB_OUTPUT_SCHEMA,
