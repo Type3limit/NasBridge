@@ -11,6 +11,7 @@ export const MAX_CHILD_JOB_SUMMARY_LIMIT = 20;
 
 const SENSITIVE_KEY_PATTERN = /(?:key|token|secret|cookie|authorization|password|credential)/i;
 const MAX_AUDIT_TOOL_SUMMARY = 5;
+const MAX_IMPORTED_FILE_SUMMARY = 10;
 
 function clampInteger(value, min, max) {
   const numeric = Number(value);
@@ -56,6 +57,70 @@ function compactAuditStringList(items = [], limit = 8, maxLength = 120) {
     seen.add(value);
     result.push(value);
     if (result.length >= limit) {
+      break;
+    }
+  }
+  return result;
+}
+
+function basenameFromPathLike(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+  const normalized = raw.replace(/\\/g, "/");
+  return normalized.split("/").filter(Boolean).pop() || "";
+}
+
+function normalizeStorageRelativePath(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw || /^[A-Za-z]:[\\/]/.test(raw) || /^\\\\/.test(raw) || /^\/\//.test(raw)) {
+    return "";
+  }
+  const normalized = raw.replace(/\\/g, "/").replace(/^\/+/, "");
+  const segments = normalized.split("/").filter(Boolean);
+  if (!segments.length || segments.some((segment) => segment === "..")) {
+    return "";
+  }
+  return segments.join("/").slice(0, 320);
+}
+
+function summarizeImportedFile(file = null) {
+  if (!file || typeof file !== "object") {
+    return null;
+  }
+  const relativePath = normalizeStorageRelativePath(file.relativePath || file.path || file.filePath || "");
+  const name = basenameFromPathLike(file.fileName || file.name || relativePath || file.relativePath || file.path || file.absolutePath || "").slice(0, 180);
+  if (!relativePath && !name) {
+    return null;
+  }
+  const clientId = String(file.clientId || "").trim();
+  const rawFileId = String(file.fileId || file.id || (clientId && relativePath ? `${clientId}:${relativePath}` : "")).trim();
+  const size = Number(file.size);
+  return Object.fromEntries(Object.entries({
+    fileId: redactAuditText(rawFileId).slice(0, 240),
+    path: relativePath,
+    name,
+    size: Number.isFinite(size) && size >= 0 ? size : null,
+    mimeType: String(file.mimeType || file.type || "").trim().slice(0, 120)
+  }).filter(([, value]) => value !== "" && value !== null && value !== undefined));
+}
+
+function summarizeImportedFiles(files = []) {
+  const seen = new Set();
+  const result = [];
+  for (const file of Array.isArray(files) ? files : []) {
+    const summary = summarizeImportedFile(file);
+    if (!summary) {
+      continue;
+    }
+    const key = summary.fileId || summary.path || summary.name;
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(summary);
+    if (result.length >= MAX_IMPORTED_FILE_SUMMARY) {
       break;
     }
   }
@@ -129,9 +194,11 @@ function summarizeJobResult(result = null) {
     return null;
   }
   const artifacts = Array.isArray(result.artifacts) ? result.artifacts : [];
+  const importedFiles = summarizeImportedFiles(result.importedFiles);
   return {
     replyMessageId: String(result.replyMessageId || result.chatReply?.id || "").trim(),
     importedFileCount: Array.isArray(result.importedFiles) ? result.importedFiles.length : 0,
+    importedFiles,
     artifactTypes: [...new Set(artifacts.map((item) => String(item?.type || "").trim()).filter(Boolean))],
     artifactCount: artifacts.length,
     hasTags: Array.isArray(result.tags) && result.tags.length > 0,

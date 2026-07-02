@@ -38,7 +38,7 @@ function createJob(jobId, overrides = {}) {
     options: overrides.options || {},
     result: {
       replyMessageId: "",
-      importedFiles: [],
+      importedFiles: overrides.importedFiles || [],
       artifacts: overrides.artifacts || []
     },
     error: overrides.error || null,
@@ -58,6 +58,16 @@ test("bot job log bundle includes redacted log, agent trace, and delegated child
   const store = new BotJobStore({ rootDir: appDataRoot });
   await store.save(createJob("botjob_parent", {
     parsedArgs: { apiKey: "sk-should-not-leak-1234567890" },
+    importedFiles: [{
+      clientId: "local",
+      relativePath: "Downloads/demo.mp4",
+      absolutePath: "D:\\NAS\\Downloads\\demo.mp4",
+      fileName: "demo.mp4",
+      size: 2048,
+      mimeType: "video/mp4"
+    }, {
+      absolutePath: "D:\\NAS\\Downloads\\absolute-only.mp4"
+    }],
     audit: {
       permissionsUsed: ["readLibrary", "storage:metadata:write"],
       toolCalls: [{
@@ -158,6 +168,18 @@ test("bot job log bundle includes redacted log, agent trace, and delegated child
   assert.equal(bundle.childJobs[0].jobId, "botjob_child");
   assert.equal(bundle.childJobs[0].botId, "video.analyze");
   assert.equal(bundle.childJobs[0].tracking.logCommand, "@ai /log botjob_child");
+  assert.equal(bundle.job.result.importedFileCount, 2);
+  assert.deepEqual(bundle.job.result.importedFiles[0], {
+    fileId: "local:Downloads/demo.mp4",
+    path: "Downloads/demo.mp4",
+    name: "demo.mp4",
+    size: 2048,
+    mimeType: "video/mp4"
+  });
+  assert.deepEqual(bundle.job.result.importedFiles[1], {
+    name: "absolute-only.mp4"
+  });
+  assert.equal(JSON.stringify(bundle.job.result).includes("D:\\NAS"), false);
   assert.deepEqual(bundle.job.audit.permissionsUsed, ["readLibrary", "storage:metadata:write"]);
   assert.equal(bundle.job.audit.toolCallCount, 1);
   assert.equal(bundle.job.audit.recentToolCalls[0].name, "update_file_metadata");

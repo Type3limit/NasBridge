@@ -278,6 +278,17 @@ test("formatBotJobStatusReport summarizes jobs, child jobs, and recovery hints",
         label: "Running",
         percent: 50
       },
+      result: {
+        importedFileCount: 1,
+        importedFiles: [{
+          fileId: "local:Downloads/demo.mp4",
+          path: "Downloads/demo.mp4",
+          name: "demo.mp4",
+          size: 2048,
+          mimeType: "video/mp4",
+          absolutePath: "D:\\NAS\\Downloads\\demo.mp4"
+        }]
+      },
       audit: {
         permissionsUsed: ["readLibrary", "storage:metadata:write"],
         toolCallCount: 1,
@@ -317,6 +328,8 @@ test("formatBotJobStatusReport summarizes jobs, child jobs, and recovery hints",
 
   assert.match(body, /Bot 任务状态：1/);
   assert.match(body, /ai\.chat · botjob_parent · failed/);
+  assert.match(body, /入库文件：1/);
+  assert.match(body, /Downloads\/demo\.mp4 \(id=local:Downloads\/demo\.mp4, video\/mp4, 2\.00KB\)/);
   assert.match(body, /审计：工具调用 1 · 权限 readLibrary、storage:metadata:write/);
   assert.match(body, /update_file_metadata · completed · risk=medium · ids=client:Docs\/a\.txt · perm=storage:metadata:write/);
   assert.match(body, /子任务：1 · failed 1/);
@@ -326,6 +339,7 @@ test("formatBotJobStatusReport summarizes jobs, child jobs, and recovery hints",
   assert.match(body, /建议工具：read_media_summary、read_text_excerpt/);
   assert.match(body, /可继续：@ai #7 继续/);
   assert.match(body, /@ai \/trace <jobId>/);
+  assert.doesNotMatch(body, /D:[/\\]NAS/);
 });
 
 test("formatBotJobLogReport summarizes redacted log and child jobs", () => {
@@ -337,6 +351,17 @@ test("formatBotJobLogReport summarizes redacted log and child jobs", () => {
       status: "failed",
       phase: "failed",
       progress: { label: "Failed", percent: 99 },
+      result: {
+        importedFileCount: 1,
+        importedFiles: [{
+          fileId: "local:Downloads/demo.mp4",
+          path: "Downloads/demo.mp4",
+          name: "demo.mp4",
+          size: 2048,
+          mimeType: "video/mp4",
+          absolutePath: "D:\\NAS\\Downloads\\demo.mp4"
+        }]
+      },
       audit: {
         permissionsUsed: ["readLibrary", "bot:invoke", "storage:content:read"],
         toolCallCount: 2,
@@ -390,6 +415,8 @@ test("formatBotJobLogReport summarizes redacted log and child jobs", () => {
 
   assert.match(body, /Bot 日志：botjob_parent/);
   assert.match(body, /ai\.chat · botjob_parent · failed/);
+  assert.match(body, /入库文件：1/);
+  assert.match(body, /Downloads\/demo\.mp4 \(id=local:Downloads\/demo\.mp4, video\/mp4, 2\.00KB\)/);
   assert.match(body, /审计：工具调用 2 · 权限 readLibrary、bot:invoke、storage:content:read/);
   assert.match(body, /invoke_video_analyze · blocked · risk=medium · ids=client:Videos\/demo\.mp4 · perm=bot:invoke, storage:content:read · jobs=video\.analyze:botjob_child/);
   assert.match(body, /生命周期：events=3 · last=failed\/failed · 99%/);
@@ -402,6 +429,7 @@ test("formatBotJobLogReport summarizes redacted log and child jobs", () => {
   assert.match(body, /建议工具：update_file_metadata/);
   assert.match(body, /需要确认：update_file_metadata 影响文件数 2/);
   assert.match(body, /@ai \/job botjob_parent/);
+  assert.doesNotMatch(body, /D:[/\\]NAS/);
 });
 
 test("models command refresh migrates display names to executable model refs", async () => {

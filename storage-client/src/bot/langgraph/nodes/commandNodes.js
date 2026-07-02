@@ -823,6 +823,84 @@ function formatBotJobLine(job = {}, prefix = "-") {
   return `${prefix} ${parts.join(" · ")}`;
 }
 
+function redactReportLocalPath(value = "") {
+  return String(value || "")
+    .replace(/[A-Za-z]:[\\/][^\s,;"'{}[\])]+/g, "[local-path]")
+    .replace(/\\\\[^\\/\s,;"'{}[\])]+[\\/][^\s,;"'{}[\])]+/g, "[network-path]");
+}
+
+function basenameFromPathLike(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+  return raw.replace(/\\/g, "/").split("/").filter(Boolean).pop() || "";
+}
+
+function normalizeReportRelativePath(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw || /^[A-Za-z]:[\\/]/.test(raw) || /^\\\\/.test(raw) || /^\/\//.test(raw)) {
+    return "";
+  }
+  const normalized = raw.replace(/\\/g, "/").replace(/^\/+/, "");
+  const segments = normalized.split("/").filter(Boolean);
+  if (!segments.length || segments.some((segment) => segment === "..")) {
+    return "";
+  }
+  return segments.join("/");
+}
+
+function formatFileSize(size = null) {
+  const bytes = Number(size);
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return "";
+  }
+  if (bytes < 1024) {
+    return `${Math.round(bytes)}B`;
+  }
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value >= 10 ? value.toFixed(1) : value.toFixed(2)}${units[unitIndex]}`;
+}
+
+function formatImportedFileLabel(file = {}) {
+  const relativePath = normalizeReportRelativePath(file.path || file.relativePath || "");
+  const name = basenameFromPathLike(file.name || file.fileName || relativePath || file.path || file.absolutePath || "");
+  const primary = relativePath || name || redactReportLocalPath(String(file.fileId || file.id || "").trim()) || "unknown";
+  const fileId = redactReportLocalPath(String(file.fileId || file.id || "").trim());
+  const details = [
+    fileId && fileId !== primary ? `id=${fileId}` : "",
+    file.mimeType ? String(file.mimeType).trim() : "",
+    formatFileSize(file.size)
+  ].filter(Boolean);
+  return `${primary}${details.length ? ` (${details.join(", ")})` : ""}`;
+}
+
+function formatImportedFileLines(job = {}, indent = "  ") {
+  const result = job.result && typeof job.result === "object" ? job.result : {};
+  const files = Array.isArray(result.importedFiles) ? result.importedFiles.filter(Boolean) : [];
+  const count = Number.isFinite(Number(result.importedFileCount))
+    ? Number(result.importedFileCount)
+    : files.length;
+  if (!count && !files.length) {
+    return [];
+  }
+  const visibleFiles = files.slice(0, 5);
+  const lines = [`${indent}入库文件：${count || visibleFiles.length}`];
+  for (const file of visibleFiles) {
+    lines.push(`${indent}- ${formatImportedFileLabel(file)}`);
+  }
+  if (count > visibleFiles.length) {
+    lines.push(`${indent}- 另有 ${count - visibleFiles.length} 个未展开`);
+  }
+  return lines;
+}
+
 function formatJobAuditLines(job = {}, indent = "  ") {
   const audit = job.audit && typeof job.audit === "object" ? job.audit : {};
   const permissions = Array.isArray(audit.permissionsUsed) ? audit.permissionsUsed.filter(Boolean) : [];
@@ -908,6 +986,7 @@ export function formatBotJobStatusReport(status = {}) {
   }
   for (const job of jobs) {
     lines.push(formatBotJobLine(job));
+    lines.push(...formatImportedFileLines(job, "  "));
     lines.push(...formatJobAuditLines(job, "  "));
     lines.push(...formatLifecycleLines(job.lifecycle, "  "));
     const childCount = Number(job.childJobCount || 0);
@@ -916,6 +995,7 @@ export function formatBotJobStatusReport(status = {}) {
       lines.push(`  子任务：${childCount}${counts ? ` · ${counts}` : ""}`);
       for (const child of (Array.isArray(job.childJobs) ? job.childJobs : []).slice(0, 5)) {
         lines.push(formatBotJobLine(child, "  -"));
+        lines.push(...formatImportedFileLines(child, "    "));
         const commands = formatJobTrackingLine(child, "    ");
         if (commands) {
           lines.push(commands);
@@ -938,6 +1018,7 @@ export function formatBotJobLogReport(bundle = {}) {
   const lines = [`Bot 日志：${jobId || "unknown"}`];
   if (bundle.job) {
     lines.push(formatBotJobLine(bundle.job));
+    lines.push(...formatImportedFileLines(bundle.job));
     lines.push(...formatJobAuditLines(bundle.job));
   }
   lines.push(...formatLifecycleLines(bundle.lifecycle));
@@ -946,6 +1027,7 @@ export function formatBotJobLogReport(bundle = {}) {
     lines.push(`子任务：${childJobs.length}`);
     for (const child of childJobs.slice(0, 5)) {
       lines.push(formatBotJobLine(child, "  -"));
+      lines.push(...formatImportedFileLines(child, "    "));
       const commands = formatJobTrackingLine(child, "    ");
       if (commands) {
         lines.push(commands);
