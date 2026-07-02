@@ -562,7 +562,7 @@ function buildMetadataPatch(file = {}, input = {}) {
   return { patch, changedFields };
 }
 
-function getHiddenDirectoryNames() {
+export function getHiddenDirectoryNames() {
   return [
     process.env.PREVIEW_CACHE_DIR_NAME || ".nas-preview-cache",
     process.env.HLS_CACHE_DIR_NAME || ".nas-hls-cache",
@@ -571,6 +571,28 @@ function getHiddenDirectoryNames() {
     process.env.CHAT_ROOM_DIR_NAME || ".nas-chat-room",
     process.env.BOT_APP_DATA_DIR_NAME || ".nas-bot"
   ];
+}
+
+export function buildFileAccessPolicy(api = {}) {
+  const root = String(api?.storageRoot || "").trim();
+  return {
+    root,
+    allowedRoots: root ? [root] : [],
+    hiddenDirs: getHiddenDirectoryNames(),
+    hiddenDirectories: getHiddenDirectoryNames(),
+    accessBy: ["fileId", "relativePath"],
+    maxListResults: MAX_LIBRARY_LIST_LIMIT,
+    maxDetailFiles: MAX_LIBRARY_DETAIL_FILES,
+    maxInlineTextChars: MAX_TEXT_EXCERPT_CHARS,
+    maxTextExcerptChars: MAX_TEXT_EXCERPT_CHARS,
+    maxBatchFiles: MAX_FILE_ORGANIZE_ACTIONS,
+    allowRawTextRead: true,
+    allowBinaryRead: false,
+    binaryReadAllowed: false,
+    rawAbsolutePathExposed: false,
+    storageRootOnly: true,
+    writeRequiresConfirmation: true
+  };
 }
 
 function isHiddenRelativePath(relativePath = "") {
@@ -767,8 +789,8 @@ export async function buildTextExcerptResult(api, input = {}) {
         truncated: subtitle.truncated || startChar + text.length < subtitle.length
       },
       policy: {
-        rawAbsolutePathExposed: false,
-        storageRootOnly: true
+        ...buildFileAccessPolicy(api),
+        contentLayer: "excerpt"
       }
     };
   }
@@ -802,8 +824,8 @@ export async function buildTextExcerptResult(api, input = {}) {
       source
     },
     policy: {
-      rawAbsolutePathExposed: false,
-      storageRootOnly: true
+      ...buildFileAccessPolicy(api),
+      contentLayer: "excerpt"
     }
   };
 }
@@ -874,17 +896,7 @@ export async function buildFileAccessExplanation(api, input = {}) {
     visibleFiles: snapshot.files.length,
     visibleDirectories: snapshot.directories.length,
     countsByKind,
-    policy: {
-      accessBy: ["fileId", "relativePath"],
-      hiddenDirectories: getHiddenDirectoryNames(),
-      maxListResults: MAX_LIBRARY_LIST_LIMIT,
-      maxDetailFiles: MAX_LIBRARY_DETAIL_FILES,
-      maxTextExcerptChars: MAX_TEXT_EXCERPT_CHARS,
-      maxBatchFiles: MAX_FILE_ORGANIZE_ACTIONS,
-      rawAbsolutePathExposed: false,
-      binaryReadAllowed: false,
-      writeRequiresConfirmation: true
-    },
+    policy: buildFileAccessPolicy(api),
     readableLayers: [
       "Index: 文件名、相对路径、MIME、大小、mtime、标签、摘要/字幕可用性",
       "Metadata: 单文件元数据、标签、摘要/字幕状态",

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  buildFileAccessPolicy,
   buildFileAccessExplanation,
   buildOrganizeFilesResult,
   buildTextExcerptResult
@@ -61,6 +62,9 @@ test("text excerpt reads bounded content without exposing absolute paths", async
     assert.equal(result.excerpt.text, text.slice(4, 14));
     assert.equal(result.policy.rawAbsolutePathExposed, false);
     assert.equal(result.policy.storageRootOnly, true);
+    assert.equal(result.policy.allowRawTextRead, true);
+    assert.equal(result.policy.allowBinaryRead, false);
+    assert.equal(result.policy.maxInlineTextChars, 20_000);
     assert.doesNotMatch(JSON.stringify(result), new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
   });
 });
@@ -80,12 +84,34 @@ test("file access explanation exposes policy boundaries and tool list", async ()
     ]);
 
     const result = await buildFileAccessExplanation(api, { kind: "tools" });
+    assert.equal(result.policy.root, root);
+    assert.deepEqual(result.policy.allowedRoots, [root]);
+    assert.ok(result.policy.hiddenDirs.includes(".nas-bot"));
+    assert.ok(result.policy.hiddenDirectories.includes(".nas-bot"));
+    assert.equal(result.policy.maxInlineTextChars, 20_000);
+    assert.equal(result.policy.allowRawTextRead, true);
+    assert.equal(result.policy.allowBinaryRead, false);
     assert.equal(result.policy.rawAbsolutePathExposed, false);
     assert.equal(result.policy.binaryReadAllowed, false);
     assert.equal(result.policy.writeRequiresConfirmation, true);
     assert.ok(result.blockedLayers.some((item) => item.includes("STORAGE_ROOT")));
     assert.ok(result.detail.includes("search_library_files"));
     assert.ok(result.detail.includes("organize_files"));
+  });
+});
+
+test("file access policy matches the agent FileAccessPolicy contract", async () => {
+  await withTempDir(async (root) => {
+    const policy = buildFileAccessPolicy(createApi(root, []));
+    assert.equal(policy.root, root);
+    assert.deepEqual(policy.allowedRoots, [root]);
+    assert.deepEqual(policy.accessBy, ["fileId", "relativePath"]);
+    assert.equal(policy.allowBinaryRead, false);
+    assert.equal(policy.storageRootOnly, true);
+    assert.equal(policy.writeRequiresConfirmation, true);
+    assert.ok(policy.maxListResults > 0);
+    assert.ok(policy.maxInlineTextChars > 0);
+    assert.ok(policy.maxBatchFiles > 0);
   });
 });
 
