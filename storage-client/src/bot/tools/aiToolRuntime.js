@@ -6,6 +6,7 @@ import { readRecentChatHistory } from "./chatHistory.js";
 import { listReferencedChatAttachments } from "./chatAssets.js";
 import { invokeMultimodalModel, invokeTextModel } from "./llmClient.js";
 import { fetchWebPageSummary, getSourcePreferenceLabel, normalizeSourcePreference, searchWeb } from "./httpFetch.js";
+import { executeDelegatedBotToolCall, getDelegatedBotToolDefinitions, isDelegatedBotToolName } from "./botToolAdapter.js";
 import { buildRealtimeContextText } from "./realtimeContext.js";
 import { searchYYeTsShows, getYYeTsResource, extractEpisodeMagnets, sanitizeShowName } from "./yyetsApi.js";
 import { MAX_AGENT_TRACE_EVENTS, MAX_JOB_LOG_BYTES, MAX_JOB_STATUS_LIMIT, buildAgentTraceResult, buildBotJobStatusResult } from "./botJobStatus.js";
@@ -1039,6 +1040,7 @@ export function getAiToolDefinitions() {
         }
       }
     },
+    ...getDelegatedBotToolDefinitions(),
     {
       name: "import_bilibili_video",
       description: "把一个或多个 bilibili 链接/BV 号交给 bilibili.downloader 批量下载并入库。需要同时下载多个视频时，把所有 source 放入 sources 数组一次调用，不要多次单独调用。通常应先用 search_bilibili_video 找到具体视频链接，再调用这个工具。",
@@ -1469,6 +1471,15 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
       status: delegatedJob.status || "queued",
       prompt
     });
+  }
+
+  if (isDelegatedBotToolName(name)) {
+    await api.emitProgress({
+      phase: `tool-${name.replace(/^invoke_/, "").replace(/_/g, "-")}`,
+      label: "委派下载类 bot",
+      percent: 48
+    });
+    return safeJson(await executeDelegatedBotToolCall(name, api, input));
   }
 
   if (name === "import_bilibili_video") {
