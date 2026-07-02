@@ -4935,6 +4935,13 @@ button.chatAttachmentTile:disabled {
   overflow-wrap: anywhere;
 }
 
+.chatBotChildJobActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
 .chatBotChildJobError {
   color: #b91c1c;
 }

@@ -1016,6 +1016,8 @@ export default function ChatRoom({
     open: false,
     title: "",
     content: "",
+    clientId: "",
+    jobId: "",
     summaryText: "",
     traceText: "",
     childJobs: [],
@@ -1871,6 +1873,92 @@ export default function ChatRoom({
     return (message?.attachments || []).filter((attachment) => !hiddenIds.has(attachment.id));
   }
 
+  async function retryBotJobById(clientId, jobId) {
+    if (!jobId || !clientId || !p2p) {
+      throw new Error("当前任务无法重新生成");
+    }
+    const result = await p2p.getBotJob(clientId, jobId);
+    const job = result?.job;
+    if (!job?.botId) {
+      throw new Error("找不到原始任务上下文");
+    }
+    return p2p.invokeBot(clientId, {
+      botId: job.botId,
+      trigger: {
+        type: String(job?.input?.triggerType || "manual"),
+        rawText: String(job?.input?.rawText || ""),
+        parsedArgs: job?.input?.parsedArgs && typeof job.input.parsedArgs === "object" ? job.input.parsedArgs : {}
+      },
+      requester: {
+        userId: String(job?.requester?.userId || ""),
+        displayName: String(job?.requester?.displayName || ""),
+        role: String(job?.requester?.role || "user")
+      },
+      chat: job?.chat && typeof job.chat === "object"
+        ? job.chat
+        : {
+          hostClientId: clientId,
+          dayKey: getDayKey(),
+          historyPath: getHistoryPath(getDayKey()),
+          messageId: "",
+          replyMode: "append-chat-history"
+        },
+      attachments: Array.isArray(job?.attachments) ? job.attachments : [],
+      options: job?.options && typeof job.options === "object" ? job.options : {}
+    });
+  }
+
+  async function continueBotJob(message) {
+    const jobId = String(message?.bot?.jobId || "").trim();
+    const clientId = String(message?.hostClientId || "").trim();
+    if (!jobId || !clientId || !p2p) {
+      setMessage?.("当前任务无法继续等待", "warning");
+      return;
+    }
+    botLogCacheRef.current.delete(`${clientId}:${jobId}`);
+    const result = await p2p.getBotJob(clientId, jobId);
+    const status = formatBotStatusText(result?.job?.status || "");
+    setMessage?.(`任务 ${jobId.slice(0, 12)} 当前状态：${status}`, "info");
+    await openBotLogDialog(message);
+  }
+
+  async function openChildBotLog(job) {
+    const jobId = String(job?.jobId || "").trim();
+    const clientId = String(botLogDialog.clientId || "").trim();
+    if (!jobId || !clientId || !p2p) {
+      setMessage?.("当前子任务没有可读取的日志", "warning");
+      return;
+    }
+    const dayKey = String(job?.createdAt || "").slice(0, 10) || getDayKey();
+    botLogCacheRef.current.delete(`${clientId}:${jobId}`);
+    await openBotLogDialog({
+      id: `bot-child-log:${jobId}`,
+      hostClientId: clientId,
+      dayKey,
+      historyPath: getHistoryPath(dayKey),
+      card: { title: String(job?.botId || "Bot") },
+      bot: {
+        botId: String(job?.botId || ""),
+        jobId
+      }
+    });
+  }
+
+  async function retryChildBotJob(job) {
+    const jobId = String(job?.jobId || "").trim();
+    const clientId = String(botLogDialog.clientId || "").trim();
+    if (!jobId || !clientId || !p2p) {
+      setMessage?.("当前子任务无法重新生成", "warning");
+      return;
+    }
+    const invoked = await retryBotJobById(clientId, jobId);
+    if (invoked?.job?.jobId) {
+      setMessage?.(`已重新提交子任务 ${invoked.job.jobId.slice(0, 12)}`, "success");
+    } else {
+      setMessage?.("已重新提交子任务", "success");
+    }
+  }
+
   function handleCardAction(message, action) {
     if (!action?.type) {
       return;
@@ -1926,37 +2014,7 @@ export default function ChatRoom({
         setMessage?.("当前任务无法重新生成", "warning");
         return;
       }
-      p2p.getBotJob(message.hostClientId, jobId)
-        .then((result) => {
-          const job = result?.job;
-          if (!job?.botId) {
-            throw new Error("找不到原始任务上下文");
-          }
-          return p2p.invokeBot(message.hostClientId, {
-            botId: job.botId,
-            trigger: {
-              type: String(job?.input?.triggerType || "manual"),
-              rawText: String(job?.input?.rawText || ""),
-              parsedArgs: job?.input?.parsedArgs && typeof job.input.parsedArgs === "object" ? job.input.parsedArgs : {}
-            },
-            requester: {
-              userId: String(job?.requester?.userId || ""),
-              displayName: String(job?.requester?.displayName || ""),
-              role: String(job?.requester?.role || "user")
-            },
-            chat: job?.chat && typeof job.chat === "object"
-              ? job.chat
-              : {
-                hostClientId: message.hostClientId,
-                dayKey: message.dayKey,
-                historyPath: message.historyPath,
-                messageId: "",
-                replyMode: "append-chat-history"
-              },
-            attachments: Array.isArray(job?.attachments) ? job.attachments : [],
-            options: job?.options && typeof job.options === "object" ? job.options : {}
-          });
-        })
+      retryBotJobById(message.hostClientId, jobId)
         .then((invoked) => {
           if (invoked?.job?.jobId) {
             setMessage?.(`已重新提交任务 ${invoked.job.jobId.slice(0, 12)}`, "success");
@@ -1965,6 +2023,12 @@ export default function ChatRoom({
         .catch((error) => {
           setMessage?.(error?.message || "重新生成失败", "error");
         });
+      return;
+    }
+    if (action.type === "continue-bot-job") {
+      continueBotJob(message).catch((error) => {
+        setMessage?.(error?.message || "继续等待失败", "error");
+      });
       return;
     }
     if (action.type === "cancel-bot-job") {
@@ -2198,6 +2262,8 @@ export default function ChatRoom({
       open: true,
       title,
       content: cached?.content || "",
+      clientId,
+      jobId,
       summaryText: cached?.summaryText || "",
       traceText: cached?.traceText || "",
       childJobs: Array.isArray(cached?.childJobs) ? cached.childJobs : [],
@@ -2229,6 +2295,8 @@ export default function ChatRoom({
         open: true,
         title,
         content: next.content,
+        clientId,
+        jobId,
         summaryText: next.summaryText,
         traceText: next.traceText,
         childJobs: next.childJobs,
@@ -2241,6 +2309,8 @@ export default function ChatRoom({
         open: true,
         title,
         content: "",
+        clientId,
+        jobId,
         summaryText: "",
         traceText: "",
         childJobs: [],
@@ -3652,15 +3722,37 @@ export default function ChatRoom({
                       <section className="chatBotLogSection">
                         <Caption1>子任务</Caption1>
                         <div className="chatBotChildJobList">
-                          {botLogDialog.childJobs.map((job) => (
-                            <div key={job.jobId} className={`chatBotChildJob status-${String(job.status || "unknown")}`}>
-                              <div className="chatBotChildJobMain">
-                                <Text>{job.botId || "bot"}</Text>
-                                <Caption1>{String(job.jobId || "").slice(0, 12)} · {formatBotStatusText(job.status)}{job.phase ? ` · ${job.phase}` : ""}</Caption1>
+                          {botLogDialog.childJobs.map((job) => {
+                            const status = String(job.status || "unknown").toLowerCase();
+                            const retryable = ["failed", "cancelled"].includes(status);
+                            return (
+                              <div key={job.jobId} className={`chatBotChildJob status-${status}`}>
+                                <div className="chatBotChildJobMain">
+                                  <Text>{job.botId || "bot"}</Text>
+                                  <Caption1>{String(job.jobId || "").slice(0, 12)} · {formatBotStatusText(job.status)}{job.phase ? ` · ${job.phase}` : ""}</Caption1>
+                                </div>
+                                {job.error?.message ? <Caption1 className="chatBotChildJobError">{job.error.message}</Caption1> : null}
+                                <div className="chatBotChildJobActions">
+                                  <Button
+                                    size="small"
+                                    appearance="secondary"
+                                    onClick={() => openChildBotLog(job).catch((error) => setMessage?.(error?.message || "读取子任务日志失败", "error"))}
+                                  >
+                                    日志
+                                  </Button>
+                                  {retryable ? (
+                                    <Button
+                                      size="small"
+                                      appearance="secondary"
+                                      onClick={() => retryChildBotJob(job).catch((error) => setMessage?.(error?.message || "重试子任务失败", "error"))}
+                                    >
+                                      重试
+                                    </Button>
+                                  ) : null}
+                                </div>
                               </div>
-                              {job.error?.message ? <Caption1 className="chatBotChildJobError">{job.error.message}</Caption1> : null}
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </section>
                     ) : null}

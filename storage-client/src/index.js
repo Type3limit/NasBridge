@@ -595,6 +595,7 @@ function buildBotJobCard(job, botDisplayName) {
     progress: percent,
     actions: ["queued", "running"].includes(String(job?.status || ""))
       ? [
+        { type: "continue-bot-job", label: "继续等待" },
         { type: "open-bot-log", label: "查看日志" },
         { type: "cancel-bot-job", label: "停止生成" }
       ]
