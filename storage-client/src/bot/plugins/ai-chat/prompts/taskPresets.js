@@ -87,8 +87,9 @@ const TASK_PRESETS = [
   {
     id: "video-analysis",
     title: "Analyze or summarize media",
-    triggers: [/视频|音频|字幕|转写|tag|标签|video|audio|subtitle/i],
+    triggers: [/视频|音频|字幕|转写|tag|标签|b站|bilibili|\bBV[0-9A-Za-z]{10,}\b|video|audio|subtitle/i],
     lines: [
+      "用户直接给 Bilibili 链接/BV 并要求总结、分析或转写时，调用 invoke_video_analyze 并传 source，不要绕过 agent 直接委派；可设置 waitUntilPhase=download/transcribe/running 返回 jobId/status/phase。",
       "先用 search_library_files 搜索文件，再用 read_media_summary 检查 aiSummary/subtitle 是否已有，并读取时长、分辨率、音轨等 probe 信息。用户说“没总结/没有摘要”时搜索参数要带 hasAiSummary=false；用户说“没字幕/未转写”时带 hasSubtitle=false。",
       "没有摘要时调用 invoke_video_analyze；长视频默认 waitForCompletion=false，可设置 waitUntilPhase=transcribe 或 running 等到任务真正开始后返回 jobId/status/phase。",
       "打标签用 invoke_video_tag；批量标签必须先说明影响范围并取得 confirmed=true。"

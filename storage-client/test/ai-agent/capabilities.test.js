@@ -631,7 +631,7 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(summary, /media-summary: search_library_files -> read_media_summary -> invoke_video_analyze -> get_bot_job_status/);
   assert.match(summary, /hasAiSummary=false/);
   assert.match(summary, /hasSubtitle=false/);
-  assert.match(summary, /waitUntilPhase=transcribe\/running/);
+  assert.match(summary, /waitUntilPhase=download\/transcribe\/running/);
   assert.match(summary, /document-read: search_library_files -> diagnose_file_access -> read_text_excerpt -> analyze_file_content/);
   assert.match(summary, /image-analysis: describe_image -> search_library_files -> diagnose_file_access -> analyze_file_content/);
   assert.match(summary, /kind=image/);
@@ -686,7 +686,7 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(report, /media-summary · Summarize NAS video\/audio: search_library_files -> read_media_summary -> invoke_video_analyze -> get_bot_job_status/);
   assert.match(report, /状态: .*invoke_video_analyze:blocked\(whisper\)/);
   assert.match(report, /hasAiSummary=false/);
-  assert.match(report, /waitUntilPhase=transcribe\/running/);
+  assert.match(report, /waitUntilPhase=download\/transcribe\/running/);
   assert.match(report, /image-analysis · Analyze chat or NAS images: describe_image -> search_library_files -> diagnose_file_access -> analyze_file_content/);
   assert.match(report, /download-into-library · Download into NAS library: search_bilibili_video -> invoke_bilibili_downloader -> invoke_ytdlp_downloader -> invoke_torrent_downloader -> invoke_aria2_downloader -> search_yyets_show -> download_yyets_episodes/);
   assert.match(report, /failure-diagnostic · Diagnose bot or agent failure: get_bot_job_status -> read_agent_trace -> read_bot_job_log/);

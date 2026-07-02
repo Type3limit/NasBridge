@@ -757,6 +757,11 @@ function isBilibiliVideoUrl(rawUrl = "") {
   }
 }
 
+function isBilibiliVideoSource(value = "") {
+  const source = String(value || "").trim();
+  return /^BV[0-9A-Za-z]{10,}$/i.test(source) || isBilibiliVideoUrl(source);
+}
+
 async function searchBilibiliVideos(query = "", signal, maxResults = MAX_BILIBILI_SEARCH_RESULTS) {
   const normalizedQuery = String(query || "").trim();
   if (!normalizedQuery) {
@@ -1264,13 +1269,15 @@ export function getAiToolDefinitions() {
     },
     {
       name: "invoke_video_analyze",
-      description: "委派 video.analyze 对 NAS 中的视频/音频提取音频、Whisper 转字幕、生成 AI 总结并保存到文件元数据。已有总结时默认直接返回总结；设置 force=true 可重新总结。",
+      description: "委派 video.analyze 对 NAS 中的视频/音频或 Bilibili 链接/BV 号提取音频、Whisper 转字幕、生成 AI 总结并保存到文件元数据。已有总结时默认直接返回总结；设置 force=true 可重新总结。",
       inputSchema: {
         type: "object",
         properties: {
           fileId: { type: "string", description: "文件 ID，优先使用 search_library_files 返回的 fileId" },
           path: { type: "string", description: "相对路径（与 fileId 二选一）" },
           filePath: { type: "string", description: "相对路径别名" },
+          source: { type: "string", description: "Bilibili 链接或 BV 号；用户直接给 B 站视频并要求总结/分析时使用" },
+          url: { type: "string", description: "source 的别名" },
           force: { type: "boolean", description: "已有总结时是否重新跑总结，默认 false" },
           includeSubtitle: { type: "boolean", description: "已有总结时是否同时返回字幕文本，默认 false" },
           waitForCompletion: { type: "boolean", description: "是否等待任务完成再返回。长视频建议 false，默认 false" },
@@ -1572,8 +1579,62 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
   if (name === "analyze_storage_video" || name === "invoke_video_analyze") {
     await api.emitProgress({ phase: "tool-analyze-storage-video", label: "定位待分析文件", percent: 46 });
     const identifier = String(input.fileId || input.path || input.filePath || "").trim();
+    const source = String(input.source || input.url || "").trim();
     if (!identifier) {
-      throw new Error("fileId or path is required");
+      if (!source) {
+        throw new Error("fileId, path, or source is required");
+      }
+      if (!isBilibiliVideoSource(source)) {
+        throw new Error("source must be a Bilibili video URL or BV id");
+      }
+
+      await api.emitProgress({ phase: "tool-analyze-storage-video", label: "创建 Bilibili 视频分析任务", percent: 52 });
+      const delegatedJob = await api.invokeBot({
+        botId: "video.analyze",
+        trigger: {
+          type: "tool-call",
+          rawText: source,
+          parsedArgs: { source }
+        },
+        options: {
+          delegatedBy: api.botId,
+          parentJobId: api.jobId,
+          toolName: name
+        }
+      });
+
+      if (input.waitForCompletion === true) {
+        await api.emitProgress({ phase: "tool-analyze-storage-video", label: "等待 Bilibili 视频分析任务完成", percent: 58 });
+        const completedJob = await waitForDelegatedBotJob(api, delegatedJob.jobId, {
+          timeoutSeconds: input.timeoutSeconds || 600
+        });
+        return safeJson({
+          delegated: true,
+          ...buildDelegatedJobFields("video.analyze", completedJob, {
+            waitForCompletion: true
+          }),
+          source,
+          result: completedJob.result || {},
+          error: completedJob.error || null,
+          message: completedJob.status === "succeeded"
+            ? "Bilibili 视频分析任务已完成。"
+            : "Bilibili 视频分析任务已结束，请查看子任务状态和日志。"
+        });
+      }
+
+      const phaseWait = await waitForDelegatedPhaseIfRequested(api, delegatedJob, input, {
+        progressPhase: "tool-analyze-storage-video",
+        labelPrefix: "等待 Bilibili 视频分析任务进入"
+      });
+      return safeJson({
+        delegated: true,
+        ...buildDelegatedJobFields("video.analyze", phaseWait?.job || delegatedJob, {
+          waitUntilPhase: input.waitUntilPhase
+        }),
+        ...buildWaitUntilPhaseFields(phaseWait),
+        source,
+        message: "已提交 Bilibili 视频下载、转录与 AI 总结任务，完成后会写入文件元数据。"
+      });
     }
     const snapshot = await loadLibrarySnapshot(api);
     const file = resolveLibraryFile(snapshot.files, identifier, { storageRoot: api.storageRoot });

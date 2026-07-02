@@ -68,6 +68,10 @@ test("standard video bot tool names are exposed and registered as async medium-r
   assert.equal(toolNames.has("analyze_storage_video"), true);
   assert.equal(toolNames.has("tag_storage_video"), true);
 
+  const videoAnalyzeTool = getAiToolDefinitions().find((tool) => tool.name === "invoke_video_analyze");
+  assert.ok(videoAnalyzeTool.inputSchema.properties.source);
+  assert.ok(videoAnalyzeTool.inputSchema.properties.url);
+
   const descriptors = new Map(buildCapabilityDescriptors({ listBots: () => [] }).map((item) => [item.id, item]));
   assert.equal(descriptors.get("invoke_video_analyze").riskLevel, "medium");
   assert.equal(descriptors.get("invoke_video_analyze").executionMode, "async-job");
@@ -105,6 +109,36 @@ test("invoke_video_analyze delegates to video.analyze and returns a job id", asy
     parentJobId: "botjob_parent",
     toolName: "invoke_video_analyze"
   });
+});
+
+test("invoke_video_analyze delegates Bilibili sources through the tool adapter", async () => {
+  const api = createFakeApi();
+  api.dependencies.listLibraryFiles = async () => {
+    throw new Error("source analysis should not require a NAS file lookup");
+  };
+  const raw = await executeAiToolCall(
+    {
+      name: "invoke_video_analyze",
+      input: {
+        source: "BV1xx411c7mD"
+      }
+    },
+    { chat: {}, attachments: [] },
+    api
+  );
+  const result = JSON.parse(raw);
+
+  assert.equal(result.delegated, true);
+  assert.equal(result.botId, "video.analyze");
+  assert.equal(result.jobId, "botjob_child");
+  assert.equal(result.source, "BV1xx411c7mD");
+  assert.equal(result.tracking.statusCommand, "@ai /job botjob_child");
+  assert.equal(api.invoked[0].botId, "video.analyze");
+  assert.deepEqual(api.invoked[0].trigger.parsedArgs, {
+    source: "BV1xx411c7mD"
+  });
+  assert.equal(api.invoked[0].trigger.rawText, "BV1xx411c7mD");
+  assert.equal(api.invoked[0].options.toolName, "invoke_video_analyze");
 });
 
 test("invoke_video_analyze can wait until a delegated job phase", async () => {

@@ -1,7 +1,7 @@
 import { parseModelDirective } from "../../plugins/ai-chat/parsers/modelDirectives.js";
 import { parseAiSessionDirective } from "../../plugins/ai-chat/parsers/sessionDirectives.js";
 import { findNestedBotInvocation } from "../../plugins/ai-chat/selectors/botInvocations.js";
-import { isImageAttachment, stripSelfMention, wantsVideoAnalysis, wantsVision } from "../../plugins/ai-chat/selectors/intents.js";
+import { isImageAttachment, stripSelfMention, wantsVision } from "../../plugins/ai-chat/selectors/intents.js";
 import { formatAiSessionLabel, getAiSession } from "../../plugins/ai-chat/services/aiSessions.js";
 import { getEffectiveMultimodalModel, getEffectiveTextModel, readAiModelSettings } from "../../plugins/ai-chat/services/modelSettings.js";
 import { readAiSessionCheckpoint } from "../checkpoints/aiSessionCheckpointer.js";
@@ -116,28 +116,6 @@ export async function prepareAiChatGraphState(state = {}) {
           subtitle: modelOverride
             ? `模型: ${modelOverride} · 已委派给 ${nestedInvocation.target.displayName}`
             : `已委派给 ${nestedInvocation.target.displayName}`
-        }
-      };
-    }
-  }
-
-  if (route !== "command" && route !== "delegate" && wantsVideoAnalysis(effectivePrompt)) {
-    const videoAnalyzeTarget = catalog.find((item) => item.botId === "video.analyze");
-    if (videoAnalyzeTarget) {
-      const bilibiliMatch = effectivePrompt.match(/https?:\/\/\S+|\bBV[0-9A-Za-z]{10}\b/i);
-      const source = bilibiliMatch ? bilibiliMatch[0] : "";
-      route = "delegate";
-      delegatedInvocation = {
-        kind: "nested",
-        invocation: {
-          target: videoAnalyzeTarget,
-          rawText: effectivePrompt,
-          parsedArgs: source ? { source } : {}
-        },
-        options: {
-          subtitle: modelOverride
-            ? `模型: ${modelOverride} · 已委派给 ${videoAnalyzeTarget.displayName}`
-            : `已委派给 ${videoAnalyzeTarget.displayName}`
         }
       };
     }

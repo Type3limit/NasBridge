@@ -525,6 +525,34 @@ test("prepare input keeps natural batch tagging inside the agent loop", async ()
   });
 });
 
+test("prepare input keeps natural Bilibili video analysis inside the agent loop", async () => {
+  await withTempDir(async (appDataRoot) => {
+    const state = await prepareAiChatGraphState({
+      context: {
+        jobId: "botjob_bili_agent",
+        trigger: {
+          rawText: "@ai 总结 BV1xx411c7mD 这个视频"
+        },
+        attachments: []
+      },
+      api: {
+        appDataRoot,
+        throwIfCancelled: () => {},
+        appendLog: async () => {},
+        emitProgress: async () => {},
+        listBots: () => [
+          { botId: "video.analyze", displayName: "视频分析", aliases: ["video-analyze"] }
+        ]
+      },
+      hooks: {}
+    });
+
+    assert.equal(state.route, "text");
+    assert.equal(state.prepared.delegatedInvocation, null);
+    assert.match(state.prepared.toolAwarePrompt, /BV1xx411c7mD/);
+  });
+});
+
 test("prepare input still delegates explicit nested bot invocations", async () => {
   await withTempDir(async (appDataRoot) => {
     const state = await prepareAiChatGraphState({
@@ -551,6 +579,37 @@ test("prepare input still delegates explicit nested bot invocations", async () =
     assert.equal(state.prepared.delegatedInvocation.kind, "nested");
     assert.equal(state.prepared.delegatedInvocation.invocation.target.botId, "video.tag");
     assert.equal(state.prepared.delegatedInvocation.invocation.rawText, "给最近下载的视频批量打标签");
+  });
+});
+
+test("prepare input still delegates explicit Bilibili video bot invocations", async () => {
+  await withTempDir(async (appDataRoot) => {
+    const state = await prepareAiChatGraphState({
+      context: {
+        jobId: "botjob_explicit_bili_video",
+        trigger: {
+          rawText: "@ai @video.analyze 总结 BV1xx411c7mD"
+        },
+        attachments: []
+      },
+      api: {
+        appDataRoot,
+        throwIfCancelled: () => {},
+        appendLog: async () => {},
+        emitProgress: async () => {},
+        listBots: () => [
+          { botId: "video.analyze", displayName: "视频分析", aliases: ["video-analyze"] }
+        ]
+      },
+      hooks: {}
+    });
+
+    assert.equal(state.route, "delegate");
+    assert.equal(state.prepared.delegatedInvocation.kind, "nested");
+    assert.equal(state.prepared.delegatedInvocation.invocation.target.botId, "video.analyze");
+    assert.deepEqual(state.prepared.delegatedInvocation.invocation.parsedArgs, {
+      source: "BV1xx411c7mD"
+    });
   });
 });
 

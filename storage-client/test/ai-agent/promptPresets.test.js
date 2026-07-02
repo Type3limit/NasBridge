@@ -16,10 +16,24 @@ test("video summary prompts include file search and invoke_video_analyze workflo
   assert.match(prompt, /search_library_files/);
   assert.match(prompt, /read_media_summary/);
   assert.match(prompt, /invoke_video_analyze/);
+  assert.match(prompt, /source/);
+  assert.match(prompt, /Bilibili/);
   assert.match(prompt, /hasAiSummary=false/);
   assert.match(prompt, /waitUntilPhase=transcribe|waitUntilPhase/);
   assert.match(prompt, /status\/phase/);
   assert.doesNotMatch(prompt, /analyze_storage_video/);
+});
+
+test("Bilibili video summary prompts use invoke_video_analyze source", () => {
+  const prompt = buildNasAgentTaskPresetPrompt({
+    prompt: "总结 BV1xx411c7mD 这个 B 站视频"
+  });
+
+  assert.match(prompt, /Analyze or summarize media/);
+  assert.match(prompt, /invoke_video_analyze/);
+  assert.match(prompt, /source/);
+  assert.match(prompt, /Bilibili/);
+  assert.match(prompt, /jobId\/status\/phase/);
 });
 
 test("task playbooks inject matched capability examples only", () => {

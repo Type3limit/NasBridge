@@ -569,7 +569,7 @@ const CAPABILITY_EXAMPLES = {
   analyze_file_content: ["分析这个 NAS 文件", "总结这个 PDF 文档"],
   explain_file_access: ["我能访问哪些 NAS 文件", "说明你的文件访问边界"],
   describe_image: ["看看这张图片有什么", "分析最近上传的截图"],
-  invoke_video_analyze: ["总结这个视频并保存摘要"],
+  invoke_video_analyze: ["总结这个视频并保存摘要", "总结这个 Bilibili 视频 BV1xx411c7mD"],
   analyze_storage_video: ["总结这个视频"],
   invoke_video_tag: ["给这个视频生成标签"],
   read_media_summary: ["读取这个视频已有摘要、字幕状态、时长和分辨率"],
@@ -622,7 +622,7 @@ const CAPABILITY_WORKFLOWS = [
     id: "media-summary",
     title: "Summarize NAS video/audio",
     tools: ["search_library_files", "read_media_summary", "invoke_video_analyze", "get_bot_job_status"],
-    guidance: "先定位 fileId；用户说没总结/无摘要时 search_library_files 带 hasAiSummary=false，没字幕/未转写时带 hasSubtitle=false；再复用已有 aiSummary/subtitle，没有摘要时启动 invoke_video_analyze；长任务可用 waitUntilPhase=transcribe/running 等到可见阶段后返回 jobId/status/phase/trace 命令。"
+    guidance: "先定位 fileId；用户直接给 Bilibili URL/BV 时用 invoke_video_analyze source=...；用户说没总结/无摘要时 search_library_files 带 hasAiSummary=false，没字幕/未转写时带 hasSubtitle=false；再复用已有 aiSummary/subtitle，没有摘要时启动 invoke_video_analyze；长任务可用 waitUntilPhase=download/transcribe/running 等到可见阶段后返回 jobId/status/phase/trace 命令。"
   },
   {
     id: "document-read",
