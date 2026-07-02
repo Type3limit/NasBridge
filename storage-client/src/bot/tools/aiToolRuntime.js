@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import path from "node:path";
+import { safeJoin } from "../../fsIndex.js";
 import { searchBilibiliVideoCandidates } from "./bilibiliApi.js";
 import { readRecentChatHistory } from "./chatHistory.js";
 import { listReferencedChatAttachments } from "./chatAssets.js";
@@ -195,6 +197,278 @@ function buildMusicControlPrompt(input = {}) {
     prev: "上一首"
   };
   return actionMap[action] || action;
+}
+
+const ANALYZABLE_TEXT_EXTS = new Set([
+  ".txt",
+  ".md",
+  ".markdown",
+  ".json",
+  ".jsonl",
+  ".csv",
+  ".tsv",
+  ".log",
+  ".xml",
+  ".yaml",
+  ".yml",
+  ".ini",
+  ".toml",
+  ".js",
+  ".jsx",
+  ".ts",
+  ".tsx",
+  ".css",
+  ".html",
+  ".htm",
+  ".srt",
+  ".ass",
+  ".vtt",
+  ".sub",
+  ".ssa"
+]);
+
+function compactStorageFileForTool(file = {}) {
+  return {
+    fileId: String(file.id || "").trim(),
+    path: String(file.relativePath || file.path || "").trim(),
+    name: String(file.name || "").trim(),
+    size: Number(file.size || 0),
+    mimeType: String(file.mimeType || "application/octet-stream").trim(),
+    tags: Array.isArray(file.tags) ? file.tags : [],
+    aiSummaryAvailable: Boolean(file.aiSummaryAvailable),
+    subtitleAvailable: Boolean(file.subtitleAvailable),
+    subtitlePath: String(file.subtitlePath || "").trim()
+  };
+}
+
+function isAnalyzableTextFile(file = {}) {
+  const mimeType = String(file.mimeType || "").toLowerCase();
+  const ext = path.extname(String(file.relativePath || file.path || "")).toLowerCase();
+  return (
+    mimeType.startsWith("text/") ||
+    mimeType.includes("json") ||
+    mimeType.includes("xml") ||
+    mimeType.includes("javascript") ||
+    mimeType.includes("typescript") ||
+    mimeType.includes("yaml") ||
+    mimeType.includes("csv") ||
+    ANALYZABLE_TEXT_EXTS.has(ext)
+  );
+}
+
+function resolveAnalyzeMode(file = {}, requestedMode = "auto") {
+  const mode = String(requestedMode || "auto").trim().toLowerCase();
+  if (["text", "image", "media"].includes(mode)) {
+    return mode;
+  }
+  const mimeType = String(file.mimeType || "").toLowerCase();
+  if (mimeType.startsWith("image/")) {
+    return "image";
+  }
+  if (mimeType.startsWith("video/") || mimeType.startsWith("audio/")) {
+    return "media";
+  }
+  if (isAnalyzableTextFile(file)) {
+    return "text";
+  }
+  if (file.aiSummaryAvailable || file.subtitleAvailable) {
+    return "media";
+  }
+  return "metadata";
+}
+
+async function storageFileToImageInput(api = {}, file = {}, detail = "auto") {
+  const absolutePath = safeJoin(api.storageRoot, String(file.relativePath || file.path || ""));
+  const imageData = await toDataUrl({
+    absolutePath,
+    name: file.name,
+    mimeType: file.mimeType
+  });
+  return {
+    name: file.name,
+    mimeType: file.mimeType,
+    dataUrl: imageData,
+    detail: String(detail || "auto").trim() || "auto"
+  };
+}
+
+async function buildAnalyzeFileContentResult(api = {}, input = {}) {
+  const identifier = String(input.fileId || input.path || input.filePath || "").trim();
+  if (!identifier) {
+    throw new Error("fileId or path is required");
+  }
+  const snapshot = await loadLibrarySnapshot(api);
+  const file = resolveLibraryFile(snapshot.files, identifier);
+  if (!file) {
+    throw new Error(`文件未找到: ${identifier}`);
+  }
+
+  const mode = resolveAnalyzeMode(file, input.mode || "auto");
+  const task = String(input.task || input.prompt || "请分析这个 NAS 文件，给出结论和关键要点。").trim();
+  const maxChars = clamp(input.maxChars || 8_000, 1, MAX_TEXT_EXCERPT_CHARS);
+  const maxTokens = clamp(input.maxTokens || 900, 200, 2000);
+  const fileInfo = compactStorageFileForTool(file);
+
+  if (mode === "text") {
+    const excerptResult = await buildTextExcerptResult(api, {
+      fileId: file.id,
+      source: input.source,
+      subtitle: input.subtitle === true,
+      allowSubtitleFallback: input.allowSubtitleFallback,
+      startChar: input.startChar || input.offset || 0,
+      maxChars
+    });
+    const text = String(excerptResult.excerpt?.text || "");
+    const result = await invokeTextModel({
+      systemPrompt: [
+        "你在执行 analyze_file_content 工具。",
+        buildRealtimeContextText(),
+        "请基于提供的 NAS 文件片段输出简洁、结构化的中文分析。",
+        "如果片段被截断，明确说明结论只基于当前片段。"
+      ].join("\n"),
+      userPrompt: [
+        `用户任务：${task}`,
+        "文件信息：",
+        safeJson(fileInfo),
+        "文件片段：",
+        text
+      ].join("\n\n"),
+      signal: api.signal,
+      maxTokens,
+      temperature: 0.2
+    });
+    return {
+      mode: "text",
+      file: fileInfo,
+      excerpt: {
+        path: excerptResult.excerpt?.path || "",
+        source: excerptResult.excerpt?.source || "",
+        startChar: excerptResult.excerpt?.startChar ?? 0,
+        nextStartChar: excerptResult.excerpt?.nextStartChar ?? null,
+        length: excerptResult.excerpt?.length ?? null,
+        truncated: excerptResult.excerpt?.truncated === true
+      },
+      model: result.model || "",
+      analysis: String(result.text || "").trim()
+    };
+  }
+
+  if (mode === "image") {
+    const mimeType = String(file.mimeType || "").toLowerCase();
+    if (!mimeType.startsWith("image/")) {
+      throw new Error(`analyze_file_content image mode 仅支持图片文件，当前 MIME: ${file.mimeType}`);
+    }
+    const imageInput = await storageFileToImageInput(api, file, input.detail || "auto");
+    const result = await invokeMultimodalModel({
+      systemPrompt: [
+        "你在执行 analyze_file_content 工具。",
+        buildRealtimeContextText(),
+        "请基于 NAS 图片内容输出精炼、结构化的中文分析，覆盖主体、场景、可见文字、风险点和不确定性。"
+      ].join("\n"),
+      userPrompt: task,
+      imageInputs: [imageInput],
+      signal: api.signal,
+      maxTokens,
+      temperature: 0.2
+    });
+    return {
+      mode: "image",
+      file: fileInfo,
+      imageCount: 1,
+      model: result.model || "",
+      analysis: String(result.text || "").trim()
+    };
+  }
+
+  if (mode === "media") {
+    const mediaSummary = await buildMediaSummaryResult(api, {
+      fileId: file.id,
+      includeSummary: true,
+      includeTranscriptExcerpt: input.includeTranscriptExcerpt === true || input.includeSubtitleExcerpt === true,
+      startChar: input.startChar || 0,
+      maxChars
+    });
+    if (String(mediaSummary.aiSummary || "").trim() && input.forceAnalyze !== true) {
+      return {
+        mode: "media-summary",
+        file: fileInfo,
+        media: mediaSummary.media,
+        derived: mediaSummary.derived,
+        aiSummary: mediaSummary.aiSummary,
+        transcriptExcerpt: mediaSummary.transcriptExcerpt || null
+      };
+    }
+
+    const mimeType = String(file.mimeType || "").toLowerCase();
+    if (!mimeType.startsWith("video/") && !mimeType.startsWith("audio/")) {
+      return {
+        mode: "metadata",
+        file: fileInfo,
+        media: mediaSummary.media,
+        derived: mediaSummary.derived,
+        message: "该文件没有可直接分析的文本、图片或视频/音频内容；已返回可用 metadata。"
+      };
+    }
+
+    if (input.startAnalysis === true || input.analyze === true || input.forceAnalyze === true) {
+      const delegatedJob = await api.invokeBot({
+        botId: "video.analyze",
+        trigger: {
+          type: "tool-call",
+          rawText: file.relativePath,
+          parsedArgs: {
+            fileId: file.id,
+            filePath: file.relativePath
+          }
+        },
+        options: {
+          delegatedBy: api.botId,
+          parentJobId: api.jobId,
+          toolName: "analyze_file_content"
+        }
+      });
+
+      if (input.waitForCompletion === true) {
+        const completedJob = await waitForDelegatedBotJob(api, delegatedJob.jobId, {
+          timeoutSeconds: input.timeoutSeconds || 600
+        });
+        return {
+          mode: "media-analysis-job",
+          status: completedJob.status,
+          jobId: completedJob.jobId,
+          file: fileInfo,
+          result: completedJob.result || {},
+          error: completedJob.error || null
+        };
+      }
+
+      return {
+        mode: "media-analysis-job",
+        delegated: true,
+        botId: "video.analyze",
+        jobId: delegatedJob.jobId || "",
+        status: delegatedJob.status || "queued",
+        file: fileInfo,
+        message: "已提交视频/音频转录与 AI 总结任务，完成后会写入文件 metadata。"
+      };
+    }
+
+    return {
+      mode: "media-summary",
+      file: fileInfo,
+      media: mediaSummary.media,
+      derived: mediaSummary.derived,
+      aiSummary: mediaSummary.aiSummary || "",
+      transcriptExcerpt: mediaSummary.transcriptExcerpt || null,
+      nextAction: "该媒体文件还没有 AI 摘要；如需生成摘要，请再次调用 analyze_file_content 并设置 startAnalysis=true，或调用 analyze_storage_video。"
+    };
+  }
+
+  return {
+    mode: "metadata",
+    file: fileInfo,
+    message: "该文件类型暂不支持直接内容分析；已返回 metadata。"
+  };
 }
 
 function buildSearchResultDigest(results = []) {
@@ -579,6 +853,36 @@ export function getAiToolDefinitions() {
       }
     },
     {
+      name: "analyze_file_content",
+      description: "统一分析 NAS 文件内容：文本读取受控片段并总结，图片调用多模态模型，视频/音频优先复用已有摘要/字幕或按需委派 video.analyze。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          fileId: { type: "string", description: "文件 ID，优先使用 list_storage_files/search_library_files 返回的 fileId" },
+          path: { type: "string", description: "相对路径（与 fileId 二选一）" },
+          filePath: { type: "string", description: "相对路径别名" },
+          mode: { type: "string", enum: ["auto", "text", "image", "media"], description: "分析模式；默认 auto，会按 MIME 和派生信息自动选择" },
+          task: { type: "string", description: "用户希望完成的分析任务" },
+          prompt: { type: "string", description: "task 的别名" },
+          source: { type: "string", enum: ["file", "subtitle"], description: "文本模式下读取原文件还是字幕 sidecar" },
+          subtitle: { type: "boolean", description: "文本模式下读取字幕 sidecar" },
+          allowSubtitleFallback: { type: "boolean", description: "非文本媒体有字幕时是否自动读字幕，默认 true" },
+          startChar: { type: "integer", minimum: 0 },
+          offset: { type: "integer", minimum: 0, description: "startChar 的别名" },
+          maxChars: { type: "integer", minimum: 1, maximum: MAX_TEXT_EXCERPT_CHARS },
+          includeTranscriptExcerpt: { type: "boolean", description: "媒体模式下是否返回字幕片段" },
+          includeSubtitleExcerpt: { type: "boolean", description: "includeTranscriptExcerpt 的别名" },
+          startAnalysis: { type: "boolean", description: "媒体没有摘要时是否启动 video.analyze" },
+          analyze: { type: "boolean", description: "startAnalysis 的别名" },
+          forceAnalyze: { type: "boolean", description: "即使已有摘要也重新委派 video.analyze" },
+          waitForCompletion: { type: "boolean", description: "是否等待委派任务完成。长视频建议 false，默认 false" },
+          timeoutSeconds: { type: "integer", minimum: 5, maximum: 600 },
+          detail: { type: "string", enum: ["auto", "low", "high"], description: "图片分析细节等级" },
+          maxTokens: { type: "integer", minimum: 200, maximum: 2000 }
+        }
+      }
+    },
+    {
       name: "update_file_metadata",
       description: "受控写入 NAS 文件 metadata，仅支持 tags 和 aiSummary。单文件可直接执行并返回审计；批量写入必须先向用户确认并传 confirmed=true。设置 dryRun=true 可预览变更。",
       inputSchema: {
@@ -847,6 +1151,11 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
   if (name === "read_media_summary") {
     await api.emitProgress({ phase: "tool-read-media-summary", label: "读取媒体派生摘要", percent: 45 });
     return safeJson(await buildMediaSummaryResult(api, input));
+  }
+
+  if (name === "analyze_file_content") {
+    await api.emitProgress({ phase: "tool-analyze-file-content", label: "分析 NAS 文件内容", percent: 50 });
+    return safeJson(await buildAnalyzeFileContentResult(api, input));
   }
 
   if (name === "update_file_metadata") {

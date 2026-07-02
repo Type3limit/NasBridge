@@ -400,7 +400,7 @@ function collectFileIdentifiers(input = {}) {
 function buildContentAccessHints(file = {}) {
   const textReadable = isLikelyTextFile(file);
   const media = isMediaFile(file);
-  const tools = ["read_file_metadata"];
+  const tools = ["read_file_metadata", "analyze_file_content"];
   if (textReadable) {
     tools.push("read_text_excerpt");
   }
@@ -693,7 +693,7 @@ export async function buildFileAccessExplanation(api, input = {}) {
       "未经确认的删除、移动、重命名、批量覆盖"
     ],
     detail: kind === "tools"
-      ? ["list_storage_files", "search_library_files", "read_file_metadata", "get_storage_file_details", "read_text_excerpt", "read_media_summary", "update_file_metadata", "analyze_storage_video"]
+      ? ["list_storage_files", "search_library_files", "read_file_metadata", "get_storage_file_details", "read_text_excerpt", "read_media_summary", "analyze_file_content", "update_file_metadata", "analyze_storage_video"]
       : []
   };
 }
