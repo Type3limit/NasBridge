@@ -1228,6 +1228,9 @@ function summarizeToolResultForTrace(toolResult = "", toolName = "", api = {}) {
       : null,
     fileAccess: summarizeFileAccessForTrace(parsed),
     fallbackActions: Array.isArray(parsed.fallbackActions) ? parsed.fallbackActions.map(summarizeAccessActionForTrace).filter(Boolean).slice(0, 5) : [],
+    repairCommands: Array.isArray(parsed.repairCommands)
+      ? parsed.repairCommands.map((item) => redactLocalPaths(String(item || "").trim())).filter(Boolean).slice(0, 5)
+      : [],
     requiresConfirmation: parsed.requiresConfirmation === true,
     blocked: parsed.blocked === true,
     blockedReason: String(parsed.blockedReason || "").trim(),

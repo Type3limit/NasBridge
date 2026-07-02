@@ -422,6 +422,7 @@ test("tool execution preflight blocks unavailable hard dependencies without crea
     "read_media_summary",
     "diagnose_file_access"
   ]);
+  assert.deepEqual(api.toolEvents[0].resultSummary.repairCommands, ["@ai /health", "@ai /tools"]);
   assert.match(api.toolEvents[0].startedAt, /^\d{4}-\d{2}-\d{2}T/);
   assert.match(api.toolEvents[0].finishedAt, /^\d{4}-\d{2}-\d{2}T/);
   assert.ok(api.toolEvents[0].durationMs >= 0);

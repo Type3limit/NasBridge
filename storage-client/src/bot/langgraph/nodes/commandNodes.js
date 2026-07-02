@@ -488,6 +488,22 @@ function summarizeTraceResultAgentTrace(agentTrace = null) {
   ].filter(Boolean).join(" · ");
 }
 
+function summarizeTraceResultFallbackActions(actions = []) {
+  const tools = (Array.isArray(actions) ? actions : [])
+    .map((action) => action?.tool || action?.id)
+    .filter(Boolean)
+    .slice(0, 5);
+  return tools.length ? tools.join(",") : "";
+}
+
+function summarizeTraceResultRepairCommands(commands = []) {
+  const items = (Array.isArray(commands) ? commands : [])
+    .map((command) => String(command || "").trim())
+    .filter(Boolean)
+    .slice(0, 5);
+  return items.length ? items.join(", ") : "";
+}
+
 function formatTraceTimelineItem(item = {}) {
   const label = String(item.label || item.tool || item.phase || item.node || "event").trim();
   const resultSummary = item.resultSummary && typeof item.resultSummary === "object" ? item.resultSummary : {};
@@ -507,6 +523,8 @@ function formatTraceTimelineItem(item = {}) {
   const access = summarizeTraceResultAccess(resultSummary.fileAccess);
   const log = summarizeTraceResultLog(resultSummary.log);
   const agentTrace = summarizeTraceResultAgentTrace(resultSummary.agentTrace);
+  const fallbackActions = summarizeTraceResultFallbackActions(resultSummary.fallbackActions);
+  const repairCommands = summarizeTraceResultRepairCommands(resultSummary.repairCommands);
   const nextAction = String(resultSummary.nextAction || "").trim();
   const blockedReason = String(resultSummary.blockedReason || "").trim();
   return [
@@ -516,6 +534,8 @@ function formatTraceTimelineItem(item = {}) {
     access ? `  access: ${access}` : "",
     log ? `  log: ${log}` : "",
     agentTrace ? `  trace: ${agentTrace}` : "",
+    fallbackActions ? `  fallback: ${fallbackActions}` : "",
+    repairCommands ? `  repair: ${repairCommands}` : "",
     blockedReason ? `  blocked: ${blockedReason}` : "",
     nextAction ? `  next: ${nextAction}` : ""
   ].filter(Boolean).join("\n");

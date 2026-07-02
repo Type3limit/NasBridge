@@ -221,6 +221,11 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
           length: 2048,
           truncated: true
         },
+        fallbackActions: [
+          { tool: "read_media_summary" },
+          { tool: "diagnose_file_access" }
+        ],
+        repairCommands: ["@ai /health", "@ai /tools"],
         agentTrace: {
           eventCount: 4,
           childJobCount: 1
@@ -253,6 +258,8 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
   assert.match(body, /access: found=true · mode=media · layers=metadata · blockers=dependency-whisper · actions=read_file_metadata,invoke_video_analyze/);
   assert.match(body, /log: job=botjob_parent · chars=2048 · truncated/);
   assert.match(body, /trace: events=4 · childJobs=1/);
+  assert.match(body, /fallback: read_media_summary,diagnose_file_access/);
+  assert.match(body, /repair: @ai \/health, @ai \/tools/);
   assert.match(body, /next: 查看 @ai \/log botjob_parent/);
   assert.doesNotMatch(body, /D:[/\\]NAS/);
 });
