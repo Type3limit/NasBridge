@@ -318,6 +318,58 @@ test("delegated tool results write structured job refs into tool trace events", 
   assert.equal(api.toolEvents[0].resultSummary.file.path, "Videos/demo.mp4");
 });
 
+test("tool trace records structured confirmation previews", async () => {
+  const api = createFakeApi();
+  let invoked = false;
+  api.invokeBot = async () => {
+    invoked = true;
+    throw new Error("batch preview should not delegate before confirmation");
+  };
+
+  const observedMessages = await executePendingToolCallsRound({
+    pendingToolCalls: [
+      {
+        id: "call_3",
+        name: "invoke_video_tag",
+        input: { batch: true, force: true }
+      }
+    ],
+    planningMessages: [
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call_3",
+            type: "function",
+            function: {
+              name: "invoke_video_tag",
+              arguments: JSON.stringify({ batch: true, force: true })
+            }
+          }
+        ]
+      }
+    ],
+    recentMessages: [],
+    context: { chat: {}, attachments: [] },
+    api,
+    round: 0
+  });
+
+  assert.equal(invoked, false);
+  const observation = observedMessages.at(-1);
+  assert.equal(observation.role, "tool");
+  assert.match(observation.content, /confirmation_required/);
+  assert.equal(api.toolEvents[0].status, "completed");
+  assert.equal(api.toolEvents[0].resultSummary.requiresConfirmation, true);
+  assert.equal(api.toolEvents[0].resultSummary.blocked, true);
+  assert.equal(api.toolEvents[0].resultSummary.confirmation.operation, "invoke_video_tag");
+  assert.equal(api.toolEvents[0].resultSummary.confirmation.riskLevel, "medium");
+  assert.equal(api.toolEvents[0].resultSummary.confirmation.impact.targetFileCount, 1);
+  assert.deepEqual(api.toolEvents[0].resultSummary.confirmation.impact.changedFields, ["tags"]);
+  assert.equal(api.toolEvents[0].resultSummary.confirmation.confirmWith.confirmed, true);
+});
+
 test("parseJsonToolPlan rejects unknown tools and accepts final answers", () => {
   const tools = [{ name: "search_library_files", inputSchema: { type: "object" } }];
 

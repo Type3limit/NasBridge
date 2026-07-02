@@ -333,6 +333,29 @@ function summarizeToolFileRef(file = null) {
   };
 }
 
+function summarizeConfirmationForTrace(confirmation = null) {
+  if (!confirmation || typeof confirmation !== "object") {
+    return null;
+  }
+  const impact = confirmation.impact && typeof confirmation.impact === "object" ? confirmation.impact : {};
+  return {
+    required: confirmation.required === true,
+    operation: String(confirmation.operation || "").trim(),
+    riskLevel: String(confirmation.riskLevel || "").trim(),
+    reason: String(confirmation.reason || "").trim().slice(0, 240),
+    impact: {
+      targetFileCount: Number.isFinite(impact.targetFileCount) ? Number(impact.targetFileCount) : null,
+      changedFields: Array.isArray(impact.changedFields) ? impact.changedFields.map((item) => String(item || "").trim()).filter(Boolean) : [],
+      files: Array.isArray(impact.files) ? impact.files.map(summarizeToolFileRef).filter((item) => item?.fileId || item?.path).slice(0, 5) : []
+    },
+    recoverability: String(confirmation.recoverability || "").trim().slice(0, 240),
+    estimatedDuration: String(confirmation.estimatedDuration || "").trim(),
+    confirmWith: confirmation.confirmWith && typeof confirmation.confirmWith === "object"
+      ? Object.fromEntries(Object.entries(confirmation.confirmWith).map(([key, value]) => [key, value]))
+      : {}
+  };
+}
+
 function summarizeToolResultForTrace(toolResult = "") {
   const parsed = parseToolResultJson(toolResult);
   if (!parsed) {
@@ -366,6 +389,10 @@ function summarizeToolResultForTrace(toolResult = "") {
       total: Number.isFinite(parsed.total) ? Number(parsed.total) : null,
       missing: Array.isArray(parsed.missing) ? parsed.missing.length : null
     },
+    requiresConfirmation: parsed.requiresConfirmation === true,
+    blocked: parsed.blocked === true,
+    blockedReason: String(parsed.blockedReason || "").trim(),
+    confirmation: summarizeConfirmationForTrace(parsed.confirmation),
     blocker: parsed.blocker && typeof parsed.blocker === "object"
       ? {
           id: String(parsed.blocker.id || "").trim(),
