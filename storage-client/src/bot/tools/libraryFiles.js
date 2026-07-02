@@ -645,10 +645,14 @@ function buildDependencyStatus(required = [], api = {}, options = {}) {
       label: String(check?.label || id).trim(),
       status,
       blocking,
-      detail: redactDependencyDetail(check?.detail || "")
+      detail: redactDependencyDetail(check?.detail || ""),
+      repairHint: redactDependencyDetail(check?.repairHint || "")
     };
   });
   const blockers = items.filter((item) => item.blocking);
+  const repairHints = blockers
+    .filter((item) => item.repairHint)
+    .map((item) => `${item.label}: ${item.repairHint}`);
   const status = blockers.some((item) => item.status === "error")
     ? "error"
     : (blockers.length ? "warn" : (items.some((item) => item.status === "warn") ? "warn" : (items.some((item) => item.status === "unknown") ? "unknown" : "ok")));
@@ -659,8 +663,12 @@ function buildDependencyStatus(required = [], api = {}, options = {}) {
     required: requiredIds,
     checks: items,
     blockers,
+    repairHints,
     nextAction: blockers.length
-      ? `先修复依赖：${blockers.map((item) => `${item.label}=${item.status}`).join("、")}，再继续分析。`
+      ? [
+          `先修复依赖：${blockers.map((item) => `${item.label}=${item.status}`).join("、")}，再继续分析。`,
+          repairHints.length ? `建议：${repairHints.slice(0, 3).join("；")}` : ""
+        ].filter(Boolean).join(" ")
       : (checks.length ? "依赖未发现阻塞，可继续执行推荐工具。" : "本次没有 health snapshot；执行前仍需以工具返回为准。")
   };
 }
@@ -1251,6 +1259,7 @@ export async function buildDiagnoseFileAccessResult(api, input = {}) {
       id: `dependency-${blocker.id}`,
       severity: blocker.status === "error" ? "error" : "warn",
       message: `分析依赖不可用：${blocker.label}=${blocker.status}${blocker.detail ? `；${blocker.detail}` : ""}`,
+      repairHint: blocker.repairHint || "",
       requires: [blocker.id]
     });
   }

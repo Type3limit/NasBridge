@@ -403,7 +403,13 @@ test("diagnose_file_access includes health dependency blockers for unanalyzed me
           { id: "ai-model", label: "AI 模型", status: "ok", detail: "text model ok" },
           { id: "ffmpeg", label: "ffmpeg", status: "ok", detail: "available" },
           { id: "ffprobe", label: "ffprobe", status: "ok", detail: "available" },
-          { id: "whisper", label: "Whisper", status: "warn", detail: "C:\\secret\\whisper.exe 缺少模型文件" },
+          {
+            id: "whisper",
+            label: "Whisper",
+            status: "warn",
+            detail: "C:\\secret\\whisper.exe 缺少模型文件",
+            repairHint: "配置 WHISPER_CPP_PATH=C:\\secret\\whisper.exe 和 WHISPER_MODEL_PATH 后重启 storage-client"
+          },
           { id: "storage-root", label: "NAS 文件访问", status: "ok", detail: `${root} 可读写` }
         ]
       }
@@ -419,9 +425,13 @@ test("diagnose_file_access includes health dependency blockers for unanalyzed me
     assert.deepEqual(result.dependencies.analysis.required, ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root"]);
     assert.equal(result.dependencies.analysis.blockers[0].id, "whisper");
     assert.match(result.dependencies.analysis.blockers[0].detail, /\[local-path\]/);
+    assert.match(result.dependencies.analysis.blockers[0].repairHint, /WHISPER_CPP_PATH=\[local-path\]/);
+    assert.match(result.dependencies.analysis.repairHints[0], /WHISPER_MODEL_PATH/);
     assert.ok(result.blockers.some((item) => item.id === "dependency-whisper"));
+    assert.match(result.blockers.find((item) => item.id === "dependency-whisper")?.repairHint || "", /WHISPER_CPP_PATH/);
     assert.equal(result.layers.find((layer) => layer.id === "analysis")?.available, false);
     assert.match(result.nextActions[0], /Whisper|依赖/);
+    assert.match(result.nextActions[0], /建议：Whisper/);
     assert.doesNotMatch(JSON.stringify(result), /C:\\secret/);
   });
 });
