@@ -87,6 +87,76 @@ async function writeRecoverableAgentTraceFixture(appDataRoot, {
   })}\n`, "utf8");
 }
 
+async function writePendingConfirmationAgentTraceFixture(appDataRoot, {
+  jobId = "botjob_confirm",
+  sessionId = 21
+} = {}) {
+  const graphRoot = path.join(appDataRoot, "ai-chat-graph");
+  await fs.mkdir(path.join(graphRoot, "executions"), { recursive: true });
+  await fs.mkdir(path.join(graphRoot, "traces"), { recursive: true });
+  await fs.writeFile(path.join(graphRoot, "executions", `${jobId}.json`), JSON.stringify({
+    jobId,
+    botId: "ai.chat",
+    sessionId,
+    status: "failed",
+    route: "textTools",
+    savedAt: "2026-07-02T08:45:00.000Z",
+    traceSummary: {
+      count: 2,
+      lastNode: "textTools",
+      lastStatus: "failed"
+    },
+    result: {},
+    pendingConfirmation: {
+      tool: "update_file_metadata",
+      input: {
+        fileIds: ["client:a.md", "client:b.md"],
+        tags: ["todo"],
+        confirmed: true
+      },
+      confirmInput: {
+        fileIds: ["client:a.md", "client:b.md"],
+        tags: ["todo"],
+        confirmed: true
+      },
+      confirmation: {
+        required: true,
+        operation: "update_file_metadata",
+        riskLevel: "medium",
+        reason: "批量写入 tags",
+        impact: {
+          targetFileCount: 2,
+          changedFields: ["tags"]
+        },
+        recoverability: "可再次修改 tags",
+        estimatedDuration: "1-3 分钟",
+        confirmWith: {
+          confirmed: true
+        }
+      }
+    }
+  }), "utf8");
+  await fs.writeFile(path.join(graphRoot, "traces", `${jobId}.jsonl`), `${JSON.stringify({
+    kind: "tool",
+    phase: "tool-update-file-metadata",
+    round: 1,
+    status: "blocked",
+    tool: "update_file_metadata",
+    resultSummary: {
+      requiresConfirmation: true,
+      confirmation: {
+        operation: "update_file_metadata",
+        riskLevel: "medium",
+        impact: {
+          targetFileCount: 2,
+          changedFields: ["tags"]
+        }
+      }
+    },
+    outputPreview: "confirmation_required"
+  })}\n`, "utf8");
+}
+
 test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs", () => {
   const body = formatAgentTraceReport({
     jobId: "botjob_parent",
@@ -1382,6 +1452,66 @@ test("trace command route offers direct retry for recoverable file access tools"
   }
 });
 
+test("trace command route offers confirmation action for pending tool confirmation", async () => {
+  const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-trace-confirmation-"));
+  const jobId = "botjob_trace_confirmation";
+  try {
+    await writePendingConfirmationAgentTraceFixture(appDataRoot, {
+      jobId,
+      sessionId: 21
+    });
+
+    const replies = [];
+    const api = {
+      appDataRoot,
+      signal: null,
+      throwIfCancelled() {},
+      async publishChatReply(payload) {
+        replies.push(payload);
+        return {
+          id: "reply_trace_confirmation",
+          text: payload.text,
+          card: payload.card
+        };
+      }
+    };
+
+    const result = await handleAiChatCommandRoute({
+      prepared: {
+        api,
+        modelDirective: {
+          command: {
+            type: "trace",
+            jobId
+          }
+        },
+        modelSettings: {}
+      }
+    });
+
+    assert.equal(replies[0].card.title, "AI Agent Trace");
+    assert.deepEqual(replies[0].card.actions, [
+      {
+        type: "invoke-bot",
+        label: "确认执行",
+        botId: "ai.chat",
+        rawText: "#21 确认，继续执行",
+        parsedArgs: {
+          __chatReplyMode: "replace-chat-message"
+        }
+      },
+      { type: "open-bot-log", label: "查看日志", jobId },
+      { type: "retry-bot-job", label: "重新生成", jobId }
+    ]);
+    assert.equal(result.result.artifacts[0].recoveryHint.mode, "awaiting-confirmation");
+    assert.equal(result.result.artifacts[0].recoveryHint.requiresUserConfirmation, true);
+    assert.match(result.result.chatReply.text, /等待确认/);
+    assert.match(result.result.chatReply.text, /update_file_metadata/);
+  } finally {
+    await fs.rm(appDataRoot, { recursive: true, force: true });
+  }
+});
+
 test("job and log command cards expose recoverable agent retry action", async () => {
   const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-recovery-card-actions-"));
   const jobId = "botjob_recovery_card";
@@ -1472,6 +1602,101 @@ test("job and log command cards expose recoverable agent retry action", async ()
     assert.deepEqual(replies[1].card.actions, expectedActions);
     assert.match(logResult.result.chatReply.text, /可继续：@ai #13 继续/);
     assert.equal(logResult.result.artifacts[0].agentTrace.recoveryHint.mode, "text-retry-tools");
+  } finally {
+    await fs.rm(appDataRoot, { recursive: true, force: true });
+  }
+});
+
+test("job and log command cards expose pending confirmation action", async () => {
+  const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-confirmation-card-actions-"));
+  const jobId = "botjob_confirmation_card";
+  try {
+    const store = new BotJobStore({ rootDir: appDataRoot });
+    await store.save({
+      jobId,
+      botId: "ai.chat",
+      status: "failed",
+      phase: "textTools",
+      progress: { label: "Waiting for confirmation", percent: 5, details: null },
+      input: {},
+      options: {},
+      result: {},
+      audit: {},
+      createdAt: "2026-07-02T00:00:00.000Z",
+      updatedAt: "2026-07-02T00:00:01.000Z"
+    });
+    await store.appendLog(jobId, "update_file_metadata waiting for confirmation");
+    await store.waitForPendingWrite(jobId);
+    await store.waitForPendingLog(jobId);
+    await writePendingConfirmationAgentTraceFixture(appDataRoot, {
+      jobId,
+      sessionId: 21
+    });
+
+    const replies = [];
+    const api = {
+      appDataRoot,
+      signal: null,
+      throwIfCancelled() {},
+      getJob: (targetJobId) => store.get(targetJobId),
+      async publishChatReply(payload) {
+        replies.push(payload);
+        return {
+          id: `reply_${replies.length}`,
+          text: payload.text,
+          card: payload.card
+        };
+      }
+    };
+
+    const jobResult = await handleAiChatCommandRoute({
+      prepared: {
+        api,
+        modelDirective: {
+          command: {
+            type: "jobs",
+            jobId,
+            limit: 1
+          }
+        },
+        modelSettings: {}
+      }
+    });
+
+    const expectedActions = [
+      {
+        type: "invoke-bot",
+        label: "确认执行",
+        botId: "ai.chat",
+        rawText: "#21 确认，继续执行",
+        parsedArgs: {
+          __chatReplyMode: "replace-chat-message"
+        }
+      },
+      { type: "open-bot-log", label: "查看日志", jobId },
+      { type: "invoke-bot", label: "查看 Trace", botId: "ai.chat", rawText: `/trace ${jobId}` },
+      { type: "retry-bot-job", label: "重新生成", jobId }
+    ];
+    assert.deepEqual(replies[0].card.actions, expectedActions);
+    assert.match(jobResult.result.chatReply.text, /需要确认：update_file_metadata/);
+    assert.equal(jobResult.result.artifacts[0].jobs[0].agentTrace.recoveryHint.mode, "awaiting-confirmation");
+
+    const logResult = await handleAiChatCommandRoute({
+      prepared: {
+        api,
+        modelDirective: {
+          command: {
+            type: "log",
+            jobId
+          }
+        },
+        modelSettings: {}
+      }
+    });
+
+    assert.deepEqual(replies[1].card.actions, expectedActions);
+    assert.match(logResult.result.chatReply.text, /需要确认：update_file_metadata/);
+    assert.equal(logResult.result.artifacts[0].agentTrace.recoveryHint.mode, "awaiting-confirmation");
   } finally {
     await fs.rm(appDataRoot, { recursive: true, force: true });
   }

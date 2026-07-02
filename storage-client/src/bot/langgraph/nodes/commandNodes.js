@@ -879,16 +879,29 @@ function hasSafeSuggestedTraceRecoveryAction(hint = {}) {
 
 function buildAgentTraceRecoveryAction(trace = {}, activeSession = null) {
   const hint = trace?.recoveryHint && typeof trace.recoveryHint === "object" ? trace.recoveryHint : null;
-  if (!hint || hint.requiresUserConfirmation === true || hint.requiresAttachment === true) {
+  if (!hint || hint.requiresAttachment === true) {
     return null;
   }
   const mode = String(hint.mode || "").trim();
-  if (mode === "awaiting-confirmation" || mode === "vision-require-attachment" || mode === "resume-default") {
+  if (mode === "vision-require-attachment" || mode === "resume-default") {
     return null;
   }
   const sessionId = getTraceRecoverySessionId(trace, activeSession);
   if (sessionId == null || String(sessionId).trim() === "") {
     return null;
+  }
+  const hasPendingConfirmation = mode === "awaiting-confirmation"
+    && Boolean(String(hint.tool || trace?.pendingConfirmation?.tool || "").trim());
+  if (hasPendingConfirmation) {
+    return {
+      type: "invoke-bot",
+      label: "确认执行",
+      botId: "ai.chat",
+      rawText: `#${sessionId} 确认，继续执行`,
+      parsedArgs: {
+        __chatReplyMode: "replace-chat-message"
+      }
+    };
   }
   const directModes = new Set(["text-retry-tools", "file-access-retry-tools", "file-access-suggested-actions"]);
   const replanModes = new Set(["text-replan", "cancelled-replan", "failed-replan", "answer-rebuild"]);

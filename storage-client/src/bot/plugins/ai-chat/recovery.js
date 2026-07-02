@@ -50,6 +50,9 @@ function getRecoveryModeLabel(mode = "") {
   if (mode === "failed-replan") {
     return "失败后重规划";
   }
+  if (mode === "awaiting-confirmation") {
+    return "等待用户确认";
+  }
   return "恢复流程";
 }
 
@@ -69,8 +72,30 @@ function buildRecoveryContinueAction(label = "", session = null) {
   };
 }
 
+function buildRecoveryConfirmAction(session = null) {
+  const sessionId = session?.id ?? null;
+  if (sessionId == null || sessionId === "") {
+    return null;
+  }
+  return {
+    type: "invoke-bot",
+    label: "确认执行",
+    botId: "ai.chat",
+    rawText: `#${sessionId} 确认，继续执行`,
+    parsedArgs: {
+      __chatReplyMode: "replace-chat-message"
+    }
+  };
+}
+
 function buildRecoveryCardActions(recoveryAction = {}, session = null) {
-  if (recoveryAction?.requiresAttachment === true || recoveryAction?.requiresUserConfirmation === true || recoveryAction?.pendingConfirmation) {
+  if (recoveryAction?.requiresAttachment === true) {
+    return [];
+  }
+  if (recoveryAction?.pendingConfirmation) {
+    return [buildRecoveryConfirmAction(session)].filter(Boolean);
+  }
+  if (recoveryAction?.requiresUserConfirmation === true) {
     return [];
   }
   const mode = String(recoveryAction?.mode || "").trim();
@@ -102,11 +127,32 @@ export function createRecoveryReplyText(recoveryGuidance = null) {
   return lines.filter(Boolean).join("\n");
 }
 
+function summarizePendingConfirmationForArtifact(pendingConfirmation = null) {
+  if (!pendingConfirmation || typeof pendingConfirmation !== "object") {
+    return null;
+  }
+  const confirmation = pendingConfirmation.confirmation && typeof pendingConfirmation.confirmation === "object"
+    ? pendingConfirmation.confirmation
+    : {};
+  const impact = confirmation.impact && typeof confirmation.impact === "object" ? confirmation.impact : {};
+  return {
+    tool: String(pendingConfirmation.tool || "").trim(),
+    riskLevel: String(confirmation.riskLevel || "").trim(),
+    targetFileCount: Number.isFinite(Number(impact.targetFileCount)) ? Number(impact.targetFileCount) : null,
+    changedFields: Array.isArray(impact.changedFields) ? impact.changedFields.map((item) => String(item || "").trim()).filter(Boolean) : [],
+    estimatedDuration: String(confirmation.estimatedDuration || "").trim(),
+    confirmable: true
+  };
+}
+
 export function createRecoveryCard(reply, recoveryGuidance = null, session = null) {
   const recoveryAction = recoveryGuidance?.recoveryAction || {};
+  const needsInput = recoveryAction.requiresAttachment === true
+    || recoveryAction.requiresUserConfirmation === true
+    || Boolean(recoveryAction.pendingConfirmation);
   return {
     type: "ai-recovery",
-    status: recoveryAction.requiresAttachment ? "needs-input" : "succeeded",
+    status: needsInput ? "needs-input" : "succeeded",
     title: "AI 会话恢复",
     subtitle: withSessionSubtitle(getRecoveryModeLabel(recoveryAction.mode || "resume-default"), session),
     body: String(reply || "").slice(0, MAX_CARD_BODY_LENGTH),
@@ -128,6 +174,7 @@ export function createRecoveryArtifact(recoveryGuidance = null, session = null) 
     pendingTools: Array.isArray(recoveryAction?.retryPolicy?.pendingToolNames) ? recoveryAction.retryPolicy.pendingToolNames : [],
     retryableTools: Array.isArray(recoveryAction?.retryPolicy?.retryableToolNames) ? recoveryAction.retryPolicy.retryableToolNames : [],
     blockedRetryTools: Array.isArray(recoveryAction?.retryPolicy?.blockedRetryToolNames) ? recoveryAction.retryPolicy.blockedRetryToolNames : [],
+    pendingConfirmation: summarizePendingConfirmationForArtifact(recoveryAction.pendingConfirmation),
     fileAccessSuggestedActions: Array.isArray(recoveryAction.fileAccessSuggestedActions) ? recoveryAction.fileAccessSuggestedActions : [],
     suggestedNextStep: recoveryAction.suggestedNextStep || "",
     repairCommands: Array.isArray(recoveryAction.repairCommands) ? recoveryAction.repairCommands : []

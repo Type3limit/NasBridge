@@ -323,7 +323,26 @@ test("session checkpoint exposes pending confirmation from tool trace", async ()
     assert.equal(guidance.recoveryAction.pendingConfirmation.tool, "invoke_video_tag");
     assert.match(guidance.strategy, /等待用户确认|明确确认/);
     const card = createRecoveryCard(createRecoveryReplyText(guidance), guidance, { id: 1 });
-    assert.deepEqual(card.actions, []);
+    assert.equal(card.status, "needs-input");
+    assert.deepEqual(card.actions, [{
+      type: "invoke-bot",
+      label: "确认执行",
+      botId: "ai.chat",
+      rawText: "#1 确认，继续执行",
+      parsedArgs: {
+        __chatReplyMode: "replace-chat-message"
+      }
+    }]);
+
+    const artifact = createRecoveryArtifact(guidance, { id: 1 });
+    assert.deepEqual(artifact.pendingConfirmation, {
+      tool: "invoke_video_tag",
+      riskLevel: "medium",
+      targetFileCount: 2,
+      changedFields: ["tags"],
+      estimatedDuration: "< 1 分钟",
+      confirmable: true
+    });
 
     assert.equal(isConfirmationPrompt("确认，继续执行"), true);
     const recovered = buildConfirmedToolRecoveryState(checkpoint.pendingConfirmation, "确认，继续执行");
