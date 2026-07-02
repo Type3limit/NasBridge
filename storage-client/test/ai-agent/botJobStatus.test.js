@@ -78,7 +78,15 @@ test("bot job log bundle includes redacted log, agent trace, and delegated child
       kind: "tool",
       tool: "invoke_video_analyze",
       status: "succeeded",
+      startedAt: "2026-07-02T00:00:02.000Z",
+      finishedAt: "2026-07-02T00:00:03.250Z",
+      durationMs: 1250,
       input: { apiKey: "sk-should-not-leak-1234567890", fileId: "file_1" },
+      inputSummary: {
+        tool: "invoke_video_analyze",
+        identifiers: ["file_1"],
+        options: { waitForCompletion: false }
+      },
       outputPreview: "jobId=botjob_child",
       resultSummary: {
         delegated: true,
@@ -118,6 +126,15 @@ test("bot job log bundle includes redacted log, agent trace, and delegated child
   assert.equal(bundle.agentTrace.events[0].input.fileId, "file_1");
   assert.equal(bundle.agentTrace.events[0].resultSummary.jobId, "botjob_child");
   assert.equal(bundle.agentTrace.events[0].resultSummary.jobRefs[0].botId, "video.analyze");
+  assert.equal(bundle.agentTrace.timeline[0].label, "invoke_video_analyze (succeeded)");
+  assert.equal(bundle.agentTrace.timeline[0].durationMs, 1250);
+  assert.deepEqual(bundle.agentTrace.timeline[0].inputSummary.identifiers, ["file_1"]);
+  assert.equal(bundle.agentTrace.timeline[0].resultSummary.jobRefs[0].jobId, "botjob_child");
+  assert.equal(bundle.agentTrace.toolStats.count, 1);
+  assert.equal(bundle.agentTrace.toolStats.totalDurationMs, 1250);
+  assert.equal(bundle.agentTrace.toolStats.tools[0].tool, "invoke_video_analyze");
+  assert.equal(bundle.agentTrace.toolStats.tools[0].averageDurationMs, 1250);
+  assert.equal(bundle.agentTrace.toolStats.tools[0].jobRefs[0].jobId, "botjob_child");
 });
 
 test("bot job status includes delegated child jobs for an explicit parent job", async () => {

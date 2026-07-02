@@ -309,6 +309,140 @@ function summarizeTraceSnapshot(snapshot = null) {
   };
 }
 
+function compactTraceResultSummary(summary = null) {
+  if (!summary || typeof summary !== "object") {
+    return null;
+  }
+  return {
+    status: String(summary.status || "").trim(),
+    delegated: summary.delegated === true,
+    botId: String(summary.botId || "").trim(),
+    jobId: String(summary.jobId || "").trim(),
+    jobRefs: Array.isArray(summary.jobRefs)
+      ? summary.jobRefs.map((item) => ({
+          jobId: String(item?.jobId || "").trim(),
+          botId: String(item?.botId || "").trim(),
+          status: String(item?.status || "").trim(),
+          delegated: item?.delegated === true
+        })).filter((item) => item.jobId).slice(0, 5)
+      : [],
+    requiresConfirmation: summary.requiresConfirmation === true,
+    blocked: summary.blocked === true,
+    blocker: summary.blocker && typeof summary.blocker === "object"
+      ? {
+          id: String(summary.blocker.id || "").trim(),
+          status: String(summary.blocker.status || "").trim()
+        }
+      : null,
+    nextAction: String(summary.nextAction || "").trim()
+  };
+}
+
+function buildTimelineLabel(event = {}) {
+  const kind = String(event.kind || "").trim();
+  if (kind === "tool") {
+    const tool = String(event.tool || "").trim() || "tool";
+    const status = String(event.status || "").trim();
+    return status ? `${tool} (${status})` : tool;
+  }
+  if (kind === "agent") {
+    const phase = String(event.phase || "").trim() || "agent";
+    const status = String(event.status || "").trim();
+    return status ? `${phase} (${status})` : phase;
+  }
+  if (kind === "node") {
+    const node = String(event.node || "").trim() || "node";
+    const action = String(event.event || "").trim();
+    return action ? `${node}:${action}` : node;
+  }
+  return kind || "event";
+}
+
+function buildTraceTimeline(events = []) {
+  return (Array.isArray(events) ? events : []).map((event, index) => ({
+    index: index + 1,
+    sequence: Number.isFinite(Number(event.sequence)) ? Number(event.sequence) : null,
+    at: String(event.at || "").trim(),
+    kind: String(event.kind || "").trim(),
+    label: buildTimelineLabel(event),
+    status: String(event.status || "").trim(),
+    round: Number.isFinite(Number(event.round)) ? Number(event.round) : null,
+    node: String(event.node || "").trim(),
+    phase: String(event.phase || "").trim(),
+    tool: String(event.tool || "").trim(),
+    durationMs: Number.isFinite(Number(event.durationMs)) ? Number(event.durationMs) : null,
+    inputSummary: event.inputSummary && typeof event.inputSummary === "object" ? redactValue(event.inputSummary) : null,
+    resultSummary: compactTraceResultSummary(event.resultSummary),
+    errorSummary: event.errorSummary && typeof event.errorSummary === "object"
+      ? {
+          name: String(event.errorSummary.name || "Error").trim(),
+          message: redactSensitiveText(String(event.errorSummary.message || "").trim()).slice(0, 300)
+        }
+      : null
+  })).filter((item) => item.kind || item.label);
+}
+
+function buildTraceToolStats(events = []) {
+  const toolEvents = (Array.isArray(events) ? events : []).filter((event) => String(event.kind || "").trim() === "tool");
+  const byTool = new Map();
+  const statusCounts = {};
+  let totalDurationMs = 0;
+  let timedCallCount = 0;
+  for (const event of toolEvents) {
+    const tool = String(event.tool || "unknown").trim() || "unknown";
+    const status = String(event.status || "unknown").trim() || "unknown";
+    const durationMs = Number(event.durationMs);
+    statusCounts[status] = (statusCounts[status] || 0) + 1;
+    if (!byTool.has(tool)) {
+      byTool.set(tool, {
+        tool,
+        callCount: 0,
+        statusCounts: {},
+        totalDurationMs: 0,
+        timedCallCount: 0,
+        lastStatus: "",
+        lastAt: "",
+        jobRefs: []
+      });
+    }
+    const item = byTool.get(tool);
+    item.callCount += 1;
+    item.statusCounts[status] = (item.statusCounts[status] || 0) + 1;
+    item.lastStatus = status;
+    item.lastAt = String(event.at || "").trim();
+    if (Number.isFinite(durationMs)) {
+      item.totalDurationMs += Math.max(0, durationMs);
+      item.timedCallCount += 1;
+      totalDurationMs += Math.max(0, durationMs);
+      timedCallCount += 1;
+    }
+    for (const ref of Array.isArray(event.resultSummary?.jobRefs) ? event.resultSummary.jobRefs : []) {
+      const jobId = String(ref?.jobId || "").trim();
+      if (jobId && !item.jobRefs.some((existing) => existing.jobId === jobId)) {
+        item.jobRefs.push({
+          jobId,
+          botId: String(ref?.botId || "").trim(),
+          status: String(ref?.status || "").trim()
+        });
+      }
+    }
+  }
+  const tools = [...byTool.values()].map((item) => ({
+    ...item,
+    averageDurationMs: item.timedCallCount ? Math.round(item.totalDurationMs / item.timedCallCount) : null,
+    jobRefs: item.jobRefs.slice(0, 8)
+  })).sort((left, right) => right.totalDurationMs - left.totalDurationMs || right.callCount - left.callCount);
+  return {
+    count: toolEvents.length,
+    statusCounts,
+    totalDurationMs,
+    timedCallCount,
+    averageDurationMs: timedCallCount ? Math.round(totalDurationMs / timedCallCount) : null,
+    tools,
+    slowestTools: tools.filter((item) => item.timedCallCount > 0).slice(0, 3)
+  };
+}
+
 function buildTraceRecoveryHint(snapshot = null, pendingConfirmation = null) {
   if (pendingConfirmation?.tool) {
     const confirmation = pendingConfirmation.confirmation && typeof pendingConfirmation.confirmation === "object"
@@ -496,6 +630,8 @@ export async function buildAgentTraceResult(api = {}, input = {}) {
       jobId: "",
       snapshot: null,
       events: [],
+      timeline: [],
+      toolStats: buildTraceToolStats([]),
       missing: true
     };
   }
@@ -510,6 +646,8 @@ export async function buildAgentTraceResult(api = {}, input = {}) {
     snapshot: summarizeTraceSnapshot(snapshot),
     pendingConfirmation: pendingConfirmation ? redactValue(pendingConfirmation) : null,
     recoveryHint: buildTraceRecoveryHint(snapshot, pendingConfirmation),
+    timeline: buildTraceTimeline(events),
+    toolStats: buildTraceToolStats(events),
     events
   };
 }
