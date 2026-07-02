@@ -121,12 +121,50 @@ function validateToolInput(input = {}, tool = {}) {
   return validateJsonSchemaValue(input, schema, "arguments");
 }
 
-function compactToolDefinitionsForJsonFallback(tools = []) {
-  return (Array.isArray(tools) ? tools : []).map((tool) => ({
-    name: String(tool?.name || "").trim(),
-    description: String(tool?.description || "").trim(),
-    inputSchema: tool?.inputSchema && typeof tool.inputSchema === "object" ? tool.inputSchema : { type: "object", properties: {} }
-  })).filter((tool) => tool.name);
+function compactCapabilityMetadataForJsonFallback(descriptor = null) {
+  if (!descriptor || typeof descriptor !== "object") {
+    return {};
+  }
+  return Object.fromEntries(Object.entries({
+    kind: descriptor.kind,
+    riskLevel: descriptor.riskLevel,
+    executionMode: descriptor.executionMode,
+    requiresConfirmation: descriptor.requiresConfirmation === true,
+    healthChecks: uniqueTraceStrings(descriptor.healthChecks).slice(0, 8),
+    capabilities: uniqueTraceStrings(descriptor.capabilities).slice(0, 8),
+    permissions: uniqueTraceStrings(descriptor.permissions).slice(0, 8),
+    output: summarizeOutputSchemaForTrace(descriptor.outputSchema)
+  }).filter(([, value]) => {
+    if (value === null || value === undefined || value === "") {
+      return false;
+    }
+    if (value === false) {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    if (value && typeof value === "object") {
+      return Object.keys(value).length > 0;
+    }
+    return true;
+  }));
+}
+
+function compactToolDefinitionsForJsonFallback(tools = [], descriptors = []) {
+  const byId = new Map((Array.isArray(descriptors) ? descriptors : [])
+    .map((descriptor) => [String(descriptor?.id || "").trim(), descriptor])
+    .filter(([id]) => id));
+  return (Array.isArray(tools) ? tools : []).map((tool) => {
+    const name = String(tool?.name || "").trim();
+    const descriptor = byId.get(name) || null;
+    return {
+      name,
+      description: String(tool?.description || "").trim(),
+      ...compactCapabilityMetadataForJsonFallback(descriptor),
+      inputSchema: tool?.inputSchema && typeof tool.inputSchema === "object" ? tool.inputSchema : { type: "object", properties: {} }
+    };
+  }).filter((tool) => tool.name);
 }
 
 function findCachedModel(modelRef = "", modelSettings = {}) {
@@ -164,8 +202,8 @@ function isNativeToolUnsupportedError(error) {
   return /tool|function|tool_choice|tools/.test(message) && /support|unsupported|not supported|invalid|unknown|不支持|无效/.test(message);
 }
 
-function buildJsonFallbackSystemPrompt(tools = [], allowToolCalls = true) {
-  const toolCatalog = compactToolDefinitionsForJsonFallback(tools);
+function buildJsonFallbackSystemPrompt(tools = [], allowToolCalls = true, descriptors = []) {
+  const toolCatalog = compactToolDefinitionsForJsonFallback(tools, descriptors);
   const examples = allowToolCalls
     ? [
         '{"action":"call_tool","tool":"search_library_files","arguments":{"kind":"video","limit":5},"reason":"需要先定位 NAS 文件"}',
@@ -1409,7 +1447,7 @@ async function invokeJsonFallbackPlanningRound({
     label: round > 0 ? `使用 JSON 工具计划继续推理（第 ${round + 1} 轮）` : "使用 JSON 工具计划分析任务",
     percent: Math.min(52, 35 + round * 6)
   });
-  const fallbackSystemPrompt = buildJsonFallbackSystemPrompt(tools, allowMoreToolCalls);
+  const fallbackSystemPrompt = buildJsonFallbackSystemPrompt(tools, allowMoreToolCalls, buildCapabilityDescriptors(api));
   let fallbackMessages = normalizeMessagesForJsonFallback(planningMessages, fallbackSystemPrompt);
   let result = await modelInvoker({
     model: model || undefined,

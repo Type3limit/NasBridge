@@ -156,6 +156,9 @@ test("JSON fallback plans, executes, observes, and finishes through tool message
   assert.match(fallbackPrompt, /dryRun\/预览影响范围/);
   assert.match(fallbackPrompt, /只使用 fileId 或相对路径/);
   assert.match(fallbackPrompt, /diagnose_file_access/);
+  assert.match(fallbackPrompt, /"name": "search_library_files"[\s\S]*"riskLevel": "low"[\s\S]*"output": \{[\s\S]*"required": \[[\s\S]*"total"[\s\S]*"files"/);
+  assert.match(fallbackPrompt, /"name": "invoke_video_analyze"[\s\S]*"executionMode": "async-job"[\s\S]*"healthChecks": \[[\s\S]*"bot-queue"/);
+  assert.match(fallbackPrompt, /"name": "organize_files"[\s\S]*"requiresConfirmation": true/);
 
   const observedMessages = await executePendingToolCallsRound({
     pendingToolCalls: planned.pendingToolCalls,
