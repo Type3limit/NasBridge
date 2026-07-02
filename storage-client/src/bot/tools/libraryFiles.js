@@ -8,6 +8,7 @@ export const MAX_SUBTITLE_INLINE_CHARS = 50_000;
 export const MAX_TEXT_EXCERPT_CHARS = 20_000;
 export const MAX_TEXT_EXCERPT_READ_BYTES = 512_000;
 export const MAX_METADATA_UPDATE_FILES = 10;
+export const MAX_FILE_ORGANIZE_ACTIONS = 20;
 
 const SUBTITLE_EXTS = new Set([".srt", ".ass", ".vtt", ".sub", ".ssa"]);
 const RAW_TEXT_EXTS = new Set([
@@ -50,8 +51,48 @@ function normalizeRelativePath(value = "") {
   return String(value || "").replace(/\\/g, "/").replace(/^\/+/, "").trim();
 }
 
+function normalizeStringList(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+  const single = String(value || "").trim();
+  return single ? [single] : [];
+}
+
 function getExtension(relativePath = "") {
   return path.extname(String(relativePath || "")).toLowerCase();
+}
+
+function normalizeExtensionList(input = {}) {
+  return normalizeStringList(input.extensions || input.extension || input.ext)
+    .map((item) => String(item || "").trim().toLowerCase().replace(/^\*+/, ""))
+    .map((item) => item && !item.startsWith(".") ? `.${item}` : item)
+    .filter(Boolean);
+}
+
+function parseTimestamp(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const ts = Date.parse(String(value || ""));
+  return Number.isFinite(ts) ? ts : null;
+}
+
+function normalizeTagFilter(input = {}) {
+  const tags = normalizeStringList(input.tags || input.tag);
+  const anyTags = normalizeStringList(input.anyTags);
+  const allTags = normalizeStringList(input.allTags);
+  const mode = String(input.tagMode || "").trim().toLowerCase();
+  if (allTags.length) {
+    return { tags: allTags, mode: "all" };
+  }
+  if (anyTags.length) {
+    return { tags: anyTags, mode: "any" };
+  }
+  if (tags.length) {
+    return { tags, mode: mode === "all" ? "all" : "any" };
+  }
+  return { tags: [], mode: "any" };
 }
 
 function isSubtitlePath(relativePath = "") {
@@ -222,6 +263,46 @@ function matchesQuery(file, query = "") {
   return haystack.includes(normalized);
 }
 
+function matchesTags(file = {}, tagFilter = {}) {
+  const wanted = Array.isArray(tagFilter.tags) ? tagFilter.tags.map((item) => item.toLowerCase()) : [];
+  if (!wanted.length) {
+    return true;
+  }
+  const available = new Set(normalizeTags(file.tags).map((item) => item.toLowerCase()));
+  if (tagFilter.mode === "all") {
+    return wanted.every((tag) => available.has(tag));
+  }
+  return wanted.some((tag) => available.has(tag));
+}
+
+function matchesDateRange(file = {}, field = "updatedAt", after = null, before = null) {
+  if (after === null && before === null) {
+    return true;
+  }
+  const ts = Date.parse(String(file[field] || ""));
+  if (!Number.isFinite(ts)) {
+    return false;
+  }
+  if (after !== null && ts < after) {
+    return false;
+  }
+  if (before !== null && ts > before) {
+    return false;
+  }
+  return true;
+}
+
+function matchesSizeRange(file = {}, minSize = null, maxSize = null) {
+  const size = Number(file.size || 0);
+  if (minSize !== null && size < minSize) {
+    return false;
+  }
+  if (maxSize !== null && size > maxSize) {
+    return false;
+  }
+  return true;
+}
+
 function sortFiles(files = [], sortBy = "updatedAt", sortDirection = "desc") {
   const key = String(sortBy || "updatedAt").trim();
   const direction = String(sortDirection || "desc").toLowerCase() === "asc" ? 1 : -1;
@@ -241,6 +322,14 @@ function sortFiles(files = [], sortBy = "updatedAt", sortDirection = "desc") {
 export function filterLibraryFiles(files = [], input = {}) {
   const pathPrefix = normalizeRelativePath(input.pathPrefix || input.folder || "");
   const mimePrefix = String(input.mimePrefix || "").trim().toLowerCase();
+  const extensions = normalizeExtensionList(input);
+  const tagFilter = normalizeTagFilter(input);
+  const updatedAfter = parseTimestamp(input.updatedAfter || input.modifiedAfter || input.after);
+  const updatedBefore = parseTimestamp(input.updatedBefore || input.modifiedBefore || input.before);
+  const createdAfter = parseTimestamp(input.createdAfter);
+  const createdBefore = parseTimestamp(input.createdBefore);
+  const minSize = Number.isFinite(Number(input.minSize ?? input.sizeMin)) ? Number(input.minSize ?? input.sizeMin) : null;
+  const maxSize = Number.isFinite(Number(input.maxSize ?? input.sizeMax)) ? Number(input.maxSize ?? input.sizeMax) : null;
   const includeSubtitles = input.includeSubtitles === true;
   const hasAiSummary = typeof input.hasAiSummary === "boolean" ? input.hasAiSummary : null;
   const hasSubtitle = typeof input.hasSubtitle === "boolean" ? input.hasSubtitle : null;
@@ -252,6 +341,21 @@ export function filterLibraryFiles(files = [], input = {}) {
       return false;
     }
     if (mimePrefix && !String(file.mimeType || "").toLowerCase().startsWith(mimePrefix)) {
+      return false;
+    }
+    if (extensions.length && !extensions.includes(getExtension(file.relativePath))) {
+      return false;
+    }
+    if (!matchesTags(file, tagFilter)) {
+      return false;
+    }
+    if (!matchesDateRange(file, "updatedAt", updatedAfter, updatedBefore)) {
+      return false;
+    }
+    if (!matchesDateRange(file, "createdAt", createdAfter, createdBefore)) {
+      return false;
+    }
+    if (!matchesSizeRange(file, minSize, maxSize)) {
       return false;
     }
     if (hasAiSummary !== null && Boolean(file.aiSummaryAvailable) !== hasAiSummary) {
@@ -458,6 +562,98 @@ function buildMetadataPatch(file = {}, input = {}) {
   return { patch, changedFields };
 }
 
+function getHiddenDirectoryNames() {
+  return [
+    process.env.PREVIEW_CACHE_DIR_NAME || ".nas-preview-cache",
+    process.env.HLS_CACHE_DIR_NAME || ".nas-hls-cache",
+    process.env.AUDIO_STREAM_CACHE_DIR_NAME || ".nas-audio-stream-cache",
+    process.env.PROFILE_AVATAR_DIR_NAME || ".nas-user-avatars",
+    process.env.CHAT_ROOM_DIR_NAME || ".nas-chat-room",
+    process.env.BOT_APP_DATA_DIR_NAME || ".nas-bot"
+  ];
+}
+
+function isHiddenRelativePath(relativePath = "") {
+  const firstSegment = normalizeRelativePath(relativePath).split("/").filter(Boolean)[0] || "";
+  return getHiddenDirectoryNames().includes(firstSegment);
+}
+
+function normalizeTargetName(value = "") {
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    return "";
+  }
+  if (/[\\/]/.test(normalized) || normalized === "." || normalized === "..") {
+    throw new Error("targetName must be a file name, not a path");
+  }
+  if (/[<>:"|?*\x00-\x1f]/.test(normalized)) {
+    throw new Error("targetName contains characters that are invalid on Windows");
+  }
+  return normalized;
+}
+
+function assertSafeMutationRelativePath(relativePath = "") {
+  const normalized = normalizeRelativePath(relativePath);
+  if (!normalized || normalized.endsWith("/")) {
+    throw new Error("targetPath must point to a file");
+  }
+  const segments = normalized.split("/").filter(Boolean);
+  for (const segment of segments) {
+    if (segment === "." || segment === ".." || /[<>:"|?*\x00-\x1f]/.test(segment)) {
+      throw new Error("targetPath contains an invalid path segment");
+    }
+  }
+  return normalized;
+}
+
+function buildFileMetaCarryPatch(file = {}) {
+  const patch = {};
+  if (Array.isArray(file.tags) && file.tags.length) {
+    patch.tags = file.tags;
+  }
+  if (String(file.aiSummary || "").trim()) {
+    patch.aiSummary = String(file.aiSummary || "").trim();
+  }
+  return patch;
+}
+
+function collectOrganizeActionInputs(input = {}) {
+  if (Array.isArray(input.actions) && input.actions.length) {
+    return input.actions.slice(0, MAX_FILE_ORGANIZE_ACTIONS).map((action) => ({
+      identifier: String(action?.fileId || action?.path || action?.filePath || "").trim(),
+      targetFolder: action?.targetFolder,
+      targetName: action?.targetName || action?.name,
+      targetPath: action?.targetPath || action?.to,
+      overwrite: action?.overwrite === true
+    }));
+  }
+
+  const identifiers = [...new Set(collectFileIdentifiers(input))].slice(0, MAX_FILE_ORGANIZE_ACTIONS);
+  if (identifiers.length > 1 && (input.targetName || input.targetPath)) {
+    throw new Error("批量整理时不能共用单个 targetName/targetPath；请使用 targetFolder，或传 actions 为每个文件指定目标。");
+  }
+  return identifiers.map((identifier) => ({
+    identifier,
+    targetFolder: input.targetFolder || input.folder,
+    targetName: input.targetName || input.name,
+    targetPath: input.targetPath || input.to,
+    overwrite: input.overwrite === true
+  }));
+}
+
+function buildOrganizeTargetPath(file = {}, action = {}) {
+  const explicitTargetPath = normalizeRelativePath(action.targetPath || "");
+  if (explicitTargetPath) {
+    return assertSafeMutationRelativePath(explicitTargetPath);
+  }
+  const targetFolder = normalizeRelativePath(action.targetFolder || "");
+  const targetName = normalizeTargetName(action.targetName || "") || file.name;
+  if (!targetFolder && !action.targetName) {
+    throw new Error("targetFolder、targetName 或 targetPath 至少需要一个");
+  }
+  return assertSafeMutationRelativePath([targetFolder, targetName].filter(Boolean).join("/"));
+}
+
 export async function buildLibraryListResult(api, input = {}) {
   const snapshot = await loadLibrarySnapshot(api);
   const offset = clampInteger(input.offset || 0, 0, Number.MAX_SAFE_INTEGER);
@@ -475,6 +671,14 @@ export async function buildLibraryListResult(api, input = {}) {
       kind: String(input.kind || "all").trim() || "all",
       pathPrefix: normalizeRelativePath(input.pathPrefix || input.folder || ""),
       mimePrefix: String(input.mimePrefix || "").trim(),
+      extensions: normalizeExtensionList(input),
+      tags: normalizeTagFilter(input),
+      updatedAfter: input.updatedAfter || input.modifiedAfter || input.after || "",
+      updatedBefore: input.updatedBefore || input.modifiedBefore || input.before || "",
+      createdAfter: input.createdAfter || "",
+      createdBefore: input.createdBefore || "",
+      minSize: Number.isFinite(Number(input.minSize ?? input.sizeMin)) ? Number(input.minSize ?? input.sizeMin) : null,
+      maxSize: Number.isFinite(Number(input.maxSize ?? input.sizeMax)) ? Number(input.maxSize ?? input.sizeMax) : null,
       hasAiSummary: typeof input.hasAiSummary === "boolean" ? input.hasAiSummary : null,
       hasSubtitle: typeof input.hasSubtitle === "boolean" ? input.hasSubtitle : null
     },
@@ -676,6 +880,7 @@ export async function buildFileAccessExplanation(api, input = {}) {
       maxListResults: MAX_LIBRARY_LIST_LIMIT,
       maxDetailFiles: MAX_LIBRARY_DETAIL_FILES,
       maxTextExcerptChars: MAX_TEXT_EXCERPT_CHARS,
+      maxBatchFiles: MAX_FILE_ORGANIZE_ACTIONS,
       rawAbsolutePathExposed: false,
       binaryReadAllowed: false,
       writeRequiresConfirmation: true
@@ -693,7 +898,7 @@ export async function buildFileAccessExplanation(api, input = {}) {
       "未经确认的删除、移动、重命名、批量覆盖"
     ],
     detail: kind === "tools"
-      ? ["list_storage_files", "search_library_files", "read_file_metadata", "get_storage_file_details", "read_text_excerpt", "read_media_summary", "analyze_file_content", "update_file_metadata", "analyze_storage_video"]
+      ? ["list_storage_files", "search_library_files", "read_file_metadata", "get_storage_file_details", "read_text_excerpt", "read_media_summary", "analyze_file_content", "update_file_metadata", "organize_files", "analyze_storage_video"]
       : []
   };
 }
@@ -827,13 +1032,177 @@ export async function buildUpdateFileMetadataResult(api, input = {}) {
   };
 }
 
-function getHiddenDirectoryNames() {
-  return [
-    process.env.PREVIEW_CACHE_DIR_NAME || ".nas-preview-cache",
-    process.env.HLS_CACHE_DIR_NAME || ".nas-hls-cache",
-    process.env.AUDIO_STREAM_CACHE_DIR_NAME || ".nas-audio-stream-cache",
-    process.env.PROFILE_AVATAR_DIR_NAME || ".nas-user-avatars",
-    process.env.CHAT_ROOM_DIR_NAME || ".nas-chat-room",
-    process.env.BOT_APP_DATA_DIR_NAME || ".nas-bot"
-  ];
+export async function buildOrganizeFilesResult(api, input = {}) {
+  const actionInputs = collectOrganizeActionInputs(input);
+  if (!actionInputs.length) {
+    throw new Error("fileIds、paths 或 actions 至少需要一个");
+  }
+
+  const snapshot = await loadLibrarySnapshot(api);
+  const confirmed = input.confirmed === true;
+  const requestedDryRun = input.dryRun !== false;
+  const dryRun = requestedDryRun || !confirmed;
+  const missing = [];
+  const planned = [];
+  const targetCounts = new Map();
+  const sourceFiles = new Map();
+
+  for (const action of actionInputs) {
+    const identifier = String(action.identifier || "").trim();
+    if (!identifier) {
+      planned.push({
+        status: "invalid",
+        reason: "fileId or path is required",
+        source: null,
+        target: null
+      });
+      continue;
+    }
+    const file = resolveLibraryFile(snapshot.files, identifier);
+    if (!file) {
+      missing.push(identifier);
+      planned.push({
+        status: "missing",
+        reason: `文件未找到: ${identifier}`,
+        source: { identifier },
+        target: null
+      });
+      continue;
+    }
+    sourceFiles.set(file.relativePath, file);
+
+    let targetPath = "";
+    try {
+      targetPath = buildOrganizeTargetPath(file, action);
+      if (isHiddenRelativePath(targetPath)) {
+        throw new Error("targetPath points to a hidden/system NAS directory");
+      }
+      safeJoin(api.storageRoot, file.relativePath);
+      safeJoin(api.storageRoot, targetPath);
+    } catch (error) {
+      planned.push({
+        status: "invalid",
+        reason: String(error?.message || error),
+        source: {
+          fileId: file.id,
+          path: file.relativePath,
+          name: file.name
+        },
+        target: { path: targetPath || "" }
+      });
+      continue;
+    }
+
+    const normalizedTargetKey = targetPath.toLowerCase();
+    targetCounts.set(normalizedTargetKey, (targetCounts.get(normalizedTargetKey) || 0) + 1);
+    const samePath = targetPath.toLowerCase() === String(file.relativePath || "").toLowerCase();
+    const targetAbs = safeJoin(api.storageRoot, targetPath);
+    const targetExists = fs.existsSync(targetAbs);
+    const status = samePath
+      ? "skipped"
+      : (targetExists && action.overwrite !== true ? "conflict" : "ready");
+    planned.push({
+      status,
+      reason: samePath
+        ? "source and target are the same"
+        : (status === "conflict" ? "target already exists; set overwrite=true only after explicit confirmation" : ""),
+      source: {
+        fileId: file.id,
+        path: file.relativePath,
+        name: file.name,
+        size: file.size,
+        mimeType: file.mimeType,
+        tags: file.tags || [],
+        aiSummaryAvailable: Boolean(file.aiSummaryAvailable)
+      },
+      target: {
+        path: targetPath,
+        fileId: file.clientId && targetPath ? `${file.clientId}:${targetPath}` : targetPath,
+        exists: targetExists,
+        overwrite: action.overwrite === true
+      },
+      metadataMigration: {
+        available: Boolean(file.tags?.length || file.aiSummary),
+        fields: Object.keys(buildFileMetaCarryPatch(file))
+      }
+    });
+  }
+
+  for (const item of planned) {
+    const key = String(item?.target?.path || "").toLowerCase();
+    if (key && targetCounts.get(key) > 1 && item.status === "ready") {
+      item.status = "conflict";
+      item.reason = "multiple actions target the same path";
+    }
+  }
+
+  const blockers = planned.filter((item) => ["invalid", "missing", "conflict"].includes(item.status));
+  const executable = planned.filter((item) => item.status === "ready");
+  const confirmationRequired = !requestedDryRun && !confirmed;
+  if (dryRun || blockers.length) {
+    return {
+      generatedAt: new Date().toISOString(),
+      operation: "organize_files",
+      riskLevel: "high",
+      dryRun: true,
+      confirmed,
+      requiresConfirmation: confirmationRequired || executable.length > 0,
+      blocked: blockers.length > 0 || confirmationRequired,
+      blockedReason: blockers.length
+        ? "存在缺失文件、非法目标或目标冲突，未执行任何文件变更。"
+        : (confirmationRequired ? "移动/重命名属于高风险文件操作，需要用户确认并以 confirmed=true、dryRun=false 再次调用。" : ""),
+      count: planned.length,
+      executableCount: executable.length,
+      missing,
+      actions: planned.map((item) => ({
+        ...item,
+        status: item.status === "ready" ? "dry-run" : item.status
+      }))
+    };
+  }
+
+  const results = [];
+  for (const item of executable) {
+    const sourceAbs = safeJoin(api.storageRoot, item.source.path);
+    const targetAbs = safeJoin(api.storageRoot, item.target.path);
+    await fs.promises.mkdir(path.dirname(targetAbs), { recursive: true });
+    await fs.promises.rename(sourceAbs, targetAbs);
+
+    const metadataPatch = buildFileMetaCarryPatch(sourceFiles.get(item.source.path) || {});
+    let metadataStatus = Object.keys(metadataPatch).length ? "not-migrated" : "none";
+    if (Object.keys(metadataPatch).length && typeof api?.dependencies?.upsertFileMeta === "function") {
+      await api.dependencies.upsertFileMeta(item.target.fileId, metadataPatch);
+      metadataStatus = "migrated";
+    }
+
+    results.push({
+      ...item,
+      status: "moved",
+      metadataMigration: {
+        ...item.metadataMigration,
+        status: metadataStatus
+      }
+    });
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    operation: "organize_files",
+    riskLevel: "high",
+    dryRun: false,
+    confirmed: true,
+    requiresConfirmation: false,
+    blocked: false,
+    count: results.length,
+    missing,
+    actions: [
+      ...results,
+      ...planned.filter((item) => item.status === "skipped")
+    ],
+    audit: {
+      storageRootOnly: true,
+      absolutePathsExposed: false,
+      overwrite: input.overwrite === true
+    }
+  };
 }

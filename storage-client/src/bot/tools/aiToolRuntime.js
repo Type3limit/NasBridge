@@ -10,6 +10,7 @@ import { buildRealtimeContextText } from "./realtimeContext.js";
 import { searchYYeTsShows, getYYeTsResource, extractEpisodeMagnets, sanitizeShowName } from "./yyetsApi.js";
 import { MAX_AGENT_TRACE_EVENTS, MAX_JOB_LOG_BYTES, MAX_JOB_STATUS_LIMIT, buildAgentTraceResult, buildBotJobStatusResult } from "./botJobStatus.js";
 import {
+  MAX_FILE_ORGANIZE_ACTIONS,
   MAX_LIBRARY_DETAIL_FILES,
   MAX_LIBRARY_LIST_LIMIT,
   MAX_METADATA_UPDATE_FILES,
@@ -19,6 +20,7 @@ import {
   buildLibraryListResult,
   buildLibraryMetadataResult,
   buildMediaSummaryResult,
+  buildOrganizeFilesResult,
   buildTextExcerptResult,
   buildUpdateFileMetadataResult,
   loadLibrarySnapshot,
@@ -776,6 +778,17 @@ export function getAiToolDefinitions() {
           kind: { type: "string", enum: ["all", "video", "audio", "image", "document", "subtitle"] },
           pathPrefix: { type: "string", description: "目录前缀，例如 Movies/ 或 Bilibili/教程" },
           mimePrefix: { type: "string", description: "MIME 前缀，例如 video/、audio/、image/" },
+          extension: { type: "string", description: "文件扩展名过滤，例如 .mp4、srt、pdf" },
+          extensions: { type: "array", items: { type: "string" }, description: "多个扩展名过滤" },
+          tags: { type: "array", items: { type: "string" }, description: "按标签过滤，默认任一命中" },
+          anyTags: { type: "array", items: { type: "string" }, description: "任一标签命中" },
+          allTags: { type: "array", items: { type: "string" }, description: "必须全部标签命中" },
+          updatedAfter: { type: "string", description: "mtime 起始时间，ISO 或可解析日期" },
+          updatedBefore: { type: "string", description: "mtime 结束时间，ISO 或可解析日期" },
+          createdAfter: { type: "string", description: "创建时间起始" },
+          createdBefore: { type: "string", description: "创建时间结束" },
+          minSize: { type: "number", minimum: 0, description: "最小文件大小，字节" },
+          maxSize: { type: "number", minimum: 0, description: "最大文件大小，字节" },
           hasAiSummary: { type: "boolean", description: "只看已有/没有 AI 总结的文件" },
           hasSubtitle: { type: "boolean", description: "只看已有/没有字幕 sidecar 的文件" },
           includeSubtitles: { type: "boolean", description: "是否把 .srt/.vtt 等字幕文件本身也列出来，默认 false" },
@@ -796,6 +809,17 @@ export function getAiToolDefinitions() {
           kind: { type: "string", enum: ["all", "video", "audio", "image", "document", "subtitle"] },
           pathPrefix: { type: "string", description: "目录前缀，例如 Movies/ 或 Bilibili/教程" },
           mimePrefix: { type: "string", description: "MIME 前缀，例如 video/、audio/、image/" },
+          extension: { type: "string", description: "文件扩展名过滤，例如 .mp4、srt、pdf" },
+          extensions: { type: "array", items: { type: "string" }, description: "多个扩展名过滤" },
+          tags: { type: "array", items: { type: "string" }, description: "按标签过滤，默认任一命中" },
+          anyTags: { type: "array", items: { type: "string" }, description: "任一标签命中" },
+          allTags: { type: "array", items: { type: "string" }, description: "必须全部标签命中" },
+          updatedAfter: { type: "string", description: "mtime 起始时间，ISO 或可解析日期" },
+          updatedBefore: { type: "string", description: "mtime 结束时间，ISO 或可解析日期" },
+          createdAfter: { type: "string", description: "创建时间起始" },
+          createdBefore: { type: "string", description: "创建时间结束" },
+          minSize: { type: "number", minimum: 0, description: "最小文件大小，字节" },
+          maxSize: { type: "number", minimum: 0, description: "最大文件大小，字节" },
           hasAiSummary: { type: "boolean" },
           hasSubtitle: { type: "boolean" },
           includeSubtitles: { type: "boolean" },
@@ -899,6 +923,41 @@ export function getAiToolDefinitions() {
           clearAiSummary: { type: "boolean", description: "清空 AI 摘要" },
           dryRun: { type: "boolean", description: "只预览不写入，默认 false" },
           confirmed: { type: "boolean", description: "批量写入前必须由用户确认" }
+        }
+      }
+    },
+    {
+      name: "organize_files",
+      description: "高风险 NAS 文件整理工具：在 storage root 内移动或重命名文件。默认只 dry-run 预览；实际执行必须 confirmed=true 且 dryRun=false。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          fileId: { type: "string", description: "单个文件 ID" },
+          fileIds: { type: "array", items: { type: "string" }, maxItems: MAX_FILE_ORGANIZE_ACTIONS },
+          path: { type: "string", description: "单个相对路径" },
+          paths: { type: "array", items: { type: "string" }, maxItems: MAX_FILE_ORGANIZE_ACTIONS },
+          targetFolder: { type: "string", description: "目标目录，相对于 storage root；批量移动时使用" },
+          targetName: { type: "string", description: "目标文件名；仅适合单文件重命名" },
+          targetPath: { type: "string", description: "完整目标相对路径；仅适合单文件" },
+          actions: {
+            type: "array",
+            maxItems: MAX_FILE_ORGANIZE_ACTIONS,
+            items: {
+              type: "object",
+              properties: {
+                fileId: { type: "string" },
+                path: { type: "string" },
+                targetFolder: { type: "string" },
+                targetName: { type: "string" },
+                targetPath: { type: "string" },
+                overwrite: { type: "boolean" }
+              }
+            },
+            description: "批量整理时为每个文件单独指定目标"
+          },
+          overwrite: { type: "boolean", description: "是否允许覆盖已有目标文件；仍需用户明确确认" },
+          dryRun: { type: "boolean", description: "是否只预览，默认 true" },
+          confirmed: { type: "boolean", description: "高风险实际执行必须为 true" }
         }
       }
     },
@@ -1161,6 +1220,11 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
   if (name === "update_file_metadata") {
     await api.emitProgress({ phase: "tool-update-file-metadata", label: "写入 NAS 文件 metadata", percent: 48 });
     return safeJson(await buildUpdateFileMetadataResult(api, input));
+  }
+
+  if (name === "organize_files") {
+    await api.emitProgress({ phase: "tool-organize-files", label: "预览 NAS 文件整理操作", percent: 48 });
+    return safeJson(await buildOrganizeFilesResult(api, input));
   }
 
   if (name === "explain_file_access") {
