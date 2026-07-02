@@ -141,15 +141,32 @@ export function parseModelDirective(rawPrompt = "") {
     };
   }
 
-  const fileAccessCommand = prompt.match(/^\/(?:access|file-access|nas-access|permissions?)(?:\s+(summary|tools))?\s*$/i);
+  const fileAccessCommand = prompt.match(/^\/(?:access|file-access|nas-access|permissions?)(?:\s+([\s\S]+?))?\s*$/i);
   if (fileAccessCommand) {
+    const rawArg = String(fileAccessCommand[1] || "").trim();
+    const normalizedArg = rawArg.toLowerCase();
+    if (rawArg && !["summary", "tools"].includes(normalizedArg)) {
+      const diagnoseMatch = rawArg.match(/^(?:diagnose|diag|check)\s+([\s\S]+?)\s*$/i);
+      const identifier = String(diagnoseMatch ? diagnoseMatch[1] : rawArg).trim();
+      if (identifier) {
+        return {
+          prompt: "",
+          modelOverride: "",
+          inspectOnly: false,
+          command: {
+            type: "file-access-diagnose",
+            identifier
+          }
+        };
+      }
+    }
     return {
       prompt: "",
       modelOverride: "",
       inspectOnly: false,
       command: {
         type: "file-access",
-        kind: String(fileAccessCommand[1] || "summary").trim().toLowerCase()
+        kind: normalizedArg || "summary"
       }
     };
   }

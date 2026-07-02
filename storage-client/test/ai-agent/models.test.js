@@ -113,6 +113,14 @@ test("model directive parser recognizes model commands and filters", () => {
     type: "file-access",
     kind: "tools"
   });
+  assert.deepEqual(parseModelDirective("/access Docs/readme.txt").command, {
+    type: "file-access-diagnose",
+    identifier: "Docs/readme.txt"
+  });
+  assert.deepEqual(parseModelDirective("/file-access diagnose client:Videos/demo.mp4").command, {
+    type: "file-access-diagnose",
+    identifier: "client:Videos/demo.mp4"
+  });
   assert.deepEqual(parseModelDirective("/trace botjob_demo").command, {
     type: "trace",
     jobId: "botjob_demo"

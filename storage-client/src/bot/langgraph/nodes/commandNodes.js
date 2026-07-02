@@ -9,7 +9,7 @@ import { isDirectRetryTextToolName } from "../../plugins/ai-chat/recovery.js";
 import { buildCapabilityArtifactSummary, buildCapabilityDescriptors, formatCapabilityReport } from "../../capabilities/registry.js";
 import { collectAiAgentHealth, formatHealthReport } from "../../capabilities/health.js";
 import { buildAgentTraceResult, buildBotJobLogBundle, buildBotJobStatusResult } from "../../tools/botJobStatus.js";
-import { buildFileAccessExplanation } from "../../tools/libraryFiles.js";
+import { buildDiagnoseFileAccessResult, buildFileAccessExplanation } from "../../tools/libraryFiles.js";
 import { getDefaultTextModelName, listAvailableModels, resolveModelReference } from "../../tools/llmClient.js";
 
 const MODEL_PROVIDER_SEPARATOR = "::";
@@ -241,6 +241,21 @@ function buildFileAccessStatusBadges(explanation = {}) {
   ].filter(Boolean);
 }
 
+function buildFileAccessDiagnosisBadges(diagnosis = {}) {
+  const status = String(diagnosis.status || "").trim().toLowerCase();
+  const badgeStatus = status === "not_found" ? "warn" : status;
+  const blockers = Array.isArray(diagnosis.blockers) ? diagnosis.blockers : [];
+  const mode = String(diagnosis.contentAccess?.analyzeMode || "").trim();
+  return [
+    createStatusBadge(badgeStatus || "unknown"),
+    diagnosis.found === true
+      ? { label: "已定位文件", color: "success", appearance: "tint" }
+      : { label: "未命中索引", color: "warning", appearance: "tint" },
+    mode ? { label: `mode ${mode}`, color: "informative", appearance: "tint" } : null,
+    blockers.length ? { label: `阻塞 ${blockers.length}`, color: "warning", appearance: "tint" } : null
+  ].filter(Boolean);
+}
+
 function formatFileAccessExplanationReport(explanation = {}) {
   const currentStatus = explanation.currentStatus && typeof explanation.currentStatus === "object" ? explanation.currentStatus : {};
   const policy = explanation.policy && typeof explanation.policy === "object" ? explanation.policy : {};
@@ -283,6 +298,84 @@ function formatFileAccessExplanationReport(explanation = {}) {
     for (const layer of explanation.blockedLayers.slice(0, 5)) {
       lines.push(`- ${layer}`);
     }
+  }
+  return lines.join("\n");
+}
+
+function formatFileAccessDiagnosisReport(diagnosis = {}) {
+  const file = diagnosis.file && typeof diagnosis.file === "object" ? diagnosis.file : null;
+  const safety = diagnosis.safety && typeof diagnosis.safety === "object" ? diagnosis.safety : {};
+  const contentAccess = diagnosis.contentAccess && typeof diagnosis.contentAccess === "object" ? diagnosis.contentAccess : {};
+  const lines = [
+    `NAS 文件访问诊断：${diagnosis.status || "unknown"}`,
+    `目标：${file?.path || diagnosis.identifier || "unknown"}`
+  ];
+  if (file) {
+    lines.push(`文件：${file.name || file.path} · ${file.mimeType || "unknown"} · fileId=${file.fileId || ""}`);
+    lines.push(`派生内容：summary=${file.aiSummaryAvailable === true} subtitle=${file.subtitleAvailable === true}`);
+  }
+  lines.push("");
+  lines.push("安全边界：");
+  lines.push(`- storageRootOnly=${safety.storageRootOnly === true} pathSafe=${safety.pathSafe !== false}`);
+  lines.push(`- absolutePathExposed=${safety.absolutePathExposed === true} binaryRawContentAllowed=${safety.binaryRawContentAllowed === true}`);
+  lines.push(`- writeRequiresConfirmation=${safety.writeRequiresConfirmation === true}`);
+
+  if (contentAccess.analyzeMode || Array.isArray(contentAccess.recommendedTools)) {
+    lines.push("");
+    lines.push("内容访问：");
+    if (contentAccess.analyzeMode) {
+      lines.push(`- analyzeMode=${contentAccess.analyzeMode}`);
+    }
+    const flags = [
+      contentAccess.textReadable ? "text" : "",
+      contentAccess.documentTextExtractable ? "document" : "",
+      contentAccess.media ? "media" : "",
+      contentAccess.videoOrAudio ? "video/audio" : "",
+      contentAccess.image ? "image" : "",
+      contentAccess.subtitleAvailable ? "subtitle" : "",
+      contentAccess.aiSummaryAvailable ? "summary" : ""
+    ].filter(Boolean);
+    if (flags.length) {
+      lines.push(`- readable=${flags.join(", ")}`);
+    }
+    if (Array.isArray(contentAccess.recommendedTools) && contentAccess.recommendedTools.length) {
+      lines.push(`- tools=${contentAccess.recommendedTools.slice(0, 8).join(", ")}`);
+    }
+  }
+
+  const layers = Array.isArray(diagnosis.layers) ? diagnosis.layers : [];
+  if (layers.length) {
+    lines.push("");
+    lines.push("可访问层级：");
+    for (const layer of layers.slice(0, 8)) {
+      const state = layer.available === true ? "ok" : "blocked";
+      const tools = Array.isArray(layer.tools) && layer.tools.length ? ` · tools=${layer.tools.join(", ")}` : "";
+      const reason = layer.reason ? ` · reason=${layer.reason}` : "";
+      lines.push(`- [${state}] ${layer.label || layer.id}${layer.riskLevel ? ` · risk=${layer.riskLevel}` : ""}${tools}${reason}`);
+    }
+  }
+
+  const blockers = Array.isArray(diagnosis.blockers) ? diagnosis.blockers : [];
+  if (blockers.length) {
+    lines.push("");
+    lines.push("阻塞项：");
+    for (const blocker of blockers.slice(0, 6)) {
+      lines.push(`- ${blocker.id || blocker.severity || "blocker"}: ${blocker.message || blocker.detail || ""}`.trim());
+    }
+  }
+
+  const nextActions = Array.isArray(diagnosis.nextActions) ? diagnosis.nextActions.filter(Boolean) : [];
+  if (nextActions.length) {
+    lines.push("");
+    lines.push("下一步：");
+    for (const action of nextActions.slice(0, 5)) {
+      lines.push(`- ${action}`);
+    }
+  }
+
+  if (!file && Array.isArray(diagnosis.recommendedTools) && diagnosis.recommendedTools.length) {
+    lines.push("");
+    lines.push(`推荐先用：${diagnosis.recommendedTools.join(", ")}`);
   }
   return lines.join("\n");
 }
@@ -1074,6 +1167,32 @@ export async function handleAiChatCommandRoute(state = {}) {
           }),
           importedFiles: [],
           artifacts: [{ type: "agent-workflows", ...artifact, health }]
+        }
+      };
+    }
+
+    if (modelDirective.command.type === "file-access-diagnose") {
+      const identifier = String(modelDirective.command.identifier || "").trim();
+      const diagnosis = await buildDiagnoseFileAccessResult(api, {
+        fileId: identifier,
+        path: identifier
+      });
+      const body = formatFileAccessDiagnosisReport(diagnosis);
+      return {
+        result: {
+          chatReply: await api.publishChatReply({
+            text: body,
+            card: {
+              type: "ai-answer",
+              status: diagnosis.status === "blocked" || diagnosis.status === "not_found" ? "failed" : "succeeded",
+              title: "AI Agent NAS 文件访问诊断",
+              subtitle: withSessionSubtitle(diagnosis.file?.path || identifier || `status: ${diagnosis.status || "unknown"}`, activeSession),
+              body,
+              badges: buildFileAccessDiagnosisBadges(diagnosis)
+            }
+          }),
+          importedFiles: [],
+          artifacts: [{ type: "agent-file-access-diagnosis", ...diagnosis }]
         }
       };
     }

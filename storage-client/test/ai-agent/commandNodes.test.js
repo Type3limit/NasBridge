@@ -927,6 +927,64 @@ test("file access command route publishes NAS access policy without local paths"
   }
 });
 
+test("file access diagnose command route publishes concrete layers without local paths", async () => {
+  const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-access-diagnose-command-"));
+  const storageRoot = path.join(appDataRoot, "storage");
+  try {
+    await fs.mkdir(path.join(storageRoot, "Docs"), { recursive: true });
+    await fs.writeFile(path.join(storageRoot, "Docs", "readme.txt"), "# NAS\nhello nas agent", "utf8");
+
+    const replies = [];
+    const api = {
+      appDataRoot,
+      storageRoot,
+      signal: null,
+      throwIfCancelled() {},
+      async publishChatReply(payload) {
+        replies.push(payload);
+        return {
+          id: "reply_file_access_diagnosis",
+          text: payload.text,
+          card: payload.card
+        };
+      }
+    };
+
+    const result = await handleAiChatCommandRoute({
+      prepared: {
+        api,
+        modelDirective: {
+          command: {
+            type: "file-access-diagnose",
+            identifier: "Docs/readme.txt"
+          }
+        },
+        modelSettings: {}
+      }
+    });
+
+    const artifact = result.result.artifacts[0];
+    const escapedStorageRoot = storageRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    assert.equal(replies[0].card.title, "AI Agent NAS 文件访问诊断");
+    assert.equal(artifact.type, "agent-file-access-diagnosis");
+    assert.equal(artifact.found, true);
+    assert.equal(artifact.file.path, "Docs/readme.txt");
+    assert.equal(artifact.safety.storageRootOnly, true);
+    assert.equal(artifact.safety.absolutePathExposed, false);
+    assert.equal(artifact.safety.binaryRawContentAllowed, false);
+    assert.ok(artifact.layers.some((layer) => layer.id === "excerpt" && layer.available === true));
+    assert.ok(artifact.recommendedTools.includes("read_text_excerpt"));
+    assert.match(replies[0].text, /NAS 文件访问诊断/);
+    assert.match(replies[0].text, /Docs\/readme\.txt/);
+    assert.match(replies[0].text, /read_text_excerpt/);
+    assert.match(replies[0].text, /absolutePathExposed=false/);
+    assert.doesNotMatch(JSON.stringify(artifact), new RegExp(escapedStorageRoot));
+    assert.doesNotMatch(replies[0].text, new RegExp(escapedStorageRoot));
+  } finally {
+    await fs.rm(appDataRoot, { recursive: true, force: true });
+  }
+});
+
 test("smoke command route publishes local agent smoke checklist", async () => {
   const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-smoke-command-"));
   const storageRoot = path.join(appDataRoot, "storage");
