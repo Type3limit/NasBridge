@@ -872,6 +872,30 @@ function buildGenericFileAccessActionPlan() {
   ];
 }
 
+function buildFileAccessToolSummaries() {
+  return FILE_ACCESS_TOOL_SUMMARIES.map((tool) => ({
+    id: tool.id,
+    contentLayer: tool.contentLayer,
+    riskLevel: tool.riskLevel,
+    requiresConfirmation: tool.requiresConfirmation === true,
+    summary: tool.summary
+  }));
+}
+
+function buildFileAccessDiagnosisStatus(found = false, blockers = []) {
+  if (!found) {
+    return "not_found";
+  }
+  const items = Array.isArray(blockers) ? blockers : [];
+  if (items.some((item) => String(item?.severity || "").trim().toLowerCase() === "error")) {
+    return "blocked";
+  }
+  if (items.some((item) => String(item?.severity || "").trim().toLowerCase() === "warn")) {
+    return "warn";
+  }
+  return "ok";
+}
+
 function inferAnalyzeAccessMode(file = {}, hints = {}) {
   if (hints.image) {
     return "image";
@@ -1274,6 +1298,101 @@ export function getHiddenDirectoryNames() {
 }
 
 const PUBLIC_STORAGE_ROOT_LABEL = "STORAGE_ROOT";
+const FILE_ACCESS_TOOL_SUMMARIES = [
+  {
+    id: "list_storage_files",
+    contentLayer: "index",
+    riskLevel: "low",
+    summary: "列出或过滤 NAS 文件索引。"
+  },
+  {
+    id: "search_library_files",
+    contentLayer: "index",
+    riskLevel: "low",
+    summary: "按关键词、目录、扩展名、时间、大小、标签和摘要状态搜索文件。"
+  },
+  {
+    id: "read_file_metadata",
+    contentLayer: "metadata",
+    riskLevel: "low",
+    summary: "读取文件 metadata、标签、备注、摘要/字幕状态，不读取正文。"
+  },
+  {
+    id: "diagnose_file_access",
+    contentLayer: "metadata",
+    riskLevel: "low",
+    summary: "诊断单个文件能读哪一层、缺什么依赖、下一步该用哪个工具。"
+  },
+  {
+    id: "get_storage_file_details",
+    contentLayer: "metadata",
+    riskLevel: "low",
+    summary: "批量读取文件详情、已有摘要和可选字幕 sidecar。"
+  },
+  {
+    id: "read_text_excerpt",
+    contentLayer: "excerpt",
+    riskLevel: "low",
+    summary: "分页读取文本、字幕、Markdown、JSON、PDF/Office 抽取文本片段。"
+  },
+  {
+    id: "read_media_summary",
+    contentLayer: "derived-media",
+    riskLevel: "low",
+    summary: "读取媒体已有 AI 摘要、字幕状态、ffprobe 时长/分辨率等派生信息。"
+  },
+  {
+    id: "analyze_file_content",
+    contentLayer: "analysis",
+    riskLevel: "medium",
+    summary: "按类型分析文本/文档/图片/媒体；媒体可按需委派视频分析。"
+  },
+  {
+    id: "invoke_video_analyze",
+    contentLayer: "analysis",
+    riskLevel: "medium",
+    summary: "委派 video.analyze 生成视频/音频字幕和 AI 摘要。"
+  },
+  {
+    id: "analyze_storage_video",
+    contentLayer: "analysis",
+    riskLevel: "medium",
+    summary: "兼容旧工具名；对 NAS 视频/音频启动字幕和摘要分析。"
+  },
+  {
+    id: "invoke_video_tag",
+    contentLayer: "write-metadata",
+    riskLevel: "medium",
+    summary: "委派 video.tag 生成并写入视频/音频标签。"
+  },
+  {
+    id: "tag_storage_video",
+    contentLayer: "write-metadata",
+    riskLevel: "medium",
+    summary: "兼容旧工具名；为 NAS 视频/音频生成并写入标签。"
+  },
+  {
+    id: "update_file_metadata",
+    contentLayer: "write-metadata",
+    riskLevel: "medium",
+    requiresConfirmation: true,
+    summary: "写入 tags、aiSummary、notes；批量写入需要确认并记录审计。"
+  },
+  {
+    id: "organize_files",
+    contentLayer: "file-mutation",
+    riskLevel: "high",
+    requiresConfirmation: true,
+    summary: "在 STORAGE_ROOT 内移动或重命名文件；必须先 dry-run，再确认执行。"
+  },
+  {
+    id: "explain_file_access",
+    contentLayer: "policy",
+    riskLevel: "low",
+    summary: "解释 AI 当前对 NAS 文件的可访问范围、安全边界和推荐工具链。"
+  }
+];
+const FILE_ACCESS_TOOL_IDS = FILE_ACCESS_TOOL_SUMMARIES.map((tool) => tool.id);
 
 export function buildFileAccessPolicy(api = {}) {
   const root = String(api?.storageRoot || "").trim();
@@ -1924,6 +2043,7 @@ export async function buildFileAccessExplanation(api, input = {}) {
     }
   };
   return {
+    status: rootAccess.status,
     storageRoot: api.storageRoot ? PUBLIC_STORAGE_ROOT_LABEL : "",
     storageRootConfigured: Boolean(api.storageRoot),
     visibleFiles: snapshot.files.length,
@@ -1967,9 +2087,11 @@ export async function buildFileAccessExplanation(api, input = {}) {
       "写标签/摘要/备注: update_file_metadata；批量或覆盖前先确认",
       "移动/重命名: organize_files dryRun=true -> 用户确认 -> confirmed=true dryRun=false"
     ],
+    tools: buildFileAccessToolSummaries(),
+    toolIds: FILE_ACCESS_TOOL_IDS,
     actionPlan: buildGenericFileAccessActionPlan(),
     detail: kind === "tools"
-      ? ["list_storage_files", "search_library_files", "read_file_metadata", "diagnose_file_access", "get_storage_file_details", "read_text_excerpt", "read_media_summary", "analyze_file_content", "update_file_metadata", "organize_files", "invoke_video_analyze", "invoke_video_tag", "analyze_storage_video"]
+      ? FILE_ACCESS_TOOL_IDS
       : []
   };
 }
@@ -1986,6 +2108,7 @@ export async function buildDiagnoseFileAccessResult(api, input = {}) {
   if (!file) {
     return {
       generatedAt: new Date().toISOString(),
+      status: buildFileAccessDiagnosisStatus(false),
       identifier,
       found: false,
       policy,
@@ -2090,6 +2213,7 @@ export async function buildDiagnoseFileAccessResult(api, input = {}) {
 
   return {
     generatedAt: new Date().toISOString(),
+    status: buildFileAccessDiagnosisStatus(true, blockers),
     identifier,
     found: true,
     file: {

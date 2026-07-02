@@ -460,6 +460,11 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.ok(byId.get("invoke_bilibili_downloader").permissions.includes("network:download"));
   assert.deepEqual(byId.get("search_library_files").outputSchema.required, ["total", "files"]);
   assert.ok(byId.get("search_library_files").outputSchema.properties.actionPlan);
+  assert.deepEqual(byId.get("diagnose_file_access").outputSchema.required, ["status", "found"]);
+  assert.ok(byId.get("diagnose_file_access").outputSchema.properties.found);
+  assert.deepEqual(byId.get("explain_file_access").outputSchema.required, ["policy", "summary", "tools"]);
+  assert.equal(byId.get("explain_file_access").outputSchema.properties.summary.type, "string");
+  assert.ok(byId.get("explain_file_access").outputSchema.properties.toolIds);
   assert.deepEqual(byId.get("update_file_metadata").outputSchema.required, ["operation", "results"]);
   assert.ok(byId.get("update_file_metadata").outputSchema.properties.confirmation);
   assert.deepEqual(byId.get("invoke_bilibili_downloader").outputSchema.required, ["status", "botId", "jobId"]);

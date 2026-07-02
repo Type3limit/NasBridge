@@ -984,6 +984,7 @@ function summarizeFileAccessForTrace(parsed = {}) {
   const contentAccess = parsed.contentAccess && typeof parsed.contentAccess === "object" ? parsed.contentAccess : {};
   const countsByKind = parsed.countsByKind && typeof parsed.countsByKind === "object" ? parsed.countsByKind : null;
   return Object.fromEntries(Object.entries({
+    status: String(parsed.status || "").trim(),
     found: typeof parsed.found === "boolean" ? parsed.found : null,
     visibleFiles: Number.isFinite(Number(parsed.visibleFiles)) ? Number(parsed.visibleFiles) : null,
     visibleDirectories: Number.isFinite(Number(parsed.visibleDirectories)) ? Number(parsed.visibleDirectories) : null,
@@ -1027,6 +1028,7 @@ function summarizeFileAccessForTrace(parsed = {}) {
     actionPlan: Array.isArray(parsed.actionPlan) ? parsed.actionPlan.map(summarizeAccessActionForTrace).filter(Boolean).slice(0, 8) : [],
     readableLayers: Array.isArray(parsed.readableLayers) ? parsed.readableLayers.map((item) => truncateTraceText(item, 160)).filter(Boolean).slice(0, 8) : [],
     blockedLayers: Array.isArray(parsed.blockedLayers) ? parsed.blockedLayers.map((item) => truncateTraceText(item, 160)).filter(Boolean).slice(0, 8) : [],
+    toolIds: Array.isArray(parsed.toolIds) ? parsed.toolIds.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 16) : [],
     recommendedTools: Array.isArray(parsed.recommendedTools) ? parsed.recommendedTools.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 8) : [],
     nextActions: Array.isArray(parsed.nextActions) ? parsed.nextActions.map((item) => truncateTraceText(item, 180)).filter(Boolean).slice(0, 5) : []
   }).filter(([, value]) => {

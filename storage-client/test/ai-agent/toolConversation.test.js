@@ -604,7 +604,8 @@ test("tool trace summarizes NAS file access diagnostics without storage root", a
   assert.equal(api.toolEvents[0].resultSummary.capability.id, "diagnose_file_access");
   assert.equal(api.toolEvents[0].resultSummary.capability.riskLevel, "low");
   assert.deepEqual(api.toolEvents[0].resultSummary.capability.permissions, ["storage:metadata:read"]);
-  assert.deepEqual(api.toolEvents[0].resultSummary.capability.output.required, ["status", "file"]);
+  assert.deepEqual(api.toolEvents[0].resultSummary.capability.output.required, ["status", "found"]);
+  assert.equal(api.toolEvents[0].resultSummary.fileAccess.status, "ok");
   assert.equal(api.toolEvents[0].resultSummary.fileAccess.safety.binaryRawContentAllowed, false);
   assert.ok(api.toolEvents[0].resultSummary.fileAccess.layers.some((layer) => layer.id === "metadata"));
   assert.ok(api.toolEvents[0].resultSummary.fileAccess.blockers.some((blocker) => blocker.id === "no-direct-text-layer"));

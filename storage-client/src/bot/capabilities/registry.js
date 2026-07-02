@@ -173,9 +173,10 @@ const TOOL_OUTPUT_SCHEMAS = {
   },
   diagnose_file_access: {
     type: "object",
-    required: ["status", "file"],
+    required: ["status", "found"],
     properties: {
       status: { type: "string" },
+      found: { type: "boolean" },
       file: { type: "object" },
       layers: { type: "array" },
       blockers: { type: "array" },
@@ -256,11 +257,13 @@ const TOOL_OUTPUT_SCHEMAS = {
   },
   explain_file_access: {
     type: "object",
-    required: ["policy", "tools"],
+    required: ["policy", "summary", "tools"],
     properties: {
+      status: { type: "string" },
       policy: { type: "object" },
       tools: { type: "array" },
-      summary: { type: "array" },
+      toolIds: { type: "array", items: { type: "string" } },
+      summary: { type: "string" },
       actionPlan: { type: "array", items: { type: "object" } }
     },
     additionalProperties: true

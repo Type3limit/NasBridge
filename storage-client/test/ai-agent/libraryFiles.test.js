@@ -348,6 +348,7 @@ test("file access explanation exposes policy boundaries and tool list", async ()
     ]);
 
     const result = await buildFileAccessExplanation(api, { kind: "tools" });
+    assert.equal(result.status, "ok");
     assert.equal(result.storageRoot, "STORAGE_ROOT");
     assert.equal(result.storageRootConfigured, true);
     assert.equal(result.currentStatus.storageRoot, "STORAGE_ROOT");
@@ -386,6 +387,15 @@ test("file access explanation exposes policy boundaries and tool list", async ()
     assert.ok(result.blockedLayers.some((item) => item.includes("STORAGE_ROOT")));
     assert.ok(result.recommendedFirstSteps.some((item) => item.includes("diagnose_file_access")));
     assert.ok(result.recommendedFirstSteps.some((item) => item.includes("invoke_video_analyze")));
+    assert.ok(result.toolIds.includes("search_library_files"));
+    assert.ok(result.toolIds.includes("read_text_excerpt"));
+    assert.ok(result.toolIds.includes("organize_files"));
+    const toolsById = new Map(result.tools.map((tool) => [tool.id, tool]));
+    assert.equal(toolsById.get("search_library_files")?.contentLayer, "index");
+    assert.equal(toolsById.get("read_media_summary")?.riskLevel, "low");
+    assert.equal(toolsById.get("update_file_metadata")?.requiresConfirmation, true);
+    assert.equal(toolsById.get("organize_files")?.riskLevel, "high");
+    assert.equal(toolsById.get("organize_files")?.requiresConfirmation, true);
     assert.ok(result.detail.includes("search_library_files"));
     assert.ok(result.detail.includes("diagnose_file_access"));
     assert.ok(result.detail.includes("organize_files"));
@@ -424,6 +434,7 @@ test("diagnose_file_access explains concrete file layers without exposing absolu
       fileId: "client:Videos/demo.mp4"
     });
 
+    assert.equal(result.status, "ok");
     assert.equal(result.found, true);
     assert.equal(result.policy.root, "STORAGE_ROOT");
     assert.deepEqual(result.policy.allowedRoots, ["STORAGE_ROOT"]);
@@ -486,6 +497,7 @@ test("diagnose_file_access includes health dependency blockers for unanalyzed me
       fileId: "client:Videos/raw.mp4"
     });
 
+    assert.equal(result.status, "warn");
     assert.equal(result.dependencies.analysis.healthAvailable, true);
     assert.equal(result.dependencies.analysis.ready, false);
     assert.equal(result.dependencies.analysis.status, "warn");
@@ -512,6 +524,7 @@ test("diagnose_file_access reports missing files as searchable instead of readin
       path: "missing.mp4"
     });
 
+    assert.equal(result.status, "not_found");
     assert.equal(result.found, false);
     assert.equal(result.blockers[0].id, "file-not-found");
     assert.deepEqual(result.recommendedTools, ["search_library_files", "list_storage_files"]);
