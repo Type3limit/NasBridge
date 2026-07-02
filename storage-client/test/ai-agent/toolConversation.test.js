@@ -383,9 +383,27 @@ test("tool execution preflight blocks unavailable hard dependencies without crea
   assert.match(observation.content, /"id": "whisper"/);
   assert.match(observation.content, /WHISPER_CPP_PATH/);
   assert.doesNotMatch(observation.content, /D:\\NAS/);
+  const blockedPayload = JSON.parse(observation.content);
+  assert.deepEqual(blockedPayload.fallbackActions.map((action) => action.tool), [
+    "read_media_summary",
+    "diagnose_file_access"
+  ]);
+  assert.deepEqual(blockedPayload.fallbackActions[0].input, {
+    fileId: "client:Videos/demo.mp4",
+    includeSummary: true,
+    includeProbe: true,
+    includeTranscriptExcerpt: true,
+    maxChars: 4000
+  });
+  assert.ok(blockedPayload.repairCommands.includes("@ai /health"));
+  assert.ok(blockedPayload.repairCommands.includes("@ai /tools"));
   assert.equal(api.toolEvents[0].status, "blocked");
   assert.equal(api.toolEvents[0].inputSummary.tool, "invoke_video_analyze");
   assert.deepEqual(api.toolEvents[0].inputSummary.identifiers, ["client:Videos/demo.mp4"]);
+  assert.deepEqual(api.toolEvents[0].resultSummary.fallbackActions.map((action) => action.tool), [
+    "read_media_summary",
+    "diagnose_file_access"
+  ]);
   assert.match(api.toolEvents[0].startedAt, /^\d{4}-\d{2}-\d{2}T/);
   assert.match(api.toolEvents[0].finishedAt, /^\d{4}-\d{2}-\d{2}T/);
   assert.ok(api.toolEvents[0].durationMs >= 0);
@@ -454,9 +472,21 @@ test("tool execution preflight blocks analyze_file_content media starts when Whi
   assert.match(observation.content, /"tool": "analyze_file_content"/);
   assert.match(observation.content, /"id": "whisper"/);
   assert.doesNotMatch(observation.content, /D:\\NAS/);
+  const blockedPayload = JSON.parse(observation.content);
+  assert.deepEqual(blockedPayload.fallbackActions.map((action) => action.tool), [
+    "read_media_summary",
+    "diagnose_file_access"
+  ]);
+  assert.equal(blockedPayload.fallbackActions[0].input.fileId, "client:Videos/demo.mp4");
+  assert.equal(blockedPayload.fallbackActions[0].riskLevel, "low");
+  assert.ok(blockedPayload.repairCommands.includes("@ai /health"));
   assert.equal(api.toolEvents[0].status, "blocked");
   assert.equal(api.toolEvents[0].inputSummary.tool, "analyze_file_content");
   assert.deepEqual(api.toolEvents[0].inputSummary.identifiers, ["client:Videos/demo.mp4"]);
+  assert.deepEqual(api.toolEvents[0].resultSummary.fallbackActions.map((action) => action.tool), [
+    "read_media_summary",
+    "diagnose_file_access"
+  ]);
   assert.match(api.logs.join("\n"), /tool-call-blocked analyze_file_content/);
 });
 

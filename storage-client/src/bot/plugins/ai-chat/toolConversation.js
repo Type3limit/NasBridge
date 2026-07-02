@@ -554,6 +554,106 @@ function buildPreflightDescriptor(toolName = "", descriptor = {}, descriptors = 
   };
 }
 
+const MEDIA_ANALYSIS_TOOL_NAMES = new Set([
+  "invoke_video_analyze",
+  "analyze_storage_video"
+]);
+
+const FILE_ANALYSIS_TOOL_NAMES = new Set([
+  "analyze_file_content",
+  "invoke_video_analyze",
+  "analyze_storage_video",
+  "read_text_excerpt",
+  "read_media_summary"
+]);
+
+function pickSafeFileTargetInput(input = {}) {
+  const fileId = String(input.fileId || "").trim();
+  if (fileId && !isUnsafeLocalPath(fileId)) {
+    return { fileId };
+  }
+  const filePath = String(input.path || input.filePath || "").trim();
+  if (filePath && !isUnsafeLocalPath(filePath)) {
+    return { path: filePath.replace(/\\/g, "/") };
+  }
+  return {};
+}
+
+function buildBlockedToolFallbackActions(toolName = "", input = {}, blocker = {}) {
+  const normalizedTool = String(toolName || "").trim();
+  const blockerId = String(blocker?.id || "").trim();
+  const isMediaAnalysis = MEDIA_ANALYSIS_TOOL_NAMES.has(normalizedTool)
+    || isAnalyzeFileContentMediaStart(normalizedTool, input);
+  const isFileAnalysis = FILE_ANALYSIS_TOOL_NAMES.has(normalizedTool);
+  const targetInput = pickSafeFileTargetInput(input);
+  const hasTarget = Object.keys(targetInput).length > 0;
+  const actions = [];
+
+  if (isMediaAnalysis && hasTarget) {
+    actions.push({
+      tool: "read_media_summary",
+      input: {
+        ...targetInput,
+        includeSummary: true,
+        includeProbe: blockerId !== "ffprobe",
+        includeTranscriptExcerpt: true,
+        maxChars: 4000
+      },
+      contentLayer: "derived-media",
+      riskLevel: "low",
+      reason: "视频/音频分析依赖不可用时，先复用已有摘要、字幕和媒体派生信息。"
+    });
+  }
+
+  if (isFileAnalysis && hasTarget) {
+    actions.push({
+      tool: "diagnose_file_access",
+      input: targetInput,
+      contentLayer: "metadata",
+      riskLevel: "low",
+      reason: "确认该 NAS 文件当前可读层级、缺失依赖和下一步工具。"
+    });
+  }
+
+  if (isFileAnalysis && !hasTarget) {
+    actions.push({
+      tool: "search_library_files",
+      input: {
+        kind: isMediaAnalysis ? "video" : "all",
+        limit: 5
+      },
+      contentLayer: "index",
+      riskLevel: "low",
+      reason: "先重新搜索文件库并取得 fileId，再诊断或读取可用内容。"
+    });
+  }
+
+  if (blockerId === "storage-root") {
+    actions.push({
+      tool: "explain_file_access",
+      input: { kind: "summary" },
+      contentLayer: "policy",
+      riskLevel: "low",
+      reason: "说明当前 NAS 文件访问边界和 storage root 阻断原因。"
+    });
+  }
+
+  return actions.slice(0, 4);
+}
+
+function buildBlockedToolRepairCommands(blocker = {}) {
+  const blockerId = String(blocker?.id || "").trim();
+  const commands = [];
+  if (blockerId === "ai-model" || blockerId === "ai-tool-call") {
+    commands.push("@ai /models");
+  }
+  if (blockerId === "bot-queue") {
+    commands.push("@ai /jobs");
+  }
+  commands.push("@ai /health", "@ai /tools");
+  return [...new Set(commands)];
+}
+
 function buildToolExecutionPreflightResult(toolCall = {}, api = {}, healthSnapshot = null) {
   if (!healthSnapshot || !Array.isArray(healthSnapshot.checks) || !healthSnapshot.checks.length) {
     return null;
@@ -584,7 +684,9 @@ function buildToolExecutionPreflightResult(toolCall = {}, api = {}, healthSnapsh
       status: String(blocker.status || readiness.status || "error").trim(),
       detail: redactLocalPaths(blocker.detail || readiness.detail || "")
     },
-    nextAction: getHealthRepairHint(blocker) || "先运行 @ai /health 查看依赖状态，修复对应项后再重试。"
+    nextAction: getHealthRepairHint(blocker) || "先运行 @ai /health 查看依赖状态，修复对应项后再重试。",
+    fallbackActions: buildBlockedToolFallbackActions(toolName, input, blocker),
+    repairCommands: buildBlockedToolRepairCommands(blocker)
   };
 }
 
@@ -986,6 +1088,7 @@ function summarizeToolResultForTrace(toolResult = "", toolName = "", api = {}) {
         }
       : null,
     fileAccess: summarizeFileAccessForTrace(parsed),
+    fallbackActions: Array.isArray(parsed.fallbackActions) ? parsed.fallbackActions.map(summarizeAccessActionForTrace).filter(Boolean).slice(0, 5) : [],
     requiresConfirmation: parsed.requiresConfirmation === true,
     blocked: parsed.blocked === true,
     blockedReason: String(parsed.blockedReason || "").trim(),
