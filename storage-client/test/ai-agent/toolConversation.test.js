@@ -387,6 +387,74 @@ test("tool execution preflight blocks unavailable hard dependencies without crea
   assert.match(api.logs.join("\n"), /tool-call-blocked invoke_video_analyze/);
 });
 
+test("tool execution preflight blocks analyze_file_content media starts when Whisper is unavailable", async () => {
+  const api = createFakeApi();
+  let invoked = false;
+  api.invokeBot = async () => {
+    invoked = true;
+    throw new Error("invokeBot should not be called when media analysis dependencies are blocked");
+  };
+  const observedMessages = await executePendingToolCallsRound({
+    pendingToolCalls: [
+      {
+        id: "call_analyze_file",
+        name: "analyze_file_content",
+        input: {
+          fileId: "client:Videos/demo.mp4",
+          startAnalysis: true
+        }
+      }
+    ],
+    planningMessages: [
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call_analyze_file",
+            type: "function",
+            function: {
+              name: "analyze_file_content",
+              arguments: JSON.stringify({
+                fileId: "client:Videos/demo.mp4",
+                startAnalysis: true
+              })
+            }
+          }
+        ]
+      }
+    ],
+    recentMessages: [],
+    context: { chat: {}, attachments: [] },
+    api,
+    round: 0,
+    healthSnapshot: {
+      overall: "warn",
+      checks: [
+        { id: "ai-model", label: "AI 模型", status: "ok", detail: "文本模型可用" },
+        { id: "ffmpeg", label: "ffmpeg", status: "ok", detail: "ffmpeg.exe" },
+        { id: "ffprobe", label: "ffprobe", status: "ok", detail: "ffprobe.exe" },
+        { id: "storage-root", label: "NAS 文件访问", status: "ok", detail: "D:\\NAS；可读写" },
+        { id: "bot-queue", label: "Bot 队列", status: "ok", detail: "队列可用" },
+        { id: "whisper", label: "Whisper", status: "warn", detail: "WHISPER_CPP_PATH 或 WHISPER_MODEL_PATH 未配置" }
+      ]
+    }
+  });
+
+  assert.equal(invoked, false);
+  const observation = observedMessages.at(-1);
+  assert.equal(observation.role, "tool");
+  assert.equal(observation.tool_call_id, "call_analyze_file");
+  assert.match(observation.content, /"status": "blocked"/);
+  assert.match(observation.content, /"tool": "analyze_file_content"/);
+  assert.match(observation.content, /"id": "whisper"/);
+  assert.doesNotMatch(observation.content, /D:\\NAS/);
+  assert.equal(api.toolEvents[0].status, "blocked");
+  assert.equal(api.toolEvents[0].inputSummary.tool, "analyze_file_content");
+  assert.deepEqual(api.toolEvents[0].inputSummary.identifiers, ["client:Videos/demo.mp4"]);
+  assert.match(api.logs.join("\n"), /tool-call-blocked analyze_file_content/);
+});
+
 test("delegated tool results write structured job refs into tool trace events", async () => {
   const api = createFakeApi();
   api.botId = "ai.chat";

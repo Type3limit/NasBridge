@@ -530,6 +530,28 @@ function redactLocalPaths(value = "") {
     .replace(/\\\\[^\\/\s；,，]+[\\/][^\s；,，]+/g, "[network-path]");
 }
 
+function isAnalyzeFileContentMediaStart(toolName = "", input = {}) {
+  return String(toolName || "").trim() === "analyze_file_content"
+    && (input.startAnalysis === true || input.analyze === true || input.forceAnalyze === true);
+}
+
+function buildPreflightDescriptor(toolName = "", descriptor = {}, descriptors = [], input = {}) {
+  if (!isAnalyzeFileContentMediaStart(toolName, input)) {
+    return descriptor;
+  }
+  const mediaDescriptor = descriptors.find((item) => item.id === "invoke_video_analyze")
+    || descriptors.find((item) => item.id === "video.analyze")
+    || null;
+  return {
+    ...descriptor,
+    id: "invoke_video_analyze",
+    healthChecks: [...new Set([
+      ...((Array.isArray(descriptor.healthChecks) ? descriptor.healthChecks : [])),
+      ...((Array.isArray(mediaDescriptor?.healthChecks) ? mediaDescriptor.healthChecks : []))
+    ])]
+  };
+}
+
 function buildToolExecutionPreflightResult(toolCall = {}, api = {}, healthSnapshot = null) {
   if (!healthSnapshot || !Array.isArray(healthSnapshot.checks) || !healthSnapshot.checks.length) {
     return null;
@@ -538,11 +560,13 @@ function buildToolExecutionPreflightResult(toolCall = {}, api = {}, healthSnapsh
   if (!toolName) {
     return null;
   }
-  const descriptor = buildCapabilityDescriptors(api).find((item) => item.id === toolName);
+  const input = normalizeToolInput(toolCall.input);
+  const descriptors = buildCapabilityDescriptors(api);
+  const descriptor = descriptors.find((item) => item.id === toolName);
   if (!descriptor) {
     return null;
   }
-  const readiness = summarizeCapabilityExecutionReadiness(descriptor, healthSnapshot);
+  const readiness = summarizeCapabilityExecutionReadiness(buildPreflightDescriptor(toolName, descriptor, descriptors, input), healthSnapshot);
   if (readiness.ready !== false) {
     return null;
   }
