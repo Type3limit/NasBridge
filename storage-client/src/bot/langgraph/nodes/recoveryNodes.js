@@ -101,7 +101,8 @@ export function buildConfirmedToolRecoveryState(pendingConfirmation = null, prom
     id: toolCallId,
     name: toolName,
     input,
-    reason: "用户已确认上一轮需要确认的操作"
+    reason: "用户已确认上一轮需要确认的操作",
+    confirmationAuthorized: true
   };
   return {
     mode: "confirmed-tool-call",

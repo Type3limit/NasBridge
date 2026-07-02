@@ -462,6 +462,67 @@ function buildToolExecutionPreflightResult(toolCall = {}, api = {}, healthSnapsh
   };
 }
 
+function countConfirmationTargets(input = {}) {
+  for (const key of ["fileIds", "paths", "actions", "sources"]) {
+    if (Array.isArray(input[key]) && input[key].length) {
+      return input[key].length;
+    }
+  }
+  if (input.batch === true) {
+    return 1;
+  }
+  return input.fileId || input.path || input.filePath || input.source ? 1 : null;
+}
+
+function inferConfirmationChangedFields(toolName = "", input = {}) {
+  if (toolName === "organize_files") {
+    return ["path"];
+  }
+  if (toolName === "update_file_metadata") {
+    return [
+      Array.isArray(input.tags) || Array.isArray(input.addTags) || Array.isArray(input.removeTags) || input.replaceTags === true ? "tags" : "",
+      String(input.aiSummary || "").trim() ? "aiSummary" : ""
+    ].filter(Boolean);
+  }
+  if (toolName === "invoke_video_tag" || toolName === "tag_storage_video") {
+    return ["tags"];
+  }
+  return [];
+}
+
+function buildToolConfirmationGateResult(toolCall = {}, api = {}) {
+  const input = normalizeToolInput(toolCall.input);
+  if (input.confirmed !== true || toolCall.confirmationAuthorized === true) {
+    return null;
+  }
+  const toolName = String(toolCall?.name || "").trim();
+  const descriptor = buildCapabilityDescriptors(api).find((item) => item.id === toolName);
+  const riskLevel = String(descriptor?.riskLevel || "medium").trim() || "medium";
+  return {
+    status: "confirmation_required",
+    tool: toolName,
+    blocked: true,
+    requiresConfirmation: true,
+    blockedReason: "工具请求包含 confirmed=true，但本轮没有检测到用户明确确认的恢复上下文，已阻止执行。",
+    confirmation: {
+      required: true,
+      operation: toolName,
+      riskLevel,
+      reason: "模型不能自行确认会写入、移动、重命名或批量修改 NAS 文件的操作；必须先展示影响范围并等待用户明确确认。",
+      impact: {
+        targetFileCount: countConfirmationTargets(input),
+        changedFields: inferConfirmationChangedFields(toolName, input)
+      },
+      recoverability: "本次没有执行任何变更。用户确认后会通过会话恢复链路重新执行同一个工具。",
+      estimatedDuration: "取决于文件数量和子任务队列",
+      confirmWith: {
+        confirmed: true
+      }
+    },
+    nextAction: "先把影响范围告知用户并等待明确确认；确认后再由会话恢复链路执行，不要由模型自行传 confirmed=true。"
+  };
+}
+
 function parseToolResultJson(value = "") {
   const text = String(value || "").trim();
   if (!text || !text.startsWith("{")) {
@@ -1214,11 +1275,11 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
     await api.appendLog(`${fallbackMode ? "json-tool-call" : "tool-call"} ${toolCall.name}: ${JSON.stringify(toolCall.input || {})}`);
     await api.emitProgress(getAiToolProgress(toolCall.name, round));
     let toolResult = "";
-    const blockedResult = buildToolExecutionPreflightResult(toolCall, api, healthSnapshot);
+    const blockedResult = buildToolConfirmationGateResult(toolCall, api) || buildToolExecutionPreflightResult(toolCall, api, healthSnapshot);
     const toolStatus = blockedResult ? "blocked" : "completed";
     if (blockedResult) {
       toolResult = JSON.stringify(blockedResult, null, 2);
-      await api.appendLog(`tool-call-blocked ${toolCall.name}: ${blockedResult.blocker.id || "health"} ${blockedResult.blocker.status || "unavailable"}`);
+      await api.appendLog(`tool-call-blocked ${toolCall.name}: ${blockedResult.blocker?.id || blockedResult.status || "blocked"} ${blockedResult.blocker?.status || blockedResult.blockedReason || "unavailable"}`);
       await traceHooks?.recordToolEvent?.({
         name: toolCall.name,
         round,

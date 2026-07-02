@@ -618,6 +618,106 @@ test("tool trace records structured confirmation previews", async () => {
   assert.equal(api.toolEvents[0].resultSummary.confirmation.confirmWith.confirmed, true);
 });
 
+test("tool execution blocks model-supplied confirmed=true without user confirmation", async () => {
+  const api = createFakeApi();
+  let invoked = false;
+  api.invokeBot = async () => {
+    invoked = true;
+    throw new Error("confirmed tool call should be blocked before delegation");
+  };
+
+  const observedMessages = await executePendingToolCallsRound({
+    pendingToolCalls: [
+      {
+        id: "call_confirmed_without_user",
+        name: "invoke_video_tag",
+        input: { batch: true, force: true, confirmed: true }
+      }
+    ],
+    planningMessages: [
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call_confirmed_without_user",
+            type: "function",
+            function: {
+              name: "invoke_video_tag",
+              arguments: JSON.stringify({ batch: true, force: true, confirmed: true })
+            }
+          }
+        ]
+      }
+    ],
+    recentMessages: [],
+    context: { chat: {}, attachments: [] },
+    api,
+    round: 0
+  });
+
+  assert.equal(invoked, false);
+  const observation = observedMessages.at(-1);
+  assert.equal(observation.role, "tool");
+  assert.match(observation.content, /confirmation_required/);
+  assert.match(observation.content, /confirmed=true/);
+  assert.equal(api.toolEvents[0].status, "blocked");
+  assert.equal(api.toolEvents[0].resultSummary.requiresConfirmation, true);
+  assert.equal(api.toolEvents[0].resultSummary.blocked, true);
+  assert.match(api.toolEvents[0].resultSummary.blockedReason, /confirmed=true/);
+  assert.equal(api.toolEvents[0].resultSummary.confirmation.operation, "invoke_video_tag");
+  assert.equal(api.toolEvents[0].resultSummary.confirmation.riskLevel, "medium");
+  assert.deepEqual(api.toolEvents[0].resultSummary.confirmation.impact.changedFields, ["tags"]);
+});
+
+test("tool execution allows confirmed=true only from authorized recovery", async () => {
+  const api = createFakeApi();
+  let invoked = false;
+  api.invokeBot = async () => {
+    invoked = true;
+    return { jobId: "botjob_child", botId: "video.tag", status: "queued" };
+  };
+
+  const observedMessages = await executePendingToolCallsRound({
+    pendingToolCalls: [
+      {
+        id: "call_confirmed_by_user",
+        name: "invoke_video_tag",
+        input: { batch: true, force: true, confirmed: true },
+        confirmationAuthorized: true
+      }
+    ],
+    planningMessages: [
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call_confirmed_by_user",
+            type: "function",
+            function: {
+              name: "invoke_video_tag",
+              arguments: JSON.stringify({ batch: true, force: true, confirmed: true })
+            }
+          }
+        ]
+      }
+    ],
+    recentMessages: [],
+    context: { chat: {}, attachments: [] },
+    api,
+    round: 0
+  });
+
+  assert.equal(invoked, true);
+  const observation = observedMessages.at(-1);
+  assert.equal(observation.role, "tool");
+  assert.match(observation.content, /botjob_child/);
+  assert.equal(api.toolEvents[0].status, "completed");
+  assert.equal(api.toolEvents[0].resultSummary.delegated, true);
+  assert.equal(api.toolEvents[0].resultSummary.jobId, "botjob_child");
+});
+
 test("parseJsonToolPlan validates tools, schema arguments, and final answers", () => {
   const tools = [
     {

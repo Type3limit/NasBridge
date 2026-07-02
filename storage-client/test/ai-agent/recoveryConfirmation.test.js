@@ -237,6 +237,7 @@ test("session checkpoint exposes pending confirmation from tool trace", async ()
     assert.equal(recovered.mode, "confirmed-tool-call");
     assert.equal(recovered.route, "textTools");
     assert.equal(recovered.recoveredPendingToolCalls[0].name, "invoke_video_tag");
+    assert.equal(recovered.recoveredPendingToolCalls[0].confirmationAuthorized, true);
     assert.deepEqual(recovered.recoveredPendingToolCalls[0].input, {
       batch: true,
       force: true,
