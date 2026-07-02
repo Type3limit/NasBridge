@@ -163,6 +163,28 @@ function buildWorkflowStatusBadges(artifact = {}) {
   ].filter(Boolean);
 }
 
+function buildToolCatalogCardActions() {
+  return buildAiChatCardActions([
+    { label: "健康检查", rawText: "/health" },
+    { label: "工作流", rawText: "/workflows" },
+    { label: "文件访问", rawText: "/file-access" },
+    { label: "运行 Smoke", rawText: "/smoke" },
+    { label: "刷新模型", rawText: "/models refresh" },
+    { label: "任务列表", rawText: "/jobs" }
+  ]);
+}
+
+function buildWorkflowCardActions() {
+  return buildAiChatCardActions([
+    { label: "健康检查", rawText: "/health" },
+    { label: "文件搜索", rawText: "找最近下载的 5 个视频，列出 fileId、路径和下一步建议" },
+    { label: "文档读取", rawText: "找最近下载的文档，读取候选的前 2000 字并总结" },
+    { label: "视频总结", rawText: "找最近一个没有 AI 摘要的视频，先列出候选并说明是否可以总结" },
+    { label: "播放音乐", rawText: "播放一首歌" },
+    { label: "任务诊断", rawText: "/jobs" }
+  ]);
+}
+
 function formatWorkflowStepStatuses(workflow = {}) {
   return (Array.isArray(workflow.steps) ? workflow.steps : [])
     .map((step) => {
@@ -1445,7 +1467,15 @@ export async function handleAiChatCommandRoute(state = {}) {
         result: {
           chatReply: await api.publishChatReply({
             text: body,
-            card: { type: "ai-answer", status: health.overall === "error" ? "failed" : "succeeded", title: "AI Agent 工具列表", subtitle: withSessionSubtitle(`共 ${descriptors.length} 项能力`, activeSession), body, badges: buildCapabilityStatusBadges(artifact) }
+            card: {
+              type: "ai-answer",
+              status: health.overall === "error" ? "failed" : "succeeded",
+              title: "AI Agent 工具列表",
+              subtitle: withSessionSubtitle(`共 ${descriptors.length} 项能力`, activeSession),
+              body,
+              badges: buildCapabilityStatusBadges(artifact),
+              actions: buildToolCatalogCardActions()
+            }
           }),
           importedFiles: [],
           artifacts: [{ type: "agent-tools", ...artifact, health }]
@@ -1468,7 +1498,8 @@ export async function handleAiChatCommandRoute(state = {}) {
               title: "AI Agent 工作流",
               subtitle: withSessionSubtitle(`共 ${artifact.workflows.length} 条路线`, activeSession),
               body,
-              badges: buildWorkflowStatusBadges(artifact)
+              badges: buildWorkflowStatusBadges(artifact),
+              actions: buildWorkflowCardActions()
             }
           }),
           importedFiles: [],

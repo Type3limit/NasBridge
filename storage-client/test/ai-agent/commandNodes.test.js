@@ -794,6 +794,14 @@ test("tools command route publishes structured capability artifact", async () =>
       assert.ok(artifact.health);
       assert.ok(Array.isArray(artifact.workflows));
       assert.ok(artifact.workflows.some((workflow) => workflow.id === "media-summary"));
+      assert.deepEqual(replies[0].card.actions, [
+        { type: "invoke-bot", label: "健康检查", botId: "ai.chat", rawText: "/health" },
+        { type: "invoke-bot", label: "工作流", botId: "ai.chat", rawText: "/workflows" },
+        { type: "invoke-bot", label: "文件访问", botId: "ai.chat", rawText: "/file-access" },
+        { type: "invoke-bot", label: "运行 Smoke", botId: "ai.chat", rawText: "/smoke" },
+        { type: "invoke-bot", label: "刷新模型", botId: "ai.chat", rawText: "/models refresh" },
+        { type: "invoke-bot", label: "任务列表", botId: "ai.chat", rawText: "/jobs" }
+      ]);
       const videoCapability = artifact.capabilities.find((item) => item.id === "invoke_video_analyze");
       assert.equal(videoCapability.kind, "tool");
       assert.ok(["blocked", "warn", "ok", "error", "unknown"].includes(videoCapability.status));
@@ -901,7 +909,16 @@ test("workflows command route publishes agent task routes with readiness", async
       assert.match(replies[0].text, /download-into-library/);
       assert.match(replies[0].text, /failure-diagnostic/);
       assert.match(replies[0].text, /@ai \/health/);
+      assert.deepEqual(replies[0].card.actions, [
+        { type: "invoke-bot", label: "健康检查", botId: "ai.chat", rawText: "/health" },
+        { type: "invoke-bot", label: "文件搜索", botId: "ai.chat", rawText: "找最近下载的 5 个视频，列出 fileId、路径和下一步建议" },
+        { type: "invoke-bot", label: "文档读取", botId: "ai.chat", rawText: "找最近下载的文档，读取候选的前 2000 字并总结" },
+        { type: "invoke-bot", label: "视频总结", botId: "ai.chat", rawText: "找最近一个没有 AI 摘要的视频，先列出候选并说明是否可以总结" },
+        { type: "invoke-bot", label: "播放音乐", botId: "ai.chat", rawText: "播放一首歌" },
+        { type: "invoke-bot", label: "任务诊断", botId: "ai.chat", rawText: "/jobs" }
+      ]);
       assert.doesNotMatch(JSON.stringify(artifact), /sk-test/);
+      assert.doesNotMatch(JSON.stringify(replies[0].card.actions), /sk-test/);
     });
   } finally {
     globalThis.fetch = originalFetch;
