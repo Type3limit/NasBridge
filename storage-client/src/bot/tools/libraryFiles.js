@@ -1709,10 +1709,10 @@ function buildLibrarySearchNextActions(page = [], total = 0, input = {}) {
     const file = page[0] || {};
     const hints = buildContentAccessHints(file);
     if (hints.aiSummaryAvailable || hints.subtitleAvailable || hints.media) {
-      return ["候选唯一；先调用 read_file_metadata 确认目标，再调用 read_media_summary 或 diagnose_file_access 决定是否需要进一步分析。"];
+      return ["候选唯一；先调用 read_file_metadata 确认目标，再调用 read_media_summary 复用已有摘要/字幕/媒体信息；若仍不确定，再调用 diagnose_file_access 决定是否需要进一步分析。"];
     }
     if (hints.textReadable) {
-      return ["候选唯一；先调用 read_file_metadata 确认目标，再调用 read_text_excerpt 分页读取受控片段。"];
+      return ["候选唯一；先调用 read_file_metadata 和 diagnose_file_access 确认目标与可读层级，再调用 read_text_excerpt 分页读取受控片段。"];
     }
     return ["候选唯一；先调用 read_file_metadata 和 diagnose_file_access 判断可读取层级。"];
   }
@@ -1720,6 +1720,39 @@ function buildLibrarySearchNextActions(page = [], total = 0, input = {}) {
     `找到 ${total} 个候选；如果用户没有明确选择依据，先向用户展示前 ${Math.min(page.length, 5)} 个候选并询问确认。`,
     "如果用户目标足够明确，可先调用 read_file_metadata 读取前几个候选的 metadata，再基于摘要/字幕/标签状态选择下一步。"
   ];
+}
+
+function buildSingleSearchContentAction(file = {}) {
+  const hints = buildContentAccessHints(file);
+  const targetInput = buildFileIdentifierInput(file);
+  if (hints.textReadable) {
+    return buildAccessAction({
+      id: "read-selected-text-excerpt",
+      tool: "read_text_excerpt",
+      input: {
+        ...targetInput,
+        maxChars: 2000
+      },
+      reason: "候选唯一且文本/文档可读；读取受控正文片段后再回答或继续分页。",
+      contentLayer: "excerpt"
+    });
+  }
+  if (hints.aiSummaryAvailable || hints.subtitleAvailable || hints.media) {
+    return buildAccessAction({
+      id: "read-selected-media-summary",
+      tool: "read_media_summary",
+      input: {
+        ...targetInput,
+        includeSummary: true,
+        includeProbe: true,
+        includeTranscriptExcerpt: true,
+        maxChars: 4000
+      },
+      reason: "候选唯一且存在媒体/摘要/字幕层；先复用派生信息，避免不必要的长任务分析。",
+      contentLayer: "derived-media"
+    });
+  }
+  return null;
 }
 
 function buildLibrarySearchActionPlan(page = [], total = 0, input = {}) {
@@ -1757,8 +1790,9 @@ function buildLibrarySearchActionPlan(page = [], total = 0, input = {}) {
         input: buildFileIdentifierInput(first),
         reason: "确认可读取层级、依赖状态和安全边界，再选择内容读取或分析工具。",
         contentLayer: "metadata"
-      })
-    ];
+      }),
+      buildSingleSearchContentAction(first)
+    ].filter(Boolean);
   }
   return [
     buildAccessAction({

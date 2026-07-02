@@ -746,8 +746,20 @@ test("library search results include agent next steps and action plans", async (
     assert.equal(single.selection.status, "single-match");
     assert.equal(single.selection.confidence, "high");
     assert.match(single.nextActions[0], /read_file_metadata/);
-    assert.deepEqual(single.actionPlan.map((action) => action.tool), ["read_file_metadata", "diagnose_file_access"]);
+    assert.deepEqual(single.actionPlan.map((action) => action.tool), ["read_file_metadata", "diagnose_file_access", "read_media_summary"]);
     assert.equal(single.actionPlan[0].input.fileId, "client:Videos/a.mp4");
+    assert.equal(single.actionPlan[2].input.fileId, "client:Videos/a.mp4");
+    assert.equal(single.actionPlan[2].input.includeTranscriptExcerpt, true);
+
+    const document = await buildLibraryListResult(api, {
+      query: "readme",
+      limit: 5
+    });
+    assert.equal(document.selection.status, "single-match");
+    assert.match(document.nextActions[0], /diagnose_file_access/);
+    assert.deepEqual(document.actionPlan.map((action) => action.tool), ["read_file_metadata", "diagnose_file_access", "read_text_excerpt"]);
+    assert.equal(document.actionPlan[2].input.fileId, "client:Docs/readme.md");
+    assert.equal(document.actionPlan[2].input.maxChars, 2000);
 
     const multiple = await buildLibraryListResult(api, {
       kind: "video",
@@ -766,7 +778,7 @@ test("library search results include agent next steps and action plans", async (
     assert.equal(empty.selection.status, "no-results");
     assert.match(empty.nextActions[0], /放宽/);
     assert.equal(empty.actionPlan[0].tool, "search_library_files");
-    assert.doesNotMatch(JSON.stringify({ single, multiple, empty }), new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
+    assert.doesNotMatch(JSON.stringify({ single, document, multiple, empty }), new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
   });
 });
 
