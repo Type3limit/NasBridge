@@ -152,13 +152,104 @@ test("health cache uses isolated local dependencies and caches the second snapsh
         assert.equal(second.cached, true);
         assert.equal(first.overall, "ok");
         const checks = new Map(first.checks.map((check) => [check.id, check]));
-        assert.equal(checks.get("storage-root").status, "ok");
+        const storageCheck = checks.get("storage-root");
+        assert.equal(storageCheck.status, "ok");
+        assert.match(storageCheck.detail, /indexSource=dependency/);
+        assert.match(storageCheck.detail, /latestFile=2026-07-01T00:00:00\.000Z/);
+        assert.equal(storageCheck.policy.allowBinaryRead, false);
+        assert.equal(storageCheck.policy.storageRootOnly, true);
+        assert.ok(storageCheck.policy.hiddenDirs.includes(".nas-bot"));
         assert.equal(checks.get("ai-tool-call").status, "ok");
         assert.match(checks.get("ai-tool-call").detail, /JSON plan fallback/);
         assert.equal(checks.get("qq-music-cookie").status, "ok");
         assert.equal(checks.get("bilibili-auth").status, "ok");
         assert.equal(checks.get("bot-queue").status, "ok");
         assert.match(formatHealthReport(first), /AI Agent/);
+      });
+    } finally {
+      await music.close();
+    }
+  });
+});
+
+test("storage health scans NAS root and reports hidden directory exclusions", async () => {
+  await withTempDir(async (baseDir) => {
+    const storageRoot = path.join(baseDir, "storage");
+    const toolDir = path.join(baseDir, "tools");
+    const musicBridgeWorkDir = path.join(baseDir, "music-lib-bridge");
+    const appDataRoot = path.join(storageRoot, ".nas-bot");
+    await fs.mkdir(storageRoot, { recursive: true });
+    await fs.mkdir(toolDir, { recursive: true });
+    await fs.mkdir(musicBridgeWorkDir, { recursive: true });
+    await fs.mkdir(path.join(appDataRoot, "jobs"), { recursive: true });
+    await fs.mkdir(path.join(storageRoot, ".nas-preview-cache"), { recursive: true });
+    await fs.writeFile(path.join(storageRoot, "visible.txt"), "hello", "utf8");
+    await fs.writeFile(path.join(storageRoot, ".nas-preview-cache", "thumb.txt"), "hidden", "utf8");
+    await fs.writeFile(path.join(appDataRoot, "job-log.txt"), "hidden", "utf8");
+    await fs.writeFile(path.join(musicBridgeWorkDir, ".env"), "QQ_COOKIE=uin=o123456; skey=fake\nQQ_COOKIE_AUTO_REFRESH=1\nQQ_COOKIE_REFRESH_INTERVAL_MINUTES=60\n", "utf8");
+    await fs.writeFile(path.join(appDataRoot, "bilibili-cookies.json"), JSON.stringify({ cookies: [{ name: "SESSDATA" }] }), "utf8");
+    const paths = {
+      ffmpeg: path.join(toolDir, "ffmpeg.exe"),
+      ffprobe: path.join(toolDir, "ffprobe.exe"),
+      whisper: path.join(toolDir, "whisper.exe"),
+      whisperModel: path.join(toolDir, "ggml-model.bin"),
+      ytdlp: path.join(toolDir, "yt-dlp.exe")
+    };
+    await Promise.all(Object.values(paths).map((filePath) => fs.writeFile(filePath, "stub")));
+
+    const music = await createMusicHealthServer();
+    try {
+      await withEnv({
+        WHISPER_CPP_PATH: paths.whisper,
+        WHISPER_MODEL_PATH: paths.whisperModel,
+        YT_DLP_PATH: paths.ytdlp,
+        MUSIC_LIB_BRIDGE_URL: music.url,
+        MUSIC_LIB_BRIDGE_WORKDIR: musicBridgeWorkDir,
+        QQ_COOKIE_AUTO_REFRESH: "1",
+        QQ_COOKIE_REFRESH_INTERVAL_MINUTES: "60",
+        BOT_BILIBILI_COOKIE_FILE: "",
+        BOT_BILIBILI_COOKIE_HEADER: "",
+        PLAYWRIGHT_BROWSERS_PATH: path.join(baseDir, "ms-playwright")
+      }, async () => {
+        const modelSettings = {
+          textModel: "openai::deepseek-v4-pro",
+          multimodalModel: "openai::deepseek-v4-pro",
+          lastListedModels: [
+            {
+              id: "openai::deepseek-v4-pro",
+              modelId: "deepseek-v4-pro",
+              provider: "openai",
+              name: "DeepSeek V4 Pro",
+              toolCalls: false,
+              vision: true
+            }
+          ]
+        };
+        const health = await collectAiAgentHealthCached({
+          storageRoot,
+          appDataRoot,
+          clientId: "client",
+          dependencies: {
+            ffmpegPath: paths.ffmpeg,
+            ffprobePath: paths.ffprobe
+          }
+        }, {
+          lightweight: true,
+          modelSettings,
+          ttlMs: 0
+        });
+
+        assert.equal(health.overall, "ok");
+        const storageCheck = new Map(health.checks.map((check) => [check.id, check])).get("storage-root");
+        assert.equal(storageCheck.status, "ok");
+        assert.match(storageCheck.detail, /files=1\b/);
+        assert.match(storageCheck.detail, /dirs=0\b/);
+        assert.match(storageCheck.detail, /indexSource=scan/);
+        assert.match(storageCheck.detail, /hiddenDirsExcluded=\d+/);
+        assert.match(storageCheck.detail, /skipped=2\b/);
+        assert.equal(storageCheck.policy.rawAbsolutePathExposed, false);
+        assert.equal(storageCheck.policy.allowBinaryRead, false);
+        assert.ok(storageCheck.policy.hiddenDirs.includes(".nas-preview-cache"));
       });
     } finally {
       await music.close();

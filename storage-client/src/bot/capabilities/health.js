@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getEffectiveMultimodalModel, getEffectiveTextModel } from "../plugins/ai-chat/services/modelSettings.js";
 import { listAvailableModels, parseModelRef } from "../tools/llmClient.js";
-import { loadLibrarySnapshot } from "../tools/libraryFiles.js";
+import { buildFileAccessPolicy, loadLibrarySnapshot } from "../tools/libraryFiles.js";
 
 const healthCache = new Map();
 const DEFAULT_HEALTH_CACHE_TTL_MS = 60_000;
@@ -338,31 +338,60 @@ async function checkBotQueue(api = {}) {
 
 async function checkStorage(api = {}) {
   const access = await directoryAccess(api.storageRoot || "");
+  const policy = buildFileAccessPolicy(api);
+  const healthPolicy = {
+    accessBy: policy.accessBy,
+    hiddenDirs: policy.hiddenDirs,
+    maxListResults: policy.maxListResults,
+    maxDetailFiles: policy.maxDetailFiles,
+    maxInlineTextChars: policy.maxInlineTextChars,
+    maxBatchFiles: policy.maxBatchFiles,
+    allowRawTextRead: policy.allowRawTextRead,
+    allowBinaryRead: policy.allowBinaryRead,
+    rawAbsolutePathExposed: policy.rawAbsolutePathExposed,
+    storageRootOnly: policy.storageRootOnly,
+    writeRequiresConfirmation: policy.writeRequiresConfirmation
+  };
   if (!access.exists || !access.readable) {
     return {
       id: "storage-root",
       label: "NAS 文件访问",
       status: "error",
-      detail: `${api.storageRoot || "未配置"}；${access.detail}`
+      detail: `${api.storageRoot || "未配置"}；${access.detail}`,
+      policy: healthPolicy
     };
   }
   let snapshotDetail = "";
   try {
     const snapshot = await loadLibrarySnapshot(api);
-    snapshotDetail = `；files=${snapshot.files.length} dirs=${snapshot.directories.length}`;
+    const hiddenDirs = Array.isArray(snapshot.hiddenDirectories) && snapshot.hiddenDirectories.length
+      ? snapshot.hiddenDirectories
+      : policy.hiddenDirs;
+    const skippedDirectories = Array.isArray(snapshot.skippedDirectories) ? snapshot.skippedDirectories : [];
+    snapshotDetail = [
+      `files=${snapshot.files.length}`,
+      `dirs=${snapshot.directories.length}`,
+      `indexSource=${snapshot.indexSource || snapshot.source || "unknown"}`,
+      `indexedAt=${snapshot.generatedAt || "unknown"}`,
+      `hiddenDirsExcluded=${hiddenDirs.length}`,
+      skippedDirectories.length ? `skipped=${skippedDirectories.length}` : "",
+      snapshot.latestFileUpdatedAt ? `latestFile=${snapshot.latestFileUpdatedAt}` : ""
+    ].filter(Boolean).join(" ");
   } catch (error) {
     return {
       id: "storage-root",
       label: "NAS 文件访问",
       status: "warn",
-      detail: `${api.storageRoot}；${access.detail}；索引读取失败：${error?.message || error}`
+      detail: `${api.storageRoot}；${access.detail}；索引读取失败：${error?.message || error}`,
+      policy: healthPolicy
     };
   }
   return {
     id: "storage-root",
     label: "NAS 文件访问",
     status: access.writable ? "ok" : "warn",
-    detail: `${api.storageRoot}；${access.detail}${snapshotDetail}`
+    detail: `${api.storageRoot}；${access.detail}；${snapshotDetail}`,
+    policy: healthPolicy
   };
 }
 

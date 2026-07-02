@@ -25,25 +25,26 @@ function resolveCreatedAt(stat) {
   return toIsoStringIfValid(stat?.mtime) || new Date().toISOString();
 }
 
+export function getStorageHiddenDirectoryNames() {
+  return [
+    process.env.PREVIEW_CACHE_DIR_NAME || ".nas-preview-cache",
+    process.env.HLS_CACHE_DIR_NAME || ".nas-hls-cache",
+    process.env.AUDIO_STREAM_CACHE_DIR_NAME || ".nas-audio-stream-cache",
+    process.env.PROFILE_AVATAR_DIR_NAME || ".nas-user-avatars",
+    process.env.CHAT_ROOM_DIR_NAME || ".nas-chat-room",
+    process.env.BOT_APP_DATA_DIR_NAME || ".nas-bot"
+  ].filter(Boolean);
+}
+
 export async function scanFiles(rootDir) {
   const files = [];
   const directories = [];
-  const previewCacheDirName = process.env.PREVIEW_CACHE_DIR_NAME || ".nas-preview-cache";
-  const hlsCacheDirName = process.env.HLS_CACHE_DIR_NAME || ".nas-hls-cache";
-  const audioStreamCacheDirName = process.env.AUDIO_STREAM_CACHE_DIR_NAME || ".nas-audio-stream-cache";
-  const avatarDirName = process.env.PROFILE_AVATAR_DIR_NAME || ".nas-user-avatars";
-  const chatRoomDirName = process.env.CHAT_ROOM_DIR_NAME || ".nas-chat-room";
-  const botAppDataDirName = process.env.BOT_APP_DATA_DIR_NAME || ".nas-bot";
+  const hiddenDirectories = getStorageHiddenDirectoryNames();
+  const hiddenDirectorySet = new Set(hiddenDirectories);
+  const skippedDirectorySet = new Set();
 
   function shouldSkipDirectory(name = "") {
-    return (
-      name === previewCacheDirName ||
-      name === hlsCacheDirName ||
-      name === audioStreamCacheDirName ||
-      name === avatarDirName ||
-      name === chatRoomDirName ||
-      name === botAppDataDirName
-    );
+    return hiddenDirectorySet.has(name);
   }
 
   async function walk(currentDir) {
@@ -52,6 +53,8 @@ export async function scanFiles(rootDir) {
       const absolute = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
         if (shouldSkipDirectory(entry.name)) {
+          const relative = path.relative(rootDir, absolute).split(path.sep).join("/");
+          skippedDirectorySet.add(relative || entry.name);
           continue;
         }
         try {
@@ -93,7 +96,13 @@ export async function scanFiles(rootDir) {
   }
 
   await walk(rootDir);
-  return { files, directories };
+  return {
+    files,
+    directories,
+    generatedAt: new Date().toISOString(),
+    hiddenDirectories,
+    skippedDirectories: [...skippedDirectorySet].sort()
+  };
 }
 
 export function safeJoin(rootDir, relativePath) {

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { safeJoin, scanFiles } from "../../fsIndex.js";
+import { getStorageHiddenDirectoryNames, safeJoin, scanFiles } from "../../fsIndex.js";
 
 export const MAX_LIBRARY_LIST_LIMIT = 80;
 export const MAX_LIBRARY_DETAIL_FILES = 20;
@@ -199,14 +199,34 @@ function addDerivedFileFlags(files = []) {
   });
 }
 
+function normalizeIsoTimestamp(value = "") {
+  const ts = Date.parse(String(value || ""));
+  return Number.isFinite(ts) ? new Date(ts).toISOString() : "";
+}
+
+function findLatestUpdatedAt(records = []) {
+  let latest = 0;
+  for (const record of records) {
+    const ts = Date.parse(String(record?.updatedAt || ""));
+    if (Number.isFinite(ts) && ts > latest) {
+      latest = ts;
+    }
+  }
+  return latest > 0 ? new Date(latest).toISOString() : "";
+}
+
 export async function loadLibrarySnapshot(api) {
   const clientId = String(api?.clientId || "").trim();
   let snapshot = null;
+  let source = "dependency";
   if (typeof api?.dependencies?.listLibraryFiles === "function") {
     snapshot = await api.dependencies.listLibraryFiles();
   }
   if (!snapshot) {
     snapshot = await scanFiles(api.storageRoot);
+    source = "scan";
+  } else {
+    source = String(snapshot.source || snapshot.indexSource || source).trim() || source;
   }
   const files = addDerivedFileFlags(
     (Array.isArray(snapshot.files) ? snapshot.files : [])
@@ -218,6 +238,14 @@ export async function loadLibrarySnapshot(api) {
     .filter((directory) => directory.relativePath);
   return {
     clientId: String(snapshot.clientId || clientId || "").trim(),
+    source,
+    indexSource: source,
+    generatedAt: normalizeIsoTimestamp(snapshot.generatedAt || snapshot.indexedAt || snapshot.scannedAt) || new Date().toISOString(),
+    latestFileUpdatedAt: findLatestUpdatedAt([...files, ...directories]),
+    hiddenDirectories: normalizeStringList(snapshot.hiddenDirectories || snapshot.hiddenDirs).length
+      ? normalizeStringList(snapshot.hiddenDirectories || snapshot.hiddenDirs)
+      : getHiddenDirectoryNames(),
+    skippedDirectories: normalizeStringList(snapshot.skippedDirectories || snapshot.excludedDirectories),
     files,
     directories
   };
@@ -563,14 +591,7 @@ function buildMetadataPatch(file = {}, input = {}) {
 }
 
 export function getHiddenDirectoryNames() {
-  return [
-    process.env.PREVIEW_CACHE_DIR_NAME || ".nas-preview-cache",
-    process.env.HLS_CACHE_DIR_NAME || ".nas-hls-cache",
-    process.env.AUDIO_STREAM_CACHE_DIR_NAME || ".nas-audio-stream-cache",
-    process.env.PROFILE_AVATAR_DIR_NAME || ".nas-user-avatars",
-    process.env.CHAT_ROOM_DIR_NAME || ".nas-chat-room",
-    process.env.BOT_APP_DATA_DIR_NAME || ".nas-bot"
-  ];
+  return getStorageHiddenDirectoryNames();
 }
 
 export function buildFileAccessPolicy(api = {}) {
