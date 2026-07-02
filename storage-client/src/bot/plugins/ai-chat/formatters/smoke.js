@@ -216,6 +216,13 @@ export function buildAiAgentSmokeChecklist({ health = {}, descriptors = [], mode
       requiredCapabilities: ["read_text_excerpt"]
     }),
     buildCapabilitySmokeStep(descriptors, health, {
+      id: "image-analysis",
+      title: "图片分析",
+      command: "@ai 看看这张图片",
+      expected: "读取当前或最近聊天图片附件，调用视觉模型/describe_image，返回主体、场景、可见文字、风险点和不确定性。",
+      requiredCapabilities: ["describe_image"]
+    }),
+    buildCapabilitySmokeStep(descriptors, health, {
       id: "video-summary",
       title: "视频/音频总结",
       command: "@ai 总结这个视频",

@@ -995,9 +995,11 @@ test("smoke command route publishes local agent smoke checklist", async () => {
       assert.ok(artifact.steps.some((step) => step.id === "health" && step.command === "@ai /health"));
       assert.ok(artifact.steps.some((step) => step.id === "models" && step.command === "@ai /models refresh"));
       assert.ok(artifact.steps.some((step) => step.id === "file-search" && step.requiredCapabilities.includes("search_library_files")));
+      assert.ok(artifact.steps.some((step) => step.id === "image-analysis" && step.requiredCapabilities.includes("describe_image")));
       assert.ok(artifact.steps.some((step) => step.id === "video-summary" && step.requiredCapabilities.includes("invoke_video_analyze")));
       assert.ok(artifact.steps.some((step) => step.id === "music-playback" && step.command.includes("播放")));
       assert.match(replies[0].text, /AI Agent Smoke Checklist/);
+      assert.match(replies[0].text, /图片分析/);
       assert.match(replies[0].text, /@ai \/jobs/);
       assert.doesNotMatch(JSON.stringify(artifact), new RegExp(storageRoot.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
       assert.doesNotMatch(JSON.stringify(artifact), /sk-test/);
