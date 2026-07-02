@@ -6,6 +6,7 @@ import { readExecutionSnapshot } from "../langgraph/checkpoints/aiSessionCheckpo
 export const MAX_JOB_STATUS_LIMIT = 12;
 export const MAX_AGENT_TRACE_EVENTS = 80;
 export const MAX_JOB_LOG_BYTES = 32 * 1024;
+export const MAX_CHILD_JOB_SUMMARY_LIMIT = 20;
 
 const SENSITIVE_KEY_PATTERN = /(?:key|token|secret|cookie|authorization|password|credential)/i;
 
@@ -184,6 +185,40 @@ async function listRecentTraceJobIds(appDataRoot = "", limit = 5) {
   }
 }
 
+async function listChildJobIds(appDataRoot = "", parentJobId = "", limit = MAX_CHILD_JOB_SUMMARY_LIMIT) {
+  const normalizedParentJobId = String(parentJobId || "").trim();
+  if (!normalizedParentJobId) {
+    return [];
+  }
+  const jobsDir = path.join(String(appDataRoot || ""), "jobs");
+  try {
+    const entries = await fs.promises.readdir(jobsDir, { withFileTypes: true });
+    const matches = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) {
+        continue;
+      }
+      const absolutePath = path.join(jobsDir, entry.name);
+      const parsed = await readJsonFile(absolutePath);
+      if (String(parsed?.options?.parentJobId || "").trim() !== normalizedParentJobId) {
+        continue;
+      }
+      const stat = await fs.promises.stat(absolutePath).catch(() => null);
+      matches.push({
+        jobId: String(parsed?.jobId || entry.name.replace(/\.json$/i, "")).trim(),
+        mtimeMs: stat?.mtimeMs || 0
+      });
+    }
+    return matches
+      .filter((item) => item.jobId)
+      .sort((left, right) => left.mtimeMs - right.mtimeMs)
+      .slice(0, clampInteger(limit, 1, MAX_CHILD_JOB_SUMMARY_LIMIT))
+      .map((item) => item.jobId);
+  } catch {
+    return [];
+  }
+}
+
 async function readTraceEvents(appDataRoot = "", jobId = "", maxEvents = MAX_AGENT_TRACE_EVENTS) {
   try {
     const raw = await fs.promises.readFile(getTracePath(appDataRoot, jobId), "utf8");
@@ -198,6 +233,45 @@ async function readTraceEvents(appDataRoot = "", jobId = "", maxEvents = MAX_AGE
   } catch {
     return [];
   }
+}
+
+export async function buildBotJobLogBundle(api = {}, input = {}) {
+  const appDataRoot = String(api.appDataRoot || "").trim();
+  if (!appDataRoot) {
+    throw new Error("appDataRoot is required");
+  }
+  const jobId = String(input.jobId || "").trim();
+  if (!jobId) {
+    throw new Error("jobId is required");
+  }
+  const store = input.store instanceof BotJobStore ? input.store : new BotJobStore({ rootDir: appDataRoot });
+  const logMaxBytes = clampInteger(input.maxBytes || input.logMaxBytes || 64 * 1024, 1024, 512 * 1024);
+  const job = await readJob(api, store, jobId);
+  const log = await store.readLog(jobId, { maxBytes: logMaxBytes });
+  const childJobIds = input.includeChildJobs === true
+    ? await listChildJobIds(appDataRoot, jobId, input.childJobLimit || MAX_CHILD_JOB_SUMMARY_LIMIT)
+    : [];
+  const childJobs = [];
+  for (const childJobId of childJobIds) {
+    const childJob = await readJob(api, store, childJobId);
+    if (childJob) {
+      childJobs.push(summarizeJob(childJob));
+    }
+  }
+  return {
+    generatedAt: new Date().toISOString(),
+    jobId,
+    job: job ? summarizeJob(job) : null,
+    log: {
+      jobId,
+      content: redactSensitiveText(log.content || ""),
+      truncated: log.truncated === true
+    },
+    agentTrace: input.includeTrace === true
+      ? await buildAgentTraceResult(api, { jobId, maxEvents: input.maxTraceEvents || 40 })
+      : null,
+    childJobs
+  };
 }
 
 function summarizeTraceSnapshot(snapshot = null) {

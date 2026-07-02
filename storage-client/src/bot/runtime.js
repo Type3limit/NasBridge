@@ -5,6 +5,7 @@ import { BotJobStore } from "./jobStore.js";
 import { BotJobQueue } from "./queue.js";
 import { BotRegistry } from "./registry.js";
 import { validatePluginPermissions } from "./permissions.js";
+import { buildBotJobLogBundle } from "./tools/botJobStatus.js";
 
 function formatErrorForLog(error) {
   if (!error) {
@@ -408,12 +409,25 @@ export class BotRuntime {
       };
     }
     if (message.type === "get-bot-job-log") {
-      const log = await this.getJobLog(message.jobId, { maxBytes: message.maxBytes });
+      const bundle = await buildBotJobLogBundle({
+        appDataRoot: this.appDataRoot,
+        getJob: (jobId) => this.getJob(jobId)
+      }, {
+        jobId: message.jobId,
+        maxBytes: message.maxBytes,
+        includeTrace: message.includeTrace === true,
+        includeChildJobs: message.includeChildJobs === true,
+        childJobLimit: message.childJobLimit,
+        maxTraceEvents: message.maxTraceEvents
+      });
       return {
         type: "bot-job-log-result",
         requestId: message.requestId || "",
         jobId: message.jobId || "",
-        log
+        log: bundle.log,
+        job: bundle.job,
+        agentTrace: bundle.agentTrace,
+        childJobs: bundle.childJobs
       };
     }
     if (message.type === "cancel-bot-job") {

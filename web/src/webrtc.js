@@ -2643,7 +2643,10 @@ export class P2PBridge {
             this.currentOp.delete(opKey);
             resolve({
               jobId: message.jobId || jobId,
-              log: message.log || { jobId, content: "", truncated: false }
+              log: message.log || { jobId, content: "", truncated: false },
+              job: message.job || null,
+              agentTrace: message.agentTrace || null,
+              childJobs: Array.isArray(message.childJobs) ? message.childJobs : []
             });
           },
           onError: (error) => {
@@ -2657,7 +2660,11 @@ export class P2PBridge {
           type: "get-bot-job-log",
           requestId,
           jobId,
-          maxBytes: Number(options.maxBytes || 64 * 1024)
+          maxBytes: Number(options.maxBytes || 64 * 1024),
+          includeTrace: options.includeTrace === true,
+          includeChildJobs: options.includeChildJobs === true,
+          childJobLimit: Number(options.childJobLimit || 20),
+          maxTraceEvents: Number(options.maxTraceEvents || 40)
         }));
       });
     }));

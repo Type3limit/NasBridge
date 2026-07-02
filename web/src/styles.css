@@ -4841,6 +4841,23 @@ button.chatAttachmentTile:disabled {
   padding: 14px;
 }
 
+.chatBotLogSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.chatBotLogSection:last-child {
+  margin-bottom: 0;
+}
+
+.chatBotLogSection > .fui-Caption1 {
+  color: var(--text-soft);
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
 .chatBotLogPre {
   margin: 0;
   white-space: pre-wrap;
@@ -4849,6 +4866,77 @@ button.chatAttachmentTile:disabled {
   font-size: 12px;
   line-height: 1.6;
   color: #0f172a;
+}
+
+.chatBotLogMiniPre {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.76);
+  padding: 10px 12px;
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #0f172a;
+}
+
+.chatBotChildJobList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.chatBotChildJob {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 9px 10px;
+}
+
+.chatBotChildJob.status-running,
+.chatBotChildJob.status-queued {
+  border-color: rgba(59, 130, 246, 0.22);
+  background: rgba(239, 246, 255, 0.76);
+}
+
+.chatBotChildJob.status-succeeded {
+  border-color: rgba(16, 185, 129, 0.22);
+  background: rgba(236, 253, 245, 0.76);
+}
+
+.chatBotChildJob.status-failed,
+.chatBotChildJob.status-cancelled {
+  border-color: rgba(248, 113, 113, 0.22);
+  background: rgba(254, 242, 242, 0.82);
+}
+
+.chatBotChildJobMain {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chatBotChildJobMain .fui-Text {
+  font-weight: 800;
+}
+
+.chatBotChildJobMain .fui-Caption1,
+.chatBotChildJobError {
+  color: var(--text-soft);
+  overflow-wrap: anywhere;
+}
+
+.chatBotChildJobError {
+  color: #b91c1c;
 }
 
 .chatSaveField {

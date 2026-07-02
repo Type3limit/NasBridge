@@ -543,6 +543,7 @@ function buildBotJobCard(job, botDisplayName) {
         progress: null,
         actions: [
           ...(verification.url ? [{ type: "open-url", label: "打开验证页", url: verification.url }] : []),
+          { type: "open-bot-log", label: "查看日志" },
           { type: "retry-bot-job", label: "完成后重试" }
         ]
       };
@@ -553,7 +554,10 @@ function buildBotJobCard(job, botDisplayName) {
       title: botDisplayName,
       body: String(job?.error?.message || "任务失败").trim(),
       progress: null,
-      actions: [{ type: "retry-bot-job", label: "重新生成" }]
+      actions: [
+        { type: "open-bot-log", label: "查看日志" },
+        { type: "retry-bot-job", label: "重新生成" }
+      ]
     };
   }
   if (job?.status === "cancelled") {
@@ -563,7 +567,10 @@ function buildBotJobCard(job, botDisplayName) {
       title: botDisplayName,
       body: "任务已取消",
       progress: null,
-      actions: [{ type: "retry-bot-job", label: "重新生成" }]
+      actions: [
+        { type: "open-bot-log", label: "查看日志" },
+        { type: "retry-bot-job", label: "重新生成" }
+      ]
     };
   }
   if (job?.status === "succeeded") {
@@ -572,7 +579,8 @@ function buildBotJobCard(job, botDisplayName) {
       status: "succeeded",
       title: botDisplayName,
       body: "任务已完成",
-      progress: null
+      progress: null,
+      actions: [{ type: "open-bot-log", label: "查看日志" }]
     };
   }
   return {
@@ -586,8 +594,11 @@ function buildBotJobCard(job, botDisplayName) {
       : null,
     progress: percent,
     actions: ["queued", "running"].includes(String(job?.status || ""))
-      ? [{ type: "cancel-bot-job", label: "停止生成" }]
-      : []
+      ? [
+        { type: "open-bot-log", label: "查看日志" },
+        { type: "cancel-bot-job", label: "停止生成" }
+      ]
+      : [{ type: "open-bot-log", label: "查看日志" }]
   };
 }
 

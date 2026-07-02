@@ -623,6 +623,89 @@ function groupModelChoicesByProvider(choices = []) {
   return groups;
 }
 
+function safeStringifyCompact(value, maxLength = 360) {
+  try {
+    const text = JSON.stringify(value ?? null);
+    return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+  } catch {
+    return "";
+  }
+}
+
+function formatBotStatusText(status = "") {
+  const normalized = String(status || "").trim();
+  if (normalized === "queued") return "排队中";
+  if (normalized === "running") return "运行中";
+  if (normalized === "succeeded") return "已完成";
+  if (normalized === "failed") return "失败";
+  if (normalized === "cancelled") return "已取消";
+  return normalized || "未知";
+}
+
+function formatBotJobSummary(job = null, childJobs = []) {
+  if (!job || typeof job !== "object") {
+    return "";
+  }
+  const lines = [
+    `botId: ${String(job.botId || "unknown")}`,
+    `jobId: ${String(job.jobId || "")}`,
+    `status: ${formatBotStatusText(job.status)}${job.phase ? ` · ${job.phase}` : ""}`
+  ];
+  if (job.progress?.label) {
+    lines.push(`progress: ${job.progress.label}${Number.isFinite(job.progress.percent) ? ` (${Math.round(job.progress.percent)}%)` : ""}`);
+  }
+  if (job.error?.message) {
+    lines.push(`error: ${job.error.message}`);
+  }
+  if (Array.isArray(childJobs) && childJobs.length) {
+    lines.push(`childJobs: ${childJobs.length}`);
+  }
+  if (job.result?.artifactTypes?.length) {
+    lines.push(`artifacts: ${job.result.artifactTypes.join(", ")}`);
+  }
+  return lines.join("\n");
+}
+
+function formatAgentTraceEvent(event = {}, index = 0) {
+  const kind = String(event?.kind || "event").trim();
+  const status = String(event?.status || event?.event || "").trim();
+  const phase = String(event?.phase || event?.node || event?.tool || "").trim();
+  const round = Number.isFinite(event?.round) && Number(event.round) > 0 ? ` r${event.round}` : "";
+  const outputPreview = String(event?.outputPreview || (typeof event?.detail === "string" ? event.detail : "") || "").trim();
+  const inputPreview = event?.input && typeof event.input === "object" ? safeStringifyCompact(event.input, 240) : "";
+  const detailPreview = event?.detail && typeof event.detail === "object" ? safeStringifyCompact(event.detail, 240) : "";
+  return [
+    `${String(index + 1).padStart(2, "0")}. [${kind}${round}] ${phase || "-"}${status ? ` · ${status}` : ""}`,
+    inputPreview ? `    input: ${inputPreview}` : "",
+    detailPreview ? `    detail: ${detailPreview}` : "",
+    outputPreview ? `    output: ${outputPreview}` : ""
+  ].filter(Boolean).join("\n");
+}
+
+function formatAgentTraceText(agentTrace = null) {
+  if (!agentTrace || typeof agentTrace !== "object" || agentTrace.missing === true) {
+    return "";
+  }
+  const lines = [];
+  const snapshot = agentTrace.snapshot && typeof agentTrace.snapshot === "object" ? agentTrace.snapshot : null;
+  lines.push(`traceJobId: ${String(agentTrace.jobId || snapshot?.jobId || "")}`);
+  if (snapshot) {
+    lines.push(`snapshot: ${String(snapshot.status || "unknown")}${snapshot.route ? ` · ${snapshot.route}` : ""}`);
+    if (snapshot.traceSummary?.lastNode) {
+      lines.push(`lastNode: ${snapshot.traceSummary.lastNode}${snapshot.traceSummary.lastStatus ? ` · ${snapshot.traceSummary.lastStatus}` : ""}`);
+    }
+    if (snapshot.error?.message) {
+      lines.push(`error: ${snapshot.error.message}`);
+    }
+  }
+  const events = Array.isArray(agentTrace.events) ? agentTrace.events : [];
+  if (events.length) {
+    lines.push("", "events:");
+    lines.push(...events.map((event, index) => formatAgentTraceEvent(event, index)));
+  }
+  return lines.join("\n").trim();
+}
+
 function mergeMessages(existing, incoming) {
   const map = new Map();
   for (const item of existing || []) {
@@ -933,6 +1016,9 @@ export default function ChatRoom({
     open: false,
     title: "",
     content: "",
+    summaryText: "",
+    traceText: "",
+    childJobs: [],
     loading: false,
     truncated: false,
     error: ""
@@ -2107,10 +2193,14 @@ export default function ChatRoom({
     }
     const cacheKey = `${clientId}:${jobId}`;
     const cached = botLogCacheRef.current.get(cacheKey);
+    const title = `${String(message?.card?.title || message?.bot?.botId || "Bot").trim() || "Bot"} · ${jobId.slice(0, 12)}`;
     setBotLogDialog({
       open: true,
-      title: `AI Chat 日志 · ${jobId.slice(0, 12)}`,
+      title,
       content: cached?.content || "",
+      summaryText: cached?.summaryText || "",
+      traceText: cached?.traceText || "",
+      childJobs: Array.isArray(cached?.childJobs) ? cached.childJobs : [],
       loading: !cached,
       truncated: Boolean(cached?.truncated),
       error: ""
@@ -2119,16 +2209,29 @@ export default function ChatRoom({
       return;
     }
     try {
-      const result = await p2p.getBotJobLog(clientId, jobId, { maxBytes: 96 * 1024 });
+      const result = await p2p.getBotJobLog(clientId, jobId, {
+        maxBytes: 96 * 1024,
+        includeTrace: true,
+        includeChildJobs: true,
+        maxTraceEvents: 60,
+        childJobLimit: 20
+      });
+      const childJobs = Array.isArray(result?.childJobs) ? result.childJobs : [];
       const next = {
         content: String(result?.log?.content || "").trim() || "暂无日志内容",
+        summaryText: formatBotJobSummary(result?.job || null, childJobs),
+        traceText: formatAgentTraceText(result?.agentTrace || null),
+        childJobs,
         truncated: result?.log?.truncated === true
       };
       botLogCacheRef.current.set(cacheKey, next);
       setBotLogDialog({
         open: true,
-        title: `AI Chat 日志 · ${jobId.slice(0, 12)}`,
+        title,
         content: next.content,
+        summaryText: next.summaryText,
+        traceText: next.traceText,
+        childJobs: next.childJobs,
         loading: false,
         truncated: next.truncated,
         error: ""
@@ -2136,8 +2239,11 @@ export default function ChatRoom({
     } catch (error) {
       setBotLogDialog({
         open: true,
-        title: `AI Chat 日志 · ${jobId.slice(0, 12)}`,
+        title,
         content: "",
+        summaryText: "",
+        traceText: "",
+        childJobs: [],
         loading: false,
         truncated: false,
         error: String(error?.message || "读取日志失败").trim()
@@ -3527,14 +3633,49 @@ export default function ChatRoom({
               <div className="chatSaveDialogHeader chatBotLogDialogHeader">
                 <div>
                   <Subtitle1>{botLogDialog.title || "AI Chat 日志"}</Subtitle1>
-                  <Caption1>{botLogDialog.loading ? "正在读取日志" : botLogDialog.truncated ? "日志内容过长，当前仅展示尾部片段" : "按时间顺序展示本次 bot 执行日志"}</Caption1>
+                  <Caption1>{botLogDialog.loading ? "正在读取日志" : botLogDialog.truncated ? "日志内容过长，当前仅展示尾部片段" : "包含任务概览、agent trace、子任务和原始日志"}</Caption1>
                 </div>
                 <Button size="small" onClick={closeBotLogDialog}>关闭</Button>
               </div>
               <div className="chatBotLogDialogBody">
                 {botLogDialog.loading ? <Spinner label="正在读取日志..." /> : null}
                 {!botLogDialog.loading && botLogDialog.error ? <div className="chatComposerError">{botLogDialog.error}</div> : null}
-                {!botLogDialog.loading && !botLogDialog.error ? <pre className="chatBotLogPre">{botLogDialog.content || "暂无日志内容"}</pre> : null}
+                {!botLogDialog.loading && !botLogDialog.error ? (
+                  <>
+                    {botLogDialog.summaryText ? (
+                      <section className="chatBotLogSection">
+                        <Caption1>任务概览</Caption1>
+                        <pre className="chatBotLogMiniPre">{botLogDialog.summaryText}</pre>
+                      </section>
+                    ) : null}
+                    {Array.isArray(botLogDialog.childJobs) && botLogDialog.childJobs.length ? (
+                      <section className="chatBotLogSection">
+                        <Caption1>子任务</Caption1>
+                        <div className="chatBotChildJobList">
+                          {botLogDialog.childJobs.map((job) => (
+                            <div key={job.jobId} className={`chatBotChildJob status-${String(job.status || "unknown")}`}>
+                              <div className="chatBotChildJobMain">
+                                <Text>{job.botId || "bot"}</Text>
+                                <Caption1>{String(job.jobId || "").slice(0, 12)} · {formatBotStatusText(job.status)}{job.phase ? ` · ${job.phase}` : ""}</Caption1>
+                              </div>
+                              {job.error?.message ? <Caption1 className="chatBotChildJobError">{job.error.message}</Caption1> : null}
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+                    ) : null}
+                    {botLogDialog.traceText ? (
+                      <section className="chatBotLogSection">
+                        <Caption1>Agent Trace</Caption1>
+                        <pre className="chatBotLogMiniPre">{botLogDialog.traceText}</pre>
+                      </section>
+                    ) : null}
+                    <section className="chatBotLogSection">
+                      <Caption1>原始日志</Caption1>
+                      <pre className="chatBotLogPre">{botLogDialog.content || "暂无日志内容"}</pre>
+                    </section>
+                  </>
+                ) : null}
               </div>
             </div>
           </div>
