@@ -4,6 +4,7 @@ import { getEffectiveMultimodalModel, getEffectiveTextModel } from "../plugins/a
 import { listAvailableModels, parseModelRef } from "../tools/llmClient.js";
 import { getDocumentTextExtractionHealth } from "../tools/documentText.js";
 import { buildFileAccessPolicy, loadLibrarySnapshot } from "../tools/libraryFiles.js";
+import { safeJoin } from "../../fsIndex.js";
 
 const healthCache = new Map();
 const DEFAULT_HEALTH_CACHE_TTL_MS = 60_000;
@@ -349,6 +350,44 @@ async function checkBotQueue(api = {}) {
   };
 }
 
+function inspectFileIdResolution(snapshot = {}, api = {}, maxFiles = 100) {
+  const files = Array.isArray(snapshot.files) ? snapshot.files : [];
+  const seenIds = new Set();
+  const result = {
+    checked: 0,
+    totalFiles: files.length,
+    sampled: files.length > maxFiles,
+    resolved: 0,
+    missingIds: 0,
+    duplicateIds: 0,
+    unsafePaths: 0,
+    ok: true
+  };
+  for (const file of files.slice(0, maxFiles)) {
+    result.checked += 1;
+    const fileId = String(file?.id || "").trim();
+    if (!fileId) {
+      result.missingIds += 1;
+    } else if (seenIds.has(fileId)) {
+      result.duplicateIds += 1;
+    } else {
+      seenIds.add(fileId);
+    }
+    try {
+      const relativePath = String(file?.relativePath || file?.path || "").trim();
+      if (!relativePath) {
+        throw new Error("path missing");
+      }
+      safeJoin(api.storageRoot || "", relativePath);
+      result.resolved += 1;
+    } catch {
+      result.unsafePaths += 1;
+    }
+  }
+  result.ok = result.missingIds === 0 && result.duplicateIds === 0 && result.unsafePaths === 0;
+  return result;
+}
+
 async function checkStorage(api = {}) {
   const storageRootConfigured = Boolean(String(api.storageRoot || "").trim());
   const storageRootLabel = storageRootConfigured ? PUBLIC_STORAGE_ROOT_LABEL : "未配置";
@@ -395,6 +434,7 @@ async function checkStorage(api = {}) {
       ? snapshot.hiddenDirectories
       : policy.hiddenDirs;
     const skippedDirectories = Array.isArray(snapshot.skippedDirectories) ? snapshot.skippedDirectories : [];
+    const fileIdResolution = inspectFileIdResolution(snapshot, api);
     fileAccess = {
       ...baseFileAccess,
       files: snapshot.files.length,
@@ -403,7 +443,8 @@ async function checkStorage(api = {}) {
       indexedAt: snapshot.generatedAt || "",
       hiddenDirsExcluded: hiddenDirs.length,
       skippedDirectories: skippedDirectories.length,
-      latestFileUpdatedAt: snapshot.latestFileUpdatedAt || ""
+      latestFileUpdatedAt: snapshot.latestFileUpdatedAt || "",
+      fileIdResolution
     };
     snapshotDetail = [
       `files=${snapshot.files.length}`,
@@ -412,7 +453,8 @@ async function checkStorage(api = {}) {
       `indexedAt=${snapshot.generatedAt || "unknown"}`,
       `hiddenDirsExcluded=${hiddenDirs.length}`,
       skippedDirectories.length ? `skipped=${skippedDirectories.length}` : "",
-      snapshot.latestFileUpdatedAt ? `latestFile=${snapshot.latestFileUpdatedAt}` : ""
+      snapshot.latestFileUpdatedAt ? `latestFile=${snapshot.latestFileUpdatedAt}` : "",
+      `fileIdResolution=${fileIdResolution.ok ? "ok" : `warn checked=${fileIdResolution.checked} missingIds=${fileIdResolution.missingIds} duplicateIds=${fileIdResolution.duplicateIds} unsafePaths=${fileIdResolution.unsafePaths}`}`
     ].filter(Boolean).join(" ");
   } catch (error) {
     return {
@@ -427,7 +469,7 @@ async function checkStorage(api = {}) {
   return {
     id: "storage-root",
     label: "NAS 文件访问",
-    status: access.writable ? "ok" : "warn",
+    status: access.writable && fileAccess.fileIdResolution?.ok !== false ? "ok" : "warn",
     detail: `${storageRootLabel}；${access.detail}；${snapshotDetail}`,
     policy: healthPolicy,
     fileAccess
@@ -744,6 +786,18 @@ function formatStorageFileAccessReport(check = {}) {
   }
   if (Number.isFinite(Number(fileAccess.skippedDirectories)) && Number(fileAccess.skippedDirectories) > 0) {
     accessParts.push(`skippedDirs=${Number(fileAccess.skippedDirectories)}`);
+  }
+  const resolution = fileAccess.fileIdResolution && typeof fileAccess.fileIdResolution === "object"
+    ? fileAccess.fileIdResolution
+    : null;
+  if (resolution) {
+    accessParts.push(`fileIdResolution=${resolution.ok === true ? "ok" : "warn"}`);
+    accessParts.push(`resolutionChecked=${Number(resolution.checked || 0)}/${Number(resolution.totalFiles || 0)}`);
+    if (resolution.ok !== true) {
+      accessParts.push(`missingIds=${Number(resolution.missingIds || 0)}`);
+      accessParts.push(`duplicateIds=${Number(resolution.duplicateIds || 0)}`);
+      accessParts.push(`unsafePaths=${Number(resolution.unsafePaths || 0)}`);
+    }
   }
 
   const boundaryParts = [

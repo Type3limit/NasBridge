@@ -181,6 +181,9 @@ test("health cache uses isolated local dependencies and caches the second snapsh
           indexSource: "dependency",
           latestFileUpdatedAt: "2026-07-01T00:00:00.000Z"
         });
+        assert.equal(storageCheck.fileAccess.fileIdResolution.ok, true);
+        assert.equal(storageCheck.fileAccess.fileIdResolution.checked, 1);
+        assert.equal(storageCheck.fileAccess.fileIdResolution.resolved, 1);
         assert.equal(checks.get("ai-tool-call").status, "ok");
         assert.match(checks.get("ai-tool-call").detail, /JSON plan fallback/);
         assert.equal(checks.get("document-text").status, "ok");
@@ -195,6 +198,7 @@ test("health cache uses isolated local dependencies and caches the second snapsh
         assert.match(firstReport, /AI Agent/);
         assert.match(firstReport, /NAS 文件访问: STORAGE_ROOT；可读写；/);
         assert.match(firstReport, /文件访问：root=STORAGE_ROOT · exists=true · readable=true · writable=true · indexedFiles=1 · dirs=0 · indexSource=dependency/);
+        assert.match(firstReport, /fileIdResolution=ok · resolutionChecked=1\/1/);
         assert.match(firstReport, /访问边界：storageRootOnly=true · allowRawTextRead=true · allowBinaryRead=false · rawAbsolutePathExposed=false · writeRequiresConfirmation=true/);
         assert.equal(firstReport.includes(root), false);
       });
@@ -288,12 +292,81 @@ test("storage health scans NAS root and reports hidden directory exclusions", as
         assert.equal(storageCheck.fileAccess.skippedDirectories, 2);
         assert.equal(storageCheck.fileAccess.allowBinaryRead, false);
         assert.equal(storageCheck.fileAccess.rawAbsolutePathExposed, false);
+        assert.equal(storageCheck.fileAccess.fileIdResolution.ok, true);
+        assert.equal(storageCheck.fileAccess.fileIdResolution.checked, 1);
         assert.match(storageCheck.detail, /^STORAGE_ROOT；可读写；/);
+        assert.match(storageCheck.detail, /fileIdResolution=ok/);
         assert.equal(storageCheck.detail.includes(storageRoot), false);
         const report = formatHealthReport(health);
         assert.match(report, /文件访问：root=STORAGE_ROOT · exists=true · readable=true · writable=true · indexedFiles=1 · dirs=0 · indexSource=scan/);
         assert.match(report, /hiddenDirsExcluded=\d+ · skippedDirs=2/);
+        assert.match(report, /fileIdResolution=ok · resolutionChecked=1\/1/);
         assert.equal(report.includes(storageRoot), false);
+      });
+    } finally {
+      await music.close();
+    }
+  });
+});
+
+test("storage health warns when indexed file ids cannot resolve inside storage root", async () => {
+  await withTempDir(async (baseDir) => {
+    const storageRoot = path.join(baseDir, "storage");
+    await fs.mkdir(storageRoot, { recursive: true });
+    const music = await createMusicHealthServer();
+    try {
+      await withEnv({
+        MUSIC_LIB_BRIDGE_URL: music.url
+      }, async () => {
+        const health = await collectAiAgentHealthCached({
+          storageRoot,
+          appDataRoot: path.join(storageRoot, ".nas-bot"),
+          clientId: "client",
+          dependencies: {
+            listLibraryFiles: async () => ({
+              clientId: "client",
+              directories: [],
+              files: [
+                {
+                  id: "client:../outside.txt",
+                  clientId: "client",
+                  path: "../outside.txt",
+                  name: "outside.txt",
+                  size: 7,
+                  mimeType: "text/plain",
+                  updatedAt: "2026-07-01T00:00:00.000Z"
+                }
+              ]
+            })
+          }
+        }, {
+          lightweight: true,
+          modelSettings: {
+            textModel: "openai::deepseek-v4-pro",
+            lastListedModels: [
+              {
+                id: "openai::deepseek-v4-pro",
+                modelId: "deepseek-v4-pro",
+                provider: "openai",
+                name: "DeepSeek V4 Pro"
+              }
+            ]
+          },
+          ttlMs: 0
+        });
+
+        const storageCheck = new Map(health.checks.map((check) => [check.id, check])).get("storage-root");
+        assert.equal(storageCheck.status, "warn");
+        assert.equal(storageCheck.fileAccess.fileIdResolution.ok, false);
+        assert.equal(storageCheck.fileAccess.fileIdResolution.checked, 1);
+        assert.equal(storageCheck.fileAccess.fileIdResolution.missingIds, 0);
+        assert.equal(storageCheck.fileAccess.fileIdResolution.duplicateIds, 0);
+        assert.equal(storageCheck.fileAccess.fileIdResolution.unsafePaths, 1);
+        assert.match(storageCheck.detail, /fileIdResolution=warn checked=1 missingIds=0 duplicateIds=0 unsafePaths=1/);
+        const report = formatHealthReport(health);
+        assert.match(report, /fileIdResolution=warn · resolutionChecked=1\/1 · missingIds=0 · duplicateIds=0 · unsafePaths=1/);
+        assert.equal(report.includes(storageRoot), false);
+        assert.equal(report.includes("outside.txt"), false);
       });
     } finally {
       await music.close();
