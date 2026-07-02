@@ -160,6 +160,55 @@ function computeSmokeOverall(counts = {}) {
   return "ok";
 }
 
+function compactSmokeStep(step = null) {
+  if (!step || typeof step !== "object") {
+    return null;
+  }
+  return {
+    id: String(step.id || "").trim(),
+    title: redactSmokeText(step.title || "", 160),
+    command: redactSmokeText(step.command || "", 240),
+    status: normalizeSmokeStatus(step.status || "unknown"),
+    detail: redactSmokeText(step.detail || "", 240),
+    repairHint: redactSmokeText(step.repairHint || "", 240)
+  };
+}
+
+function buildSmokeCommandSequence(steps = []) {
+  const seen = new Set();
+  const commands = [];
+  for (const step of Array.isArray(steps) ? steps : []) {
+    const command = redactSmokeText(step?.command || "", 240);
+    if (!command || seen.has(command)) {
+      continue;
+    }
+    seen.add(command);
+    commands.push({
+      id: String(step?.id || "").trim(),
+      title: redactSmokeText(step?.title || "", 160),
+      command,
+      status: normalizeSmokeStatus(step?.status || "unknown")
+    });
+  }
+  return commands;
+}
+
+function selectNextSmokeStep(steps = []) {
+  const orderedStatuses = [
+    ["blocked", "error"],
+    ["warn", "unknown"],
+    ["ok"]
+  ];
+  for (const statuses of orderedStatuses) {
+    const step = (Array.isArray(steps) ? steps : []).find((item) => statuses.includes(normalizeSmokeStatus(item?.status || "unknown")));
+    const compact = compactSmokeStep(step);
+    if (compact?.command) {
+      return compact;
+    }
+  }
+  return null;
+}
+
 export function buildAiAgentSmokeChecklist({ health = {}, descriptors = [], modelSettings = {} } = {}) {
   const healthStatus = healthStepStatus(health);
   const modelStatus = modelStepStatus(health, modelSettings);
@@ -245,10 +294,18 @@ export function buildAiAgentSmokeChecklist({ health = {}, descriptors = [], mode
     })
   ];
   const counts = countSmokeStatuses(steps);
+  const commands = buildSmokeCommandSequence(steps);
+  const blockedSteps = steps
+    .filter((step) => ["blocked", "error"].includes(normalizeSmokeStatus(step?.status || "unknown")))
+    .map(compactSmokeStep)
+    .filter(Boolean);
   return {
     generatedAt: new Date().toISOString(),
     overall: computeSmokeOverall(counts),
     statusCounts: counts,
+    nextStep: selectNextSmokeStep(steps),
+    commands,
+    blockedSteps,
     steps
   };
 }
@@ -260,6 +317,13 @@ export function formatAiAgentSmokeReport(checklist = {}) {
     "",
     "建议按顺序执行；blocked/error 先修复，warn 可以尝试但可能降级。"
   ];
+  if (checklist.nextStep?.command) {
+    lines.push(`下一步建议：${checklist.nextStep.command}${checklist.nextStep.title ? `（${checklist.nextStep.title}）` : ""}`);
+  }
+  const blockedSteps = Array.isArray(checklist.blockedSteps) ? checklist.blockedSteps : [];
+  if (blockedSteps.length) {
+    lines.push(`阻断项：${blockedSteps.map((step) => step.id || step.title).filter(Boolean).join("、")}`);
+  }
   for (const step of steps) {
     lines.push("");
     lines.push(`- [${step.status || "unknown"}] ${step.title}`);
