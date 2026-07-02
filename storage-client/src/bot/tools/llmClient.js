@@ -792,7 +792,15 @@ function buildModelRequestFailureHint(detail = "", resolved = {}, requestedModel
   const modelRef = encodeModelRef(resolved.provider, resolved.modelId);
   const raw = String(requestedModel || "").trim();
   const rawHint = raw && raw !== modelRef ? `；设置值=${raw}` : "";
-  return `；当前请求模型=${modelRef || resolved.modelId || raw || "unknown"}${rawHint}。请先执行 @ai /models 刷新列表，再用 @ai /model use <序号> 或 @ai /model set provider::modelId 设置真实模型 ID。`;
+  const providerLabel = getProviderDisplayName(resolved.provider);
+  const requestedModelId = String(resolved.modelId || raw || "").trim();
+  const displayNameHint = /\s/.test(requestedModelId)
+    ? "；该值包含空格，可能是展示名而不是真实 model id"
+    : "";
+  const reason = /not found|does not exist|不存在|无效/i.test(detail)
+    ? "模型不存在或未出现在当前 provider 的可用列表"
+    : "当前 provider 不支持这个模型请求值";
+  return `；当前请求模型=${modelRef || resolved.modelId || raw || "unknown"}${rawHint}；provider=${providerLabel}；原因=${reason}${displayNameHint}。请先执行 @ai /models refresh 刷新列表，再用 @ai /model use <序号>，或用 @ai /model set provider::modelId 写入真实模型 ID。`;
 }
 
 function normalizeToolDefinitions(tools = []) {

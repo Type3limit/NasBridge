@@ -19,6 +19,7 @@ import {
 } from "../../src/bot/plugins/ai-chat/parsers/modelDirectives.js";
 import {
   encodeModelRef,
+  invokeTextModel,
   invokeTextModelStream,
   parseModelRef,
   resolveModelReference
@@ -270,8 +271,53 @@ test("stream model errors include actionable model repair hints", async () => {
           const message = String(error?.message || "");
           assert.match(message, /AI model stream failed/);
           assert.match(message, /当前请求模型=openai::DeepSeek V4 Pro/);
-          assert.match(message, /@ai \/models/);
+          assert.match(message, /provider=OpenAI Compatible/);
+          assert.match(message, /疑似展示名|可能是展示名/);
+          assert.match(message, /@ai \/models refresh/);
           assert.match(message, /@ai \/model use <序号>/);
+          assert.match(message, /provider::modelId/);
+          return true;
+        }
+      );
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("non-stream model errors include display-name repair hints", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 404,
+    statusText: "Not Found",
+    text: async () => JSON.stringify({
+      error: {
+        message: "model does not exist: DeepSeek V4 Pro"
+      }
+    })
+  });
+  try {
+    await withEnv({
+      AI_PROVIDER: "openai",
+      OPENAI_BASE_URL: "https://example.invalid/v1",
+      OPENAI_API_KEY: "sk-test",
+      OPENAI_MODEL: "DeepSeek V4 Pro"
+    }, async () => {
+      await assert.rejects(
+        () => invokeTextModel({
+          model: "openai::DeepSeek V4 Pro",
+          messages: [{ role: "user", content: "hello" }]
+        }),
+        (error) => {
+          const message = String(error?.message || "");
+          assert.match(message, /AI model request failed/);
+          assert.match(message, /当前请求模型=openai::DeepSeek V4 Pro/);
+          assert.match(message, /模型不存在|未出现在当前 provider/);
+          assert.match(message, /可能是展示名/);
+          assert.match(message, /@ai \/models refresh/);
+          assert.match(message, /@ai \/model set provider::modelId/);
+          assert.doesNotMatch(message, /sk-test/);
           return true;
         }
       );
