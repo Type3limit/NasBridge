@@ -48,6 +48,7 @@ test("diagnostic prompts require job status and agent trace tools", () => {
 
   assert.match(prompt, /Diagnose bot or agent failures/);
   assert.match(prompt, /get_bot_job_status/);
+  assert.match(prompt, /read_bot_job_log/);
   assert.match(prompt, /read_agent_trace/);
 });
 

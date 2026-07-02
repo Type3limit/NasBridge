@@ -63,6 +63,7 @@ const TOOL_RISK_LEVELS = {
   read_chat_history: "low",
   get_bot_job_status: "low",
   read_agent_trace: "low",
+  read_bot_job_log: "low",
   describe_image: "low",
   search_yyets_show: "low",
   download_yyets_episodes: "medium"
@@ -95,6 +96,7 @@ const TOOL_HEALTH_CHECKS = {
   read_chat_history: ["storage-root"],
   get_bot_job_status: ["storage-root"],
   read_agent_trace: ["storage-root"],
+  read_bot_job_log: ["storage-root"],
   describe_image: ["ai-model", "storage-root"],
   search_yyets_show: ["ai-model"],
   download_yyets_episodes: ["storage-root"]
@@ -133,7 +135,8 @@ const CAPABILITY_EXAMPLES = {
   invoke_torrent_downloader: ["下载这个 magnet 链接"],
   invoke_aria2_downloader: ["用 aria2 下载这个文件"],
   search_web: ["联网查询最新资料"],
-  get_bot_job_status: ["刚才任务为什么失败了"]
+  get_bot_job_status: ["刚才任务为什么失败了"],
+  read_bot_job_log: ["查看这个 job 的日志", "刚才失败的详细日志是什么"]
 };
 
 const PROMPT_CORE_CAPABILITY_IDS = [
@@ -153,7 +156,8 @@ const PROMPT_CORE_CAPABILITY_IDS = [
   "download_yyets_episodes",
   "organize_files",
   "get_bot_job_status",
-  "read_agent_trace"
+  "read_agent_trace",
+  "read_bot_job_log"
 ];
 
 function normalizeRiskLevel(value = "low") {
@@ -307,7 +311,7 @@ export function formatCapabilityReport(descriptors = [], health = {}) {
 }
 
 export function formatCapabilityPromptSummary(descriptors = [], health = {}, options = {}) {
-  const maxItems = Math.max(4, Math.min(16, Number(options.maxItems || 14) || 14));
+  const maxItems = Math.max(4, Math.min(24, Number(options.maxItems || PROMPT_CORE_CAPABILITY_IDS.length) || PROMPT_CORE_CAPABILITY_IDS.length));
   const checks = Array.isArray(health.checks) ? health.checks : [];
   const nonOkChecks = checks.filter((check) => check.status && check.status !== "ok");
   const byId = new Map((Array.isArray(descriptors) ? descriptors : []).map((item) => [item.id, item]));

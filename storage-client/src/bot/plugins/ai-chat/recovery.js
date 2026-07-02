@@ -5,6 +5,7 @@ const DIRECT_RETRY_TEXT_TOOLS = new Set([
   "read_chat_history",
   "get_bot_job_status",
   "read_agent_trace",
+  "read_bot_job_log",
   "list_storage_files",
   "search_library_files",
   "read_file_metadata",

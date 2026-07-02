@@ -9,7 +9,7 @@ import { fetchWebPageSummary, getSourcePreferenceLabel, normalizeSourcePreferenc
 import { buildDelegatedJobFollowup, executeDelegatedBotToolCall, getDelegatedBotToolDefinitions, isDelegatedBotToolName } from "./botToolAdapter.js";
 import { buildRealtimeContextText } from "./realtimeContext.js";
 import { searchYYeTsShows, getYYeTsResource, extractEpisodeMagnets, sanitizeShowName } from "./yyetsApi.js";
-import { MAX_AGENT_TRACE_EVENTS, MAX_CHILD_JOB_SUMMARY_LIMIT, MAX_JOB_LOG_BYTES, MAX_JOB_STATUS_LIMIT, buildAgentTraceResult, buildBotJobStatusResult } from "./botJobStatus.js";
+import { MAX_AGENT_TRACE_EVENTS, MAX_CHILD_JOB_SUMMARY_LIMIT, MAX_JOB_LOG_BYTES, MAX_JOB_STATUS_LIMIT, buildAgentTraceResult, buildBotJobLogBundle, buildBotJobStatusResult } from "./botJobStatus.js";
 import {
   MAX_FILE_ORGANIZE_ACTIONS,
   MAX_LIBRARY_DETAIL_FILES,
@@ -802,6 +802,22 @@ export function getAiToolDefinitions() {
       }
     },
     {
+      name: "read_bot_job_log",
+      description: "读取指定 bot job 的日志包，包含脱敏日志、任务摘要、可选子任务和 agent trace。用户明确问日志、报错细节、终端输出或 /log <jobId> 等内容时调用。",
+      inputSchema: {
+        type: "object",
+        required: ["jobId"],
+        properties: {
+          jobId: { type: "string", description: "bot job id" },
+          logMaxBytes: { type: "integer", minimum: 1024, maximum: MAX_JOB_LOG_BYTES },
+          includeTrace: { type: "boolean", description: "是否同时读取 ai.chat trace，默认 true" },
+          maxTraceEvents: { type: "integer", minimum: 1, maximum: MAX_AGENT_TRACE_EVENTS },
+          includeChildJobs: { type: "boolean", description: "是否返回委派子任务，默认 true" },
+          childJobLimit: { type: "integer", minimum: 1, maximum: MAX_CHILD_JOB_SUMMARY_LIMIT }
+        }
+      }
+    },
+    {
       name: "describe_image",
       description: "读取当前消息附件或最近聊天中的图片，并调用多模态模型分析。",
       inputSchema: {
@@ -1235,6 +1251,15 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
   if (name === "read_agent_trace") {
     await api.emitProgress({ phase: "tool-read-agent-trace", label: "读取 AI agent trace", percent: 42 });
     return safeJson(await buildAgentTraceResult(api, input));
+  }
+
+  if (name === "read_bot_job_log") {
+    await api.emitProgress({ phase: "tool-read-bot-job-log", label: "读取 bot 任务日志", percent: 42 });
+    return safeJson(await buildBotJobLogBundle(api, {
+      ...input,
+      includeTrace: input.includeTrace !== false,
+      includeChildJobs: input.includeChildJobs !== false
+    }));
   }
 
   if (name === "describe_image") {

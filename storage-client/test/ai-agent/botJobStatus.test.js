@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { BotJobStore } from "../../src/bot/jobStore.js";
 import { buildAgentTraceResult, buildBotJobLogBundle, buildBotJobStatusResult } from "../../src/bot/tools/botJobStatus.js";
+import { executeAiToolCall } from "../../src/bot/tools/aiToolRuntime.js";
 
 async function createTempAppDataRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-job-status-"));
@@ -139,6 +140,52 @@ test("bot job log bundle includes redacted log, agent trace, and delegated child
   assert.equal(bundle.agentTrace.childJobs[0].jobId, "botjob_child");
   assert.equal(bundle.agentTrace.childJobs[0].botId, "video.analyze");
   assert.equal(bundle.agentTrace.childJobStatusCounts.queued, 1);
+});
+
+test("read_bot_job_log tool returns redacted job log bundle", async () => {
+  const appDataRoot = await createTempAppDataRoot();
+  const store = new BotJobStore({ rootDir: appDataRoot });
+  await store.save(createJob("botjob_parent", {
+    parsedArgs: { apiKey: "sk-should-not-leak-1234567890" }
+  }));
+  await store.save(createJob("botjob_child", {
+    botId: "video.analyze",
+    status: "queued",
+    phase: "queued",
+    progress: { label: "Queued", percent: 0, details: null },
+    options: {
+      delegatedBy: "ai.chat",
+      parentJobId: "botjob_parent",
+      toolName: "invoke_video_analyze"
+    }
+  }));
+  await store.appendLog("botjob_parent", "OPENAI_API_KEY=sk-should-not-leak-1234567890");
+  await store.waitForPendingWrite("botjob_parent");
+  await store.waitForPendingWrite("botjob_child");
+
+  const progress = [];
+  const raw = await executeAiToolCall({
+    name: "read_bot_job_log",
+    input: {
+      jobId: "botjob_parent",
+      includeTrace: false,
+      includeChildJobs: true
+    }
+  }, { chat: {}, attachments: [] }, {
+    appDataRoot,
+    getJob: (jobId) => store.get(jobId),
+    emitProgress: async (event) => progress.push(event),
+    throwIfCancelled() {}
+  });
+  const result = JSON.parse(raw);
+
+  assert.equal(result.job.jobId, "botjob_parent");
+  assert.equal(result.log.content.includes("sk-should-not-leak"), false);
+  assert.match(result.log.content, /OPENAI_API_KEY=\*\*\*/);
+  assert.equal(result.childJobs.length, 1);
+  assert.equal(result.childJobs[0].jobId, "botjob_child");
+  assert.equal(result.agentTrace, null);
+  assert.equal(progress[0].phase, "tool-read-bot-job-log");
 });
 
 test("bot job status includes delegated child jobs for an explicit parent job", async () => {
@@ -378,6 +425,11 @@ test("agent trace result includes direct retry recovery hints for read-only tool
             id: "call_summary",
             name: "read_media_summary",
             input: { fileId: "client:movie.mp4" }
+          },
+          {
+            id: "call_log",
+            name: "read_bot_job_log",
+            input: { jobId: "botjob_parent" }
           }
         ]
       }
@@ -390,7 +442,7 @@ test("agent trace result includes direct retry recovery hints for read-only tool
   assert.equal(trace.recoveryHint.mode, "text-retry-tools");
   assert.equal(trace.recoveryHint.route, "textTools");
   assert.equal(trace.recoveryHint.canContinueDirectly, true);
-  assert.deepEqual(trace.recoveryHint.retryPolicy.retryableToolNames, ["get_bot_job_status", "read_media_summary"]);
+  assert.deepEqual(trace.recoveryHint.retryPolicy.retryableToolNames, ["get_bot_job_status", "read_media_summary", "read_bot_job_log"]);
   assert.deepEqual(trace.recoveryHint.retryPolicy.blockedRetryToolNames, []);
   assert.match(trace.recoveryHint.nextAction, /直接重试/);
 });

@@ -188,6 +188,11 @@ test("textTools recovery directly retries local read-only diagnostic tools", () 
       id: "call_media",
       name: "read_media_summary",
       input: { fileId: "client:movie.mp4" }
+    },
+    {
+      id: "call_log",
+      name: "read_bot_job_log",
+      input: { jobId: "botjob_parent" }
     }
   ];
   const guidance = buildSessionRecoveryGuidance({
@@ -214,9 +219,9 @@ test("textTools recovery directly retries local read-only diagnostic tools", () 
 
   assert.equal(guidance.recoveryAction.mode, "text-retry-tools");
   assert.equal(guidance.recoveryAction.directRetryAllowed, true);
-  assert.deepEqual(guidance.recoveryAction.retryPolicy.retryableToolNames, ["get_bot_job_status", "read_media_summary"]);
+  assert.deepEqual(guidance.recoveryAction.retryPolicy.retryableToolNames, ["get_bot_job_status", "read_media_summary", "read_bot_job_log"]);
   assert.deepEqual(guidance.recoveryAction.retryPolicy.blockedRetryToolNames, []);
-  assert.equal(guidance.recoveryAction.recoveredPendingToolCalls.length, 2);
+  assert.equal(guidance.recoveryAction.recoveredPendingToolCalls.length, 3);
   assert.equal(guidance.recoveryAction.recoveredToolRound, 2);
 });
 

@@ -14,7 +14,7 @@ const ALWAYS_ON_GUIDANCE = {
     "先用最小只读工具确认事实，再选择写入、下载或长任务工具。",
     "需要文件内容时先拿 fileId/relativePath；不要编造绝对路径或声称读取了未通过工具读取的内容。",
     "具体文件能否读取/分析不确定时，先调用 diagnose_file_access，根据 layers、blockers 和 nextActions 选择下一步工具。",
-    "长任务提交后必须在回答里给出 botId、jobId、当前 status 和下一步可用的 get_bot_job_status/read_agent_trace。",
+    "长任务提交后必须在回答里给出 botId、jobId、当前 status 和下一步可用的 get_bot_job_status/read_agent_trace/read_bot_job_log。",
     "工具不可用或 health degraded 时，先解释具体依赖项，再给可恢复步骤。"
   ]
 };
@@ -84,7 +84,7 @@ const TASK_PRESETS = [
     title: "Diagnose bot or agent failures",
     triggers: [/失败|报错|卡住|进度|状态|job|trace|日志|为什么|failed|error|status|progress|log/i],
     lines: [
-      "先调用 get_bot_job_status；涉及 agent 步骤、工具调用、上次执行路径时调用 read_agent_trace。",
+      "先调用 get_bot_job_status；用户明确问日志、终端输出、报错细节或 /log <jobId> 时调用 read_bot_job_log；涉及 agent 步骤、工具调用、上次执行路径时调用 read_agent_trace。",
       "回答必须指出失败阶段、botId/tool、jobId、错误原因和下一步修复/重试建议。"
     ]
   },
