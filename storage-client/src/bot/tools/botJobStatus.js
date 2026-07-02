@@ -505,6 +505,8 @@ function compactTraceAgentDetail(detail = null) {
     pendingTools,
     parseError: redactSensitiveText(String(detail.parseError || "").trim()).slice(0, 240),
     retryReason: redactSensitiveText(String(detail.retryReason || "").trim()).slice(0, 240),
+    maxToolRounds: Number.isFinite(Number(detail.maxToolRounds)) ? Number(detail.maxToolRounds) : null,
+    allowMoreToolCalls: typeof detail.allowMoreToolCalls === "boolean" ? detail.allowMoreToolCalls : null,
     tool: String(detail.tool || "").trim(),
     observationLength: Number.isFinite(Number(detail.observationLength)) ? Number(detail.observationLength) : null
   };
@@ -673,6 +675,8 @@ function buildTracePlanSummary(events = []) {
         pendingTools: Array.isArray(detail.pendingTools) ? detail.pendingTools : [],
         parseError: detail.parseError || "",
         retryReason: detail.retryReason || "",
+        maxToolRounds: detail.maxToolRounds ?? null,
+        allowMoreToolCalls: detail.allowMoreToolCalls ?? null,
         outputPreview: compactAgentPreview(event.outputPreview || "")
       };
       round.plans.push(Object.fromEntries(Object.entries(plan).filter(([, value]) => {

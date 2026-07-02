@@ -294,6 +294,8 @@ test("agent trace result summarizes plan and observation events", async () => {
         detail: {
           model: "openai::deepseek-v4-pro",
           fallback: "json-plan",
+          maxToolRounds: 4,
+          allowMoreToolCalls: true,
           pendingTools: [
             {
               id: "call_search",
@@ -326,12 +328,16 @@ test("agent trace result summarizes plan and observation events", async () => {
   assert.equal(trace.planSummary.count, 2);
   assert.equal(trace.planSummary.rounds[0].round, 0);
   assert.equal(trace.planSummary.rounds[0].plans[0].fallback, "json-plan");
+  assert.equal(trace.planSummary.rounds[0].plans[0].maxToolRounds, 4);
+  assert.equal(trace.planSummary.rounds[0].plans[0].allowMoreToolCalls, true);
   assert.equal(trace.planSummary.rounds[0].plans[0].pendingTools[0].name, "search_library_files");
   assert.doesNotMatch(trace.planSummary.rounds[0].plans[0].pendingTools[0].reason, /sk-should-not-leak/);
   assert.equal(trace.planSummary.rounds[0].observations[0].tool, "search_library_files");
   assert.equal(trace.planSummary.rounds[0].observations[0].observationLength, 512);
   assert.equal(trace.timeline[0].agentPhase, "Plan");
   assert.equal(trace.timeline[0].label, "textPlan:exit");
+  assert.equal(trace.timeline[1].detailSummary.maxToolRounds, 4);
+  assert.equal(trace.timeline[1].detailSummary.allowMoreToolCalls, true);
   assert.equal(trace.timeline[1].detailSummary.pendingTools[0].name, "search_library_files");
   assert.equal(trace.timeline[2].detailSummary.tool, "search_library_files");
 });

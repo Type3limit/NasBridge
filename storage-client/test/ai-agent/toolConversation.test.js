@@ -172,6 +172,10 @@ test("JSON fallback plans, executes, observes, and finishes through tool message
     api.agentEvents.map((event) => event.phase),
     ["plan_next_step", "observe_result", "plan_next_step"]
   );
+  assert.equal(api.agentEvents[0].detail.maxToolRounds, 4);
+  assert.equal(api.agentEvents[0].detail.allowMoreToolCalls, true);
+  assert.equal(api.agentEvents[2].detail.maxToolRounds, 4);
+  assert.equal(api.agentEvents[2].detail.allowMoreToolCalls, true);
   assert.equal(api.toolEvents[0].name, "search_library_files");
   assert.equal(api.toolEvents[0].input.__fallback, "json-plan");
 });
@@ -228,6 +232,8 @@ test("native tool-call unsupported errors recover into JSON fallback", async () 
   assert.equal(planned.result.fallback, "json-plan");
   assert.equal(planned.pendingToolCalls.length, 1);
   assert.equal(planned.pendingToolCalls[0].name, "search_library_files");
+  assert.equal(api.agentEvents[0].detail.maxToolRounds, 4);
+  assert.equal(api.agentEvents[0].detail.allowMoreToolCalls, true);
   assert.match(api.logs.join("\n"), /json-tool-fallback round=0/);
 });
 

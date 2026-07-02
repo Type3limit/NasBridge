@@ -297,8 +297,11 @@ async function recordAgentPlanningEvent(api = {}, {
   pendingToolCalls = [],
   text = "",
   parseError = "",
-  retryReason = ""
+  retryReason = "",
+  maxToolRounds = null,
+  allowMoreToolCalls = null
 } = {}) {
+  const safeMaxToolRounds = Number(maxToolRounds);
   await api?.traceHooks?.recordAgentEvent?.({
     phase: "plan_next_step",
     round,
@@ -309,7 +312,9 @@ async function recordAgentPlanningEvent(api = {}, {
       finishReason: String(finishReason || "").trim(),
       pendingTools: summarizePendingToolCalls(pendingToolCalls),
       parseError: String(parseError || "").trim(),
-      retryReason: String(retryReason || "").trim()
+      retryReason: String(retryReason || "").trim(),
+      maxToolRounds: Number.isFinite(safeMaxToolRounds) ? Math.max(0, Math.floor(safeMaxToolRounds)) : null,
+      allowMoreToolCalls: typeof allowMoreToolCalls === "boolean" ? allowMoreToolCalls : null
     },
     outputPreview: previewText(text)
   });
@@ -934,7 +939,8 @@ async function invokeJsonFallbackPlanningRound({
   model,
   round = 0,
   modelInvoker = invokeTextModel,
-  retryReason = ""
+  retryReason = "",
+  maxToolRounds = 4
 }) {
   await api.appendLog(`json-tool-fallback round=${round}${retryReason ? ` reason=${retryReason}` : ""}`);
   await api.emitProgress({
@@ -982,7 +988,9 @@ async function invokeJsonFallbackPlanningRound({
       finishReason: result.finishReason || "",
       pendingToolCalls: [parsed.toolCall],
       text: result.text || "",
-      retryReason
+      retryReason,
+      maxToolRounds,
+      allowMoreToolCalls
     });
     return {
       planningMessages: nextPlanningMessages,
@@ -1004,7 +1012,9 @@ async function invokeJsonFallbackPlanningRound({
     pendingToolCalls: [],
     text: parsed.finalAnswer || result.text || "",
     parseError: parsed.ok ? "" : parsed.error,
-    retryReason
+    retryReason,
+    maxToolRounds,
+    allowMoreToolCalls
   });
 
   return {
@@ -1039,6 +1049,7 @@ export async function invokeToolAwarePlanningRound({ messages, recentMessages, c
       model,
       round,
       modelInvoker,
+      maxToolRounds,
       retryReason: "cached-model-without-tool-calls"
     });
   }
@@ -1071,6 +1082,7 @@ export async function invokeToolAwarePlanningRound({ messages, recentMessages, c
         model,
         round,
         modelInvoker,
+        maxToolRounds,
         retryReason: String(error?.message || error || "native tool call unsupported").slice(0, 180)
       });
     }
@@ -1087,7 +1099,9 @@ export async function invokeToolAwarePlanningRound({ messages, recentMessages, c
     fallback: "",
     finishReason: result.finishReason || "",
     pendingToolCalls,
-    text: result.text || ""
+    text: result.text || "",
+    maxToolRounds,
+    allowMoreToolCalls
   });
   return {
     planningMessages,

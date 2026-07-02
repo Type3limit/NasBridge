@@ -75,6 +75,8 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
           status: "tool-requested",
           model: "openai::deepseek-v4-pro",
           fallback: "json-plan",
+          maxToolRounds: 4,
+          allowMoreToolCalls: true,
           pendingTools: [{
             name: "invoke_video_analyze",
             reason: "需要生成视频摘要"
@@ -160,6 +162,8 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
   assert.match(body, /suggested tools: read_media_summary, invoke_video_analyze/);
   assert.match(body, /suggested reason: 已有媒体派生信息可读取。/);
   assert.match(body, /Agent 计划/);
+  assert.match(body, /limit=4/);
+  assert.match(body, /toolsAllowed=yes/);
   assert.match(body, /tools=invoke_video_analyze/);
   assert.match(body, /子任务: failed 1/);
   assert.match(body, /video\.analyze · botjob_child · failed/);

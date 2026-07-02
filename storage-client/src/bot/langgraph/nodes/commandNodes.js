@@ -210,6 +210,8 @@ function formatAgentPlanSummary(planSummary = {}) {
           plan.status || "",
           plan.fallback ? `fallback=${plan.fallback}` : "",
           plan.model ? `model=${plan.model}` : "",
+          plan.maxToolRounds != null ? `limit=${plan.maxToolRounds}` : "",
+          typeof plan.allowMoreToolCalls === "boolean" ? `toolsAllowed=${plan.allowMoreToolCalls ? "yes" : "no"}` : "",
           plan.retryReason ? `retry=${plan.retryReason}` : "",
           plan.parseError ? `parseError=${plan.parseError}` : "",
           tools
