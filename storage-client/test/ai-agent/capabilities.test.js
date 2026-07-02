@@ -397,7 +397,7 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
         }
       }
     ]
-  }, { maxItems: 24 });
+  }, { maxItems: 28 });
   const report = formatCapabilityReport(descriptors, {
     overall: "warn",
     checks: [
@@ -418,6 +418,9 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(summary, /explain_file_access/);
   assert.match(summary, /read_bot_job_log/);
   assert.match(summary, /organize_files/);
+  assert.match(summary, /invoke_bilibili_downloader/);
+  assert.match(summary, /invoke_torrent_downloader/);
+  assert.match(summary, /invoke_aria2_downloader/);
   assert.match(summary, /Recommended task workflows/);
   assert.match(summary, /media-summary: search_library_files -> read_media_summary -> invoke_video_analyze -> get_bot_job_status/);
   assert.match(summary, /hasAiSummary=false/);
@@ -425,8 +428,9 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(summary, /waitUntilPhase=transcribe\/running/);
   assert.match(summary, /document-read: search_library_files -> diagnose_file_access -> read_text_excerpt -> analyze_file_content/);
   assert.match(summary, /file-access-diagnostic: explain_file_access -> search_library_files -> diagnose_file_access/);
-  assert.match(summary, /download-into-library: search_bilibili_video -> invoke_bilibili_downloader -> invoke_ytdlp_downloader -> search_yyets_show -> download_yyets_episodes/);
+  assert.match(summary, /download-into-library: search_bilibili_video -> invoke_bilibili_downloader -> invoke_ytdlp_downloader -> invoke_torrent_downloader -> invoke_aria2_downloader -> search_yyets_show -> download_yyets_episodes/);
   assert.match(summary, /waitUntilPhase=download\/running/);
+  assert.match(summary, /magnet\/torrent 选 invoke_torrent_downloader/);
   assert.match(summary, /failure-diagnostic: get_bot_job_status -> read_agent_trace -> read_bot_job_log/);
   assert.match(summary, /NAS file access snapshot: status=warn, rootConfigured=true, exists=true, readable=true, writable=false, indexedFiles=42, dirs=7, indexSource=dependency/);
   assert.match(summary, /hiddenDirsExcluded=4, skippedDirs=2/);
@@ -439,6 +443,7 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(report, /media-summary · Summarize NAS video\/audio: search_library_files -> read_media_summary -> invoke_video_analyze -> get_bot_job_status/);
   assert.match(report, /hasAiSummary=false/);
   assert.match(report, /waitUntilPhase=transcribe\/running/);
+  assert.match(report, /download-into-library · Download into NAS library: search_bilibili_video -> invoke_bilibili_downloader -> invoke_ytdlp_downloader -> invoke_torrent_downloader -> invoke_aria2_downloader -> search_yyets_show -> download_yyets_episodes/);
   assert.match(report, /failure-diagnostic · Diagnose bot or agent failure: get_bot_job_status -> read_agent_trace -> read_bot_job_log/);
   assert.match(report, /建议\(Whisper\): 配置 WHISPER_CPP_PATH 和 WHISPER_MODEL_PATH/);
 

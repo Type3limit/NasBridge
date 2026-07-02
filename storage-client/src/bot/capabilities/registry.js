@@ -155,9 +155,12 @@ const PROMPT_CORE_CAPABILITY_IDS = [
   "tag_storage_video",
   "invoke_music_control",
   "search_web",
-  "import_bilibili_video",
+  "search_bilibili_video",
+  "invoke_bilibili_downloader",
   "invoke_ytdlp_downloader",
+  "invoke_torrent_downloader",
   "invoke_aria2_downloader",
+  "search_yyets_show",
   "download_yyets_episodes",
   "organize_files",
   "get_bot_job_status",
@@ -199,8 +202,8 @@ const CAPABILITY_WORKFLOWS = [
   {
     id: "download-into-library",
     title: "Download into NAS library",
-    tools: ["search_bilibili_video", "invoke_bilibili_downloader", "invoke_ytdlp_downloader", "search_yyets_show", "download_yyets_episodes"],
-    guidance: "B 站先 search_bilibili_video 再下载；明确 URL 用对应 downloader；下载类长任务可用 waitUntilPhase=download/running 等到开始下载后返回；剧集资源先 search_yyets_show 再 download_yyets_episodes。"
+    tools: ["search_bilibili_video", "invoke_bilibili_downloader", "invoke_ytdlp_downloader", "invoke_torrent_downloader", "invoke_aria2_downloader", "search_yyets_show", "download_yyets_episodes"],
+    guidance: "B 站先 search_bilibili_video 再 invoke_bilibili_downloader；明确 URL 选 invoke_ytdlp_downloader/aria2，magnet/torrent 选 invoke_torrent_downloader 或 invoke_aria2_downloader；下载类长任务可用 waitUntilPhase=download/running 等到开始下载后返回；剧集资源先 search_yyets_show 再 download_yyets_episodes。"
   },
   {
     id: "failure-diagnostic",
@@ -450,7 +453,7 @@ export function formatCapabilityReport(descriptors = [], health = {}) {
 }
 
 export function formatCapabilityPromptSummary(descriptors = [], health = {}, options = {}) {
-  const maxItems = Math.max(4, Math.min(24, Number(options.maxItems || PROMPT_CORE_CAPABILITY_IDS.length) || PROMPT_CORE_CAPABILITY_IDS.length));
+  const maxItems = Math.max(4, Math.min(28, Number(options.maxItems || PROMPT_CORE_CAPABILITY_IDS.length) || PROMPT_CORE_CAPABILITY_IDS.length));
   const maxWorkflows = Math.max(0, Math.min(8, Number(options.maxWorkflows || 7) || 7));
   const checks = Array.isArray(health.checks) ? health.checks : [];
   const nonOkChecks = checks.filter((check) => check.status && check.status !== "ok");
