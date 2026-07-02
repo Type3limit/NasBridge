@@ -92,6 +92,59 @@ test("agent max tool rounds config keeps a bounded default", () => {
   assert.equal(getMaxToolRounds({ AI_AGENT_MAX_TOOL_ROUNDS: "bad" }), 4);
 });
 
+test("final planning round suppresses extra model-requested tool calls", async () => {
+  const api = createFakeApi();
+  const messages = createToolAwarePlanningMessages({
+    systemPrompt: "You are a NAS assistant.",
+    effectivePrompt: "Find recent videos.",
+    historyMessages: []
+  });
+  const modelCalls = [];
+  const modelInvoker = async (request) => {
+    modelCalls.push(request);
+    return {
+      text: "",
+      model: request.model,
+      finishReason: "tool_calls",
+      toolCalls: [{
+        id: "call_more",
+        name: "search_library_files",
+        input: { kind: "video", limit: 5 }
+      }]
+    };
+  };
+
+  const planned = await invokeToolAwarePlanningRound({
+    messages,
+    recentMessages: [],
+    context: { chat: {}, attachments: [] },
+    api,
+    defaultTextModel: "openai::tool-model",
+    modelSettings: {
+      textModel: "openai::tool-model",
+      lastListedModels: [{ id: "openai::tool-model", modelId: "tool-model", provider: "openai", toolCalls: true }]
+    },
+    modelInvoker,
+    round: 1,
+    maxToolRounds: 1
+  });
+
+  assert.equal(modelCalls[0].toolChoice, "none");
+  assert.deepEqual(modelCalls[0].tools, []);
+  assert.equal(planned.pendingToolCalls.length, 0);
+  assert.match(planned.result.text, /工具调用已经用完/);
+  assert.match(planned.result.text, /search_library_files/);
+  assert.equal(planned.result.suppressedToolCalls[0].name, "search_library_files");
+  assert.equal(api.toolEvents.length, 0);
+  assert.equal(api.agentEvents[0].phase, "plan_next_step");
+  assert.equal(api.agentEvents[0].status, "tool-limit-reached");
+  assert.equal(api.agentEvents[0].detail.pendingTools[0].name, "search_library_files");
+  assert.equal(api.agentEvents[1].phase, "decide_continue_or_finish");
+  assert.equal(api.agentEvents[1].status, "finish");
+  assert.equal(api.agentEvents[1].detail.planStatus, "tool-limit-reached");
+  assert.equal(api.agentEvents[1].detail.pendingToolCount, 0);
+});
+
 test("JSON fallback plans, executes, observes, and finishes through tool messages", async () => {
   const api = createFakeApi();
   const modelSettings = {

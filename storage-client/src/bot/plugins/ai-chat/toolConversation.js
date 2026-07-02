@@ -245,6 +245,18 @@ function isNativeToolUnsupportedError(error) {
   return /tool|function|tool_choice|tools/.test(message) && /support|unsupported|not supported|invalid|unknown|不支持|无效/.test(message);
 }
 
+function buildToolBudgetFinalAnswer(toolCalls = [], maxToolRounds = 0) {
+  const names = [...new Set((Array.isArray(toolCalls) ? toolCalls : [])
+    .map((call) => String(call?.name || call?.function?.name || "").trim())
+    .filter(Boolean))]
+    .slice(0, 6);
+  const limit = Number.isFinite(Number(maxToolRounds)) ? Math.max(0, Math.floor(Number(maxToolRounds))) : 0;
+  return [
+    `本轮最多 ${limit} 轮工具调用已经用完，我不会继续执行新的工具${names.length ? `（${names.join("、")}）` : ""}。`,
+    "我会先基于已经拿到的结果回答；如果还需要继续处理，请回复“继续”，我会在下一轮接着执行。"
+  ].join("\n");
+}
+
 function buildJsonFallbackSystemPrompt(tools = [], allowToolCalls = true, descriptors = []) {
   const toolCatalog = compactToolDefinitionsForJsonFallback(tools, descriptors);
   const examples = allowToolCalls
@@ -1822,18 +1834,31 @@ export async function invokeToolAwarePlanningRound({ messages, recentMessages, c
     }
     throw error;
   }
-  const pendingToolCalls = Array.isArray(result.toolCalls) ? result.toolCalls : [];
+  const modelRequestedToolCalls = Array.isArray(result.toolCalls) ? result.toolCalls : [];
+  const toolBudgetReached = !allowMoreToolCalls && modelRequestedToolCalls.length > 0;
+  const pendingToolCalls = toolBudgetReached ? [] : modelRequestedToolCalls;
+  if (toolBudgetReached) {
+    const existingText = String(result.text || "").trim();
+    const budgetText = buildToolBudgetFinalAnswer(modelRequestedToolCalls, maxToolRounds);
+    result = {
+      ...result,
+      text: existingText ? `${existingText}\n\n${budgetText}` : budgetText,
+      toolCalls: [],
+      suppressedToolCalls: modelRequestedToolCalls,
+      finishReason: result.finishReason || "tool-budget-reached"
+    };
+  }
   if (pendingToolCalls.length) {
     planningMessages.push(createToolCallAssistantMessage(result));
   }
-  const planStatus = pendingToolCalls.length ? "tool-requested" : "final-answer";
+  const planStatus = toolBudgetReached ? "tool-limit-reached" : (pendingToolCalls.length ? "tool-requested" : "final-answer");
   await recordAgentPlanningEvent(api, {
     round,
     status: planStatus,
     model: result.model || model,
     fallback: "",
     finishReason: result.finishReason || "",
-    pendingToolCalls,
+    pendingToolCalls: toolBudgetReached ? modelRequestedToolCalls : pendingToolCalls,
     text: result.text || "",
     maxToolRounds,
     allowMoreToolCalls
