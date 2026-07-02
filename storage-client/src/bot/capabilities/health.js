@@ -366,11 +366,79 @@ async function checkStorage(api = {}) {
   };
 }
 
+function normalizeModelLookupKey(value = "") {
+  return String(value || "")
+    .normalize("NFKC")
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{Letter}\p{Number}]+/gu, "");
+}
+
+function normalizeHealthModel(item = {}) {
+  const id = String(item?.id || "").trim();
+  const parsed = parseModelRef(id);
+  const modelId = String(item?.modelId || parsed.modelId || id).trim();
+  if (!id && !modelId) {
+    return null;
+  }
+  return {
+    id: id || modelId,
+    modelId,
+    name: String(item?.name || modelId || id).trim(),
+    provider: String(item?.provider || parsed.provider || "").trim(),
+    toolCalls: item?.toolCalls === true,
+    vision: item?.vision === true
+  };
+}
+
+function normalizeHealthModelList(models = []) {
+  return (Array.isArray(models) ? models : []).map(normalizeHealthModel).filter(Boolean);
+}
+
+function findModelInCatalog(modelRef = "", models = []) {
+  const raw = String(modelRef || "").trim();
+  if (!raw) {
+    return null;
+  }
+  const parsed = parseModelRef(raw);
+  const key = normalizeModelLookupKey(parsed.modelId || raw);
+  return normalizeHealthModelList(models).find((item) => (
+    item.id === raw
+    || item.modelId === raw
+    || normalizeModelLookupKey(item.modelId) === key
+    || normalizeModelLookupKey(item.name) === key
+  )) || null;
+}
+
+function buildToolCallRoutingCheck(modelSettings = {}, models = [], source = "cache") {
+  const textModel = getEffectiveTextModel(modelSettings);
+  if (!textModel) {
+    return { id: "ai-tool-call", label: "Tool-call 路由", status: "error", detail: "未配置文本模型，无法判断工具调用策略" };
+  }
+  const model = findModelInCatalog(textModel, models);
+  if (!model) {
+    return {
+      id: "ai-tool-call",
+      label: "Tool-call 路由",
+      status: "warn",
+      detail: `无法从${source}判断当前文本模型的 tool-call 能力：${parseModelRef(textModel).modelId || textModel}`
+    };
+  }
+  return {
+    id: "ai-tool-call",
+    label: "Tool-call 路由",
+    status: "ok",
+    detail: model.toolCalls
+      ? `当前文本模型支持原生 tool-call：${model.id}`
+      : `当前文本模型未声明原生 tool-call：${model.id}；已启用 JSON plan fallback`
+  };
+}
+
 async function checkAiModels(modelSettings = {}, signal = null) {
   const textModel = getEffectiveTextModel(modelSettings);
   const visionModel = getEffectiveMultimodalModel(modelSettings);
   if (!textModel) {
-    return { id: "ai-model", label: "AI 模型", status: "error", detail: "未配置文本模型" };
+    return { check: { id: "ai-model", label: "AI 模型", status: "error", detail: "未配置文本模型" }, models: [], source: "/models" };
   }
   try {
     const result = await listAvailableModels({ signal });
@@ -382,18 +450,26 @@ async function checkAiModels(modelSettings = {}, signal = null) {
     const status = modelIds.has(textModel) && (!visionModel || visionModel === textModel || modelIds.has(visionModel)) ? "ok" : "warn";
     const providers = [...new Set((result.models || []).map((item) => item.provider).filter(Boolean))].join(", ");
     return {
-      id: "ai-model",
-      label: "AI 模型",
-      status,
-      detail: `${textStatus}${visionStatus}；models=${(result.models || []).length}${providers ? ` providers=${providers}` : ""}`
+      check: {
+        id: "ai-model",
+        label: "AI 模型",
+        status,
+        detail: `${textStatus}${visionStatus}；models=${(result.models || []).length}${providers ? ` providers=${providers}` : ""}`
+      },
+      models: result.models || [],
+      source: "/models"
     };
   } catch (error) {
     const parsed = parseModelRef(textModel);
     return {
-      id: "ai-model",
-      label: "AI 模型",
-      status: "warn",
-      detail: `无法刷新 /models：${error?.message || error}；当前文本模型=${parsed.modelId || textModel}`
+      check: {
+        id: "ai-model",
+        label: "AI 模型",
+        status: "warn",
+        detail: `无法刷新 /models：${error?.message || error}；当前文本模型=${parsed.modelId || textModel}`
+      },
+      models: modelSettings.lastListedModels || [],
+      source: "最近 /models 缓存"
     };
   }
 }
@@ -402,15 +478,19 @@ async function checkAiModelsLightweight(modelSettings = {}) {
   const textModel = getEffectiveTextModel(modelSettings);
   const visionModel = getEffectiveMultimodalModel(modelSettings);
   if (!textModel) {
-    return { id: "ai-model", label: "AI 模型", status: "error", detail: "未配置文本模型" };
+    return { check: { id: "ai-model", label: "AI 模型", status: "error", detail: "未配置文本模型" }, models: [], source: "最近 /models 缓存" };
   }
   const cachedModels = Array.isArray(modelSettings.lastListedModels) ? modelSettings.lastListedModels : [];
   if (!cachedModels.length) {
     return {
-      id: "ai-model",
-      label: "AI 模型",
-      status: "warn",
-      detail: `未缓存 /models 列表；当前文本模型=${parseModelRef(textModel).modelId || textModel}`
+      check: {
+        id: "ai-model",
+        label: "AI 模型",
+        status: "warn",
+        detail: `未缓存 /models 列表；当前文本模型=${parseModelRef(textModel).modelId || textModel}`
+      },
+      models: [],
+      source: "最近 /models 缓存"
     };
   }
   const modelIds = new Set(cachedModels.map((item) => String(item?.id || "").trim()).filter(Boolean));
@@ -421,10 +501,14 @@ async function checkAiModelsLightweight(modelSettings = {}) {
     ? ""
     : (visionOk ? `；看图模型在缓存中：${visionModel}` : `；看图模型未出现在缓存：${visionModel}`);
   return {
-    id: "ai-model",
-    label: "AI 模型",
-    status: textOk && visionOk ? "ok" : "warn",
-    detail: `${textStatus}${visionStatus}；cachedModels=${cachedModels.length}`
+    check: {
+      id: "ai-model",
+      label: "AI 模型",
+      status: textOk && visionOk ? "ok" : "warn",
+      detail: `${textStatus}${visionStatus}；cachedModels=${cachedModels.length}`
+    },
+    models: cachedModels,
+    source: "最近 /models 缓存"
   };
 }
 
@@ -454,9 +538,11 @@ function computeOverallStatus(checks = []) {
 
 export async function collectAiAgentHealth(api = {}, options = {}) {
   const checks = [];
-  checks.push(options.lightweight === true
+  const aiModelResult = options.lightweight === true
     ? await checkAiModelsLightweight(options.modelSettings || {})
-    : await checkAiModels(options.modelSettings || {}, options.signal || api.signal || null));
+    : await checkAiModels(options.modelSettings || {}, options.signal || api.signal || null);
+  checks.push(aiModelResult.check);
+  checks.push(buildToolCallRoutingCheck(options.modelSettings || {}, aiModelResult.models || [], aiModelResult.source || "模型列表"));
   checks.push(await checkStorage(api));
   checks.push(await checkCommandOrPath("ffmpeg", "ffmpeg", api.dependencies?.ffmpegPath || process.env.FFMPEG_PATH || "ffmpeg"));
   checks.push(await checkCommandOrPath("ffprobe", "ffprobe", api.dependencies?.ffprobePath || process.env.FFPROBE_PATH || "ffprobe"));

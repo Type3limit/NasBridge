@@ -153,6 +153,8 @@ test("health cache uses isolated local dependencies and caches the second snapsh
         assert.equal(first.overall, "ok");
         const checks = new Map(first.checks.map((check) => [check.id, check]));
         assert.equal(checks.get("storage-root").status, "ok");
+        assert.equal(checks.get("ai-tool-call").status, "ok");
+        assert.match(checks.get("ai-tool-call").detail, /JSON plan fallback/);
         assert.equal(checks.get("qq-music-cookie").status, "ok");
         assert.equal(checks.get("bilibili-auth").status, "ok");
         assert.equal(checks.get("bot-queue").status, "ok");
@@ -167,6 +169,13 @@ test("health cache uses isolated local dependencies and caches the second snapsh
 test("capability descriptors expose core NAS tools, risk, and redacted prompt health", () => {
   const descriptors = buildCapabilityDescriptors({
     listBots: () => [
+      {
+        botId: "ai.chat",
+        displayName: "AI Chat",
+        description: "NAS agent",
+        inputSchema: { type: "object", properties: {} },
+        capabilities: ["agent"]
+      },
       {
         botId: "video.analyze",
         displayName: "Video Analyze",
@@ -183,6 +192,7 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.equal(byId.get("analyze_file_content").riskLevel, "medium");
   assert.equal(byId.get("organize_files").riskLevel, "high");
   assert.equal(byId.get("organize_files").requiresConfirmation, true);
+  assert.ok(byId.get("ai.chat").healthChecks.includes("ai-tool-call"));
   assert.deepEqual(byId.get("invoke_music_control").healthChecks, ["music-bridge", "qq-music-cookie"]);
   assert.ok(byId.get("invoke_bilibili_downloader").healthChecks.includes("bilibili-auth"));
 

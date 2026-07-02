@@ -784,6 +784,17 @@ function describeTransportError(prefix, error) {
   return wrapped;
 }
 
+function buildModelRequestFailureHint(detail = "", resolved = {}, requestedModel = "") {
+  const message = String(detail || "").toLowerCase();
+  if (!/(model|模型|not supported|unsupported|not found|does not exist|不存在|无效)/i.test(message)) {
+    return "";
+  }
+  const modelRef = encodeModelRef(resolved.provider, resolved.modelId);
+  const raw = String(requestedModel || "").trim();
+  const rawHint = raw && raw !== modelRef ? `；设置值=${raw}` : "";
+  return `；当前请求模型=${modelRef || resolved.modelId || raw || "unknown"}${rawHint}。请先执行 @ai /models 刷新列表，再用 @ai /model use <序号> 或 @ai /model set provider::modelId 设置真实模型 ID。`;
+}
+
 function normalizeToolDefinitions(tools = []) {
   return tools
     .map((tool) => {
@@ -827,6 +838,7 @@ function extractToolCalls(message = {}) {
 
 async function invokeChatCompletion(body = {}) {
   const { _provider = "", _mode = "text", ...requestBody } = body;
+  const requestedModel = String(requestBody.model || "").trim();
   const resolved = resolveProviderAndModel(requestBody.model || "", _mode);
   requestBody.model = resolved.modelId;
 
@@ -854,7 +866,7 @@ async function invokeChatCompletion(body = {}) {
   }
   if (!response.ok) {
     const detail = String(payload?.error?.message || rawText || `${response.status} ${response.statusText}`).trim();
-    throw new Error(`AI model request failed: ${detail}`);
+    throw new Error(`AI model request failed: ${detail}${buildModelRequestFailureHint(detail, resolved, requestedModel)}`);
   }
   const choice = payload?.choices?.[0]?.message;
   return {

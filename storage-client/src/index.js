@@ -12,6 +12,8 @@ import { createBotRuntime } from "./bot/index.js";
 import { createGlobalMusicPlayer } from "./musicPlayer.js";
 import { createBotJobMessageId } from "./bot/context.js";
 import { scanFiles, safeJoin } from "./fsIndex.js";
+import { getEffectiveMultimodalModel, getEffectiveTextModel, readAiModelSettings } from "./bot/plugins/ai-chat/services/modelSettings.js";
+import { parseModelRef } from "./bot/tools/llmClient.js";
 
 const wrtc = wrtcPkg?.default ?? wrtcPkg;
 const { RTCPeerConnection, RTCSessionDescription, RTCIceCandidate } = wrtc;
@@ -348,6 +350,52 @@ function buildWhisperStartupConfig() {
     modelExists: modelPath ? isExistingFile(modelPath) : false,
     language: String(process.env.WHISPER_LANGUAGE || "").trim() || "auto"
   };
+}
+
+function findStartupModel(modelRef = "", models = []) {
+  const normalized = String(modelRef || "").trim();
+  if (!normalized) {
+    return null;
+  }
+  const parsed = parseModelRef(normalized);
+  return (Array.isArray(models) ? models : []).find((item) => (
+    String(item?.id || "").trim() === normalized
+    || String(item?.modelId || "").trim() === normalized
+    || String(item?.modelId || "").trim() === parsed.modelId
+  )) || null;
+}
+
+function summarizeStartupModel(modelRef = "", models = []) {
+  const parsed = parseModelRef(modelRef);
+  const cached = findStartupModel(modelRef, models);
+  return {
+    ref: String(modelRef || "").trim(),
+    provider: parsed.provider,
+    modelId: parsed.modelId,
+    cached: Boolean(cached),
+    displayName: cached?.name || "",
+    toolCalls: cached ? cached.toolCalls === true : null,
+    vision: cached ? cached.vision === true : null
+  };
+}
+
+async function buildAiStartupConfig() {
+  try {
+    const settings = await readAiModelSettings(botAppDataRoot);
+    const models = Array.isArray(settings.lastListedModels) ? settings.lastListedModels : [];
+    const textModel = getEffectiveTextModel(settings);
+    const multimodalModel = getEffectiveMultimodalModel(settings);
+    return {
+      text: summarizeStartupModel(textModel, models),
+      vision: summarizeStartupModel(multimodalModel, models),
+      cachedModels: models.length,
+      lastListFilter: String(settings.lastListFilter || "all").trim() || "all"
+    };
+  } catch (error) {
+    return {
+      error: String(error?.message || error || "unknown error").trim()
+    };
+  }
 }
 
 function queueChatAppend(relativePath, task) {
@@ -4459,6 +4507,7 @@ async function main() {
     uploadStaleTimeoutMs
   });
   logInfo("[startup] whisper config", buildWhisperStartupConfig());
+  logInfo("[startup] ai config", await buildAiStartupConfig());
 
   if (!fs.existsSync(storageRoot)) {
     logWarn(`[startup] storage root not found, creating: ${storageRoot}`);

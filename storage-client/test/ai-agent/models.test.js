@@ -1,11 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import {
   buildAvailableModelChoices,
   buildUseListedModelText,
   filterModelsByCapability
 } from "../../src/bot/plugins/ai-chat/formatters/models.js";
+import {
+  migrateStoredModelRef,
+  readAiModelSettings
+} from "../../src/bot/plugins/ai-chat/services/modelSettings.js";
 import {
   normalizeModelFilter,
   parseModelDirective
@@ -100,6 +107,26 @@ test("resolveModelReference maps display names to real cached model ids without 
   });
   assert.equal(missing.ok, false);
   assert.match(missing.reason, /没有找到匹配模型/);
+});
+
+test("stored model settings migrate display names to executable model refs", async () => {
+  assert.equal(migrateStoredModelRef("DeepSeek V4 Pro", cachedModels), "openai::deepseek-v4-pro");
+  assert.equal(migrateStoredModelRef("deepseek-v4-pro", cachedModels), "openai::deepseek-v4-pro");
+  assert.equal(migrateStoredModelRef("openai::gpt-4.1-2025-04-14", cachedModels), "openai::gpt-4.1-2025-04-14");
+
+  const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-model-settings-"));
+  try {
+    await fs.writeFile(path.join(appDataRoot, "ai-model-settings.json"), JSON.stringify({
+      textModel: "DeepSeek V4 Pro",
+      multimodalModel: "GPT 4.1",
+      lastListedModels: cachedModels
+    }), "utf8");
+    const settings = await readAiModelSettings(appDataRoot);
+    assert.equal(settings.textModel, "openai::deepseek-v4-pro");
+    assert.equal(settings.multimodalModel, "openai::gpt-4.1-2025-04-14");
+  } finally {
+    await fs.rm(appDataRoot, { recursive: true, force: true });
+  }
 });
 
 test("model choices use list indexes while preserving actual model ids in state text", () => {

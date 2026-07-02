@@ -25,7 +25,7 @@ const BOT_EXECUTION_MODES = {
 };
 
 const BOT_HEALTH_CHECKS = {
-  "ai.chat": ["ai-model", "storage-root"],
+  "ai.chat": ["ai-model", "ai-tool-call", "storage-root"],
   "ai.multimodal-image": ["ai-model", "storage-root"],
   "music.control": ["music-bridge", "qq-music-cookie"],
   "video.analyze": ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root"],
