@@ -51,6 +51,8 @@ const TOOL_RISK_LEVELS = {
   search_bilibili_video: "low",
   search_web: "low",
   read_chat_history: "low",
+  get_bot_job_status: "low",
+  read_agent_trace: "low",
   describe_image: "low",
   search_yyets_show: "low",
   download_yyets_episodes: "medium"
@@ -71,6 +73,8 @@ const TOOL_HEALTH_CHECKS = {
   search_bilibili_video: ["ai-model"],
   search_web: ["ai-model"],
   read_chat_history: ["storage-root"],
+  get_bot_job_status: ["storage-root"],
+  read_agent_trace: ["storage-root"],
   describe_image: ["ai-model", "storage-root"],
   search_yyets_show: ["ai-model"],
   download_yyets_episodes: ["storage-root"]

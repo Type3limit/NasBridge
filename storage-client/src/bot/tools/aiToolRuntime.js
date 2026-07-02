@@ -6,6 +6,7 @@ import { invokeMultimodalModel, invokeTextModel } from "./llmClient.js";
 import { fetchWebPageSummary, getSourcePreferenceLabel, normalizeSourcePreference, searchWeb } from "./httpFetch.js";
 import { buildRealtimeContextText } from "./realtimeContext.js";
 import { searchYYeTsShows, getYYeTsResource, extractEpisodeMagnets, sanitizeShowName } from "./yyetsApi.js";
+import { MAX_AGENT_TRACE_EVENTS, MAX_JOB_LOG_BYTES, MAX_JOB_STATUS_LIMIT, buildAgentTraceResult, buildBotJobStatusResult } from "./botJobStatus.js";
 import {
   MAX_LIBRARY_DETAIL_FILES,
   MAX_LIBRARY_LIST_LIMIT,
@@ -452,6 +453,33 @@ export function getAiToolDefinitions() {
       }
     },
     {
+      name: "get_bot_job_status",
+      description: "读取 bot job 的真实状态、进度、错误、最近日志和可选 agent trace。用户问“刚才任务怎么样/为什么失败/jobId 状态”时调用；未传 jobId 会返回最近任务。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          jobId: { type: "string", description: "单个 bot job id" },
+          jobIds: { type: "array", items: { type: "string" }, maxItems: MAX_JOB_STATUS_LIMIT },
+          limit: { type: "integer", minimum: 1, maximum: MAX_JOB_STATUS_LIMIT, description: "未指定 jobId 时返回最近几个任务" },
+          includeLog: { type: "boolean", description: "是否返回尾部日志，默认 false" },
+          logMaxBytes: { type: "integer", minimum: 1024, maximum: MAX_JOB_LOG_BYTES },
+          includeTrace: { type: "boolean", description: "是否同时读取 ai.chat trace，默认 false" },
+          maxTraceEvents: { type: "integer", minimum: 1, maximum: MAX_AGENT_TRACE_EVENTS }
+        }
+      }
+    },
+    {
+      name: "read_agent_trace",
+      description: "读取 ai.chat LangGraph 执行 trace，包括 node/tool 事件和执行摘要。用户问 AI 中途失败在哪一步、调用了哪些工具、上次执行路径时调用。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          jobId: { type: "string", description: "ai.chat job id；不传则读取最近一次 ai.chat trace" },
+          maxEvents: { type: "integer", minimum: 1, maximum: MAX_AGENT_TRACE_EVENTS }
+        }
+      }
+    },
+    {
       name: "describe_image",
       description: "读取当前消息附件或最近聊天中的图片，并调用多模态模型分析。",
       inputSchema: {
@@ -721,6 +749,16 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
         text: compactMessageText(message)
       }))
     });
+  }
+
+  if (name === "get_bot_job_status") {
+    await api.emitProgress({ phase: "tool-get-bot-job-status", label: "读取 bot 任务状态", percent: 42 });
+    return safeJson(await buildBotJobStatusResult(api, input));
+  }
+
+  if (name === "read_agent_trace") {
+    await api.emitProgress({ phase: "tool-read-agent-trace", label: "读取 AI agent trace", percent: 42 });
+    return safeJson(await buildAgentTraceResult(api, input));
   }
 
   if (name === "describe_image") {

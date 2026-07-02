@@ -28,6 +28,20 @@ export function getAiToolProgress(toolName = "", round = 0) {
       percent: 40 + offset
     };
   }
+  if (normalized === "get_bot_job_status") {
+    return {
+      phase: "tool-get-bot-job-status",
+      label: safeRound > 0 ? `继续读取任务状态（第 ${safeRound + 1} 轮）` : "读取 bot 任务状态",
+      percent: 42 + offset
+    };
+  }
+  if (normalized === "read_agent_trace") {
+    return {
+      phase: "tool-read-agent-trace",
+      label: safeRound > 0 ? `继续读取 agent trace（第 ${safeRound + 1} 轮）` : "读取 AI agent trace",
+      percent: 42 + offset
+    };
+  }
   if (normalized === "describe_image") {
     return {
       phase: "tool-describe-image",

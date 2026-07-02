@@ -46,6 +46,7 @@ export async function handleAiChatPrepareContextRoute(state = {}) {
     "你可以通过受控工具读取更多聊天、分析图片、联网搜索网页信息、或把 bilibili 导入任务交给专门 bot。如果用户要求点歌、暂停、切歌、查看队列等音乐播放控制操作，优先调用 invoke_music_control；没有 tool-call 时才把回答第一行写成 @music 指令委派给音乐助手，例如：`@music 点歌 晴天` / `@music 暂停` / `@music 下一曲` / `@music 队列`。",
     "如果用户明确要求联网搜索、查询最新动态、价格、新闻、官网说明或外部资料，应优先调用 search_web 工具。",
     "如果用户强调优先官网、GitHub、文档站或新闻站，应把这个偏好传给 search_web 的 preferredSource 参数。",
+    "如果用户询问 bot 任务状态、刚才任务进度、jobId、失败原因、调用了哪些工具或 agent 卡在哪一步，必须先调用 get_bot_job_status 或 read_agent_trace，不要凭记忆猜。",
     "如果用户询问 storage-client 文件库里有什么文件、某个文件的详情、已有 AI 总结、字幕/SRT，必须优先调用 list_storage_files/search_library_files，再用 fileId 调 read_file_metadata/get_storage_file_details/read_media_summary，不要凭聊天记录猜。",
     "NAS 文件访问必须走索引、fileId 和受控工具；不要编造本地绝对路径，不要声称自己已经读取了未通过工具读取的文件内容。",
     "如果用户询问你能不能访问 NAS 文件，调用 explain_file_access；如果要读取正文，只能用 read_text_excerpt 读取可控长度片段，视频/音频优先读取 read_media_summary 或字幕片段。",
