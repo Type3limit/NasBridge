@@ -148,6 +148,52 @@ function normalizeSearchTermList(value, fallback = "") {
   return fallback ? [String(fallback || "").trim()].filter(Boolean) : [];
 }
 
+function buildMusicControlPrompt(input = {}) {
+  const explicitCommand = String(input.command || input.prompt || "").trim();
+  if (explicitCommand) {
+    return explicitCommand;
+  }
+  const action = String(input.action || "status").trim().toLowerCase();
+  const keyword = String(input.keyword || input.query || input.song || "").trim();
+  const source = String(input.source || "").trim();
+  const sourceSuffix = source ? ` --source=${source}` : "";
+  if (action === "search") {
+    if (!keyword) {
+      throw new Error("keyword is required for music search");
+    }
+    return `搜歌 ${keyword}${sourceSuffix}`;
+  }
+  if (action === "enqueue" || action === "play-song" || action === "add") {
+    if (!keyword) {
+      throw new Error("keyword is required for music enqueue");
+    }
+    return `点歌 ${keyword}${sourceSuffix}`;
+  }
+  if (action === "pick" || action === "select") {
+    const index = Math.max(1, Number(input.index || 1) || 1);
+    return `选 ${index}`;
+  }
+  if (action === "source" || action === "set-source") {
+    if (!source) {
+      throw new Error("source is required for music source switch");
+    }
+    return `音源 ${source}`;
+  }
+  const actionMap = {
+    status: "状态",
+    queue: "队列",
+    play: "继续",
+    resume: "继续",
+    pause: "暂停",
+    stop: "暂停",
+    next: "下一首",
+    skip: "下一首",
+    previous: "上一首",
+    prev: "上一首"
+  };
+  return actionMap[action] || action;
+}
+
 function buildSearchResultDigest(results = []) {
   return (Array.isArray(results) ? results : []).map((item, index) => ({
     index: index + 1,
@@ -546,6 +592,41 @@ export function getAiToolDefinitions() {
       }
     },
     {
+      name: "tag_storage_video",
+      description: "委派 video.tag 为 NAS 中的视频生成并写入 AI 标签。单文件可直接执行；批量打标签必须先向用户确认，再传 confirmed=true。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          fileId: { type: "string", description: "文件 ID，优先使用 search_library_files 返回的 fileId" },
+          path: { type: "string", description: "相对路径（与 fileId 二选一）" },
+          batch: { type: "boolean", description: "是否批量处理所有视频文件" },
+          confirmed: { type: "boolean", description: "批量写标签前必须由用户确认" },
+          force: { type: "boolean", description: "是否覆盖已有标签" },
+          aiSummary: { type: "string", description: "已有摘要，可作为打标签输入" },
+          waitForCompletion: { type: "boolean", description: "是否等待任务完成，默认 false" },
+          timeoutSeconds: { type: "integer", minimum: 5, maximum: 600 }
+        }
+      }
+    },
+    {
+      name: "invoke_music_control",
+      description: "委派 music.control 控制共享音乐播放器，支持状态、队列、搜歌、点歌、选择候选、暂停、继续、切歌和切换音源。默认等待短任务完成。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["status", "queue", "search", "enqueue", "pick", "play", "pause", "next", "previous", "source"] },
+          command: { type: "string", description: "直接传给音乐助手的自然语言指令，例如 点歌 晴天" },
+          keyword: { type: "string", description: "搜歌/点歌关键词" },
+          query: { type: "string", description: "keyword 的别名" },
+          song: { type: "string", description: "keyword 的别名" },
+          source: { type: "string", description: "音源，例如 qq、netease、bilibili" },
+          index: { type: "integer", minimum: 1, description: "选择最近搜索结果中的第几首" },
+          waitForCompletion: { type: "boolean", description: "是否等待完成，默认 true" },
+          timeoutSeconds: { type: "integer", minimum: 5, maximum: 120 }
+        }
+      }
+    },
+    {
       name: "import_bilibili_video",
       description: "把一个或多个 bilibili 链接/BV 号交给 bilibili.downloader 批量下载并入库。需要同时下载多个视频时，把所有 source 放入 sources 数组一次调用，不要多次单独调用。通常应先用 search_bilibili_video 找到具体视频链接，再调用这个工具。",
       inputSchema: {
@@ -805,6 +886,150 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
         subtitlePath: file.subtitlePath || ""
       },
       message: "已提交视频转录与 AI 总结任务，完成后会写入文件元数据。"
+    });
+  }
+
+  if (name === "tag_storage_video") {
+    await api.emitProgress({ phase: "tool-tag-storage-video", label: "准备视频打标签任务", percent: 46 });
+    if (input.batch === true) {
+      if (input.confirmed !== true) {
+        throw new Error("批量打标签会写入多个文件的 metadata，需要先向用户确认影响范围，再以 confirmed=true 调用。");
+      }
+      const delegatedJob = await api.invokeBot({
+        botId: "video.tag",
+        trigger: {
+          type: "tool-call",
+          rawText: "batch tag storage videos",
+          parsedArgs: {
+            batch: true,
+            force: input.force === true
+          }
+        },
+        options: {
+          delegatedBy: api.botId,
+          parentJobId: api.jobId,
+          toolName: name
+        }
+      });
+      return safeJson({
+        delegated: true,
+        botId: "video.tag",
+        jobId: delegatedJob.jobId || "",
+        status: delegatedJob.status || "queued",
+        batch: true,
+        message: "已提交批量视频打标签任务。"
+      });
+    }
+
+    const identifier = String(input.fileId || input.path || input.filePath || "").trim();
+    if (!identifier) {
+      throw new Error("fileId or path is required");
+    }
+    const snapshot = await loadLibrarySnapshot(api);
+    const file = resolveLibraryFile(snapshot.files, identifier);
+    if (!file) {
+      throw new Error(`文件未找到: ${identifier}`);
+    }
+    const mimeType = String(file.mimeType || "").toLowerCase();
+    if (!mimeType.startsWith("video/") && !mimeType.startsWith("audio/")) {
+      throw new Error(`tag_storage_video 仅支持视频/音频文件，当前 MIME: ${file.mimeType}`);
+    }
+
+    const delegatedJob = await api.invokeBot({
+      botId: "video.tag",
+      trigger: {
+        type: "tool-call",
+        rawText: file.relativePath,
+        parsedArgs: {
+          fileId: file.id,
+          force: input.force === true,
+          aiSummary: String(input.aiSummary || file.aiSummary || "")
+        }
+      },
+      options: {
+        delegatedBy: api.botId,
+        parentJobId: api.jobId,
+        toolName: name
+      }
+    });
+
+    if (input.waitForCompletion === true) {
+      await api.emitProgress({ phase: "tool-tag-storage-video", label: "等待视频打标签任务完成", percent: 58 });
+      const completedJob = await waitForDelegatedBotJob(api, delegatedJob.jobId, {
+        timeoutSeconds: input.timeoutSeconds || 600
+      });
+      return safeJson({
+        status: completedJob.status,
+        jobId: completedJob.jobId,
+        file: {
+          fileId: file.id,
+          path: file.relativePath,
+          name: file.name,
+          mimeType: file.mimeType
+        },
+        result: completedJob.result || {},
+        error: completedJob.error || null
+      });
+    }
+
+    return safeJson({
+      delegated: true,
+      botId: "video.tag",
+      jobId: delegatedJob.jobId || "",
+      status: delegatedJob.status || "queued",
+      file: {
+        fileId: file.id,
+        path: file.relativePath,
+        name: file.name,
+        mimeType: file.mimeType
+      },
+      message: "已提交视频打标签任务，完成后会写入文件 metadata。"
+    });
+  }
+
+  if (name === "invoke_music_control") {
+    await api.emitProgress({ phase: "tool-invoke-music-control", label: "委派音乐助手", percent: 46 });
+    const prompt = buildMusicControlPrompt(input);
+    if (!prompt) {
+      throw new Error("music command is required");
+    }
+    const delegatedJob = await api.invokeBot({
+      botId: "music.control",
+      trigger: {
+        type: "tool-call",
+        rawText: prompt,
+        parsedArgs: {
+          prompt
+        }
+      },
+      options: {
+        delegatedBy: api.botId,
+        parentJobId: api.jobId,
+        toolName: name
+      }
+    });
+
+    if (input.waitForCompletion !== false) {
+      await api.emitProgress({ phase: "tool-invoke-music-control", label: "等待音乐助手返回", percent: 58 });
+      const completedJob = await waitForDelegatedBotJob(api, delegatedJob.jobId, {
+        timeoutSeconds: input.timeoutSeconds || 45,
+        pollIntervalMs: 700
+      });
+      return safeJson({
+        status: completedJob.status,
+        jobId: completedJob.jobId,
+        prompt,
+        result: completedJob.result || {},
+        error: completedJob.error || null
+      });
+    }
+
+    return safeJson({
+      delegated: true,
+      botId: "music.control",
+      jobId: delegatedJob.jobId || "",
+      status: delegatedJob.status || "queued",
+      prompt
     });
   }
 

@@ -91,6 +91,20 @@ export function getAiToolProgress(toolName = "", round = 0) {
       percent: 48 + offset
     };
   }
+  if (normalized === "tag_storage_video") {
+    return {
+      phase: "tool-tag-storage-video",
+      label: safeRound > 0 ? `继续提交视频打标签任务（第 ${safeRound + 1} 轮）` : "提交视频打标签任务",
+      percent: 48 + offset
+    };
+  }
+  if (normalized === "invoke_music_control") {
+    return {
+      phase: "tool-invoke-music-control",
+      label: safeRound > 0 ? `继续委派音乐助手（第 ${safeRound + 1} 轮）` : "委派音乐助手",
+      percent: 46 + offset
+    };
+  }
   if (normalized === "import_bilibili_video") {
     return {
       phase: "tool-import-bilibili-video",
