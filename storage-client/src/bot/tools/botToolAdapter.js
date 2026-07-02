@@ -30,6 +30,7 @@ const DOWNLOAD_BOT_TOOL_CONFIGS = {
         page: { type: "integer", minimum: 1 },
         quality: { type: "string", description: "例如 1080p、720p、4k、80、64" },
         waitForCompletion: { type: "boolean", description: "是否等待子任务完成，默认 false" },
+        waitUntilPhase: { type: "string", description: "等待子任务 status/phase 到达指定值后返回，例如 running、download；不要求任务完成" },
         timeoutSeconds: { type: "integer", minimum: 5, maximum: 600 }
       }
     }
@@ -49,6 +50,7 @@ const DOWNLOAD_BOT_TOOL_CONFIGS = {
         targetFolder: { type: "string", description: "目标目录，相对于 storage root" },
         quality: { type: "string", description: "例如 1080p、720p、最高" },
         waitForCompletion: { type: "boolean", description: "是否等待子任务完成，默认 false" },
+        waitUntilPhase: { type: "string", description: "等待子任务 status/phase 到达指定值后返回，例如 running、download；不要求任务完成" },
         timeoutSeconds: { type: "integer", minimum: 5, maximum: 600 }
       }
     }
@@ -68,6 +70,7 @@ const DOWNLOAD_BOT_TOOL_CONFIGS = {
         url: { type: "string", description: "source 的别名" },
         targetFolder: { type: "string", description: "目标目录，相对于 storage root" },
         waitForCompletion: { type: "boolean", description: "是否等待子任务完成，默认 false" },
+        waitUntilPhase: { type: "string", description: "等待子任务 status/phase 到达指定值后返回，例如 running、download；不要求任务完成" },
         timeoutSeconds: { type: "integer", minimum: 5, maximum: 600 }
       }
     }
@@ -88,6 +91,7 @@ const DOWNLOAD_BOT_TOOL_CONFIGS = {
         ed2k: { type: "string", description: "source 的别名" },
         targetFolder: { type: "string", description: "目标目录，相对于 storage root" },
         waitForCompletion: { type: "boolean", description: "是否等待子任务完成，默认 false" },
+        waitUntilPhase: { type: "string", description: "等待子任务 status/phase 到达指定值后返回，例如 running、download；不要求任务完成" },
         timeoutSeconds: { type: "integer", minimum: 5, maximum: 600 }
       }
     }
@@ -104,6 +108,10 @@ function clampInteger(value, min, max) {
 
 function normalizeString(value = "") {
   return String(value || "").trim();
+}
+
+function normalizeWaitUntilPhase(value = "") {
+  return normalizeString(value).slice(0, 80);
 }
 
 export function normalizeTargetFolder(value = "") {
@@ -143,6 +151,7 @@ function isActionWithoutSourceAllowed(config = {}, input = {}) {
 function buildParsedArgs(config = {}, input = {}, source = "") {
   const parsedArgs = { ...input };
   delete parsedArgs.waitForCompletion;
+  delete parsedArgs.waitUntilPhase;
   delete parsedArgs.timeoutSeconds;
   if (source) {
     parsedArgs.source = source;
@@ -203,6 +212,114 @@ async function waitForDelegatedJob(api = {}, jobId = "", options = {}) {
   }
 }
 
+function buildDelegatedJobSnapshot(job = {}) {
+  return {
+    jobId: normalizeString(job?.jobId),
+    botId: normalizeString(job?.botId),
+    status: normalizeString(job?.status),
+    phase: normalizeString(job?.phase),
+    progress: job?.progress && typeof job.progress === "object"
+      ? {
+        label: normalizeString(job.progress.label),
+        percent: Number.isFinite(Number(job.progress.percent)) ? Number(job.progress.percent) : null
+      }
+      : null,
+    error: job?.error || null
+  };
+}
+
+function jobMatchesWaitUntilPhase(job = {}, waitUntilPhase = "") {
+  const target = normalizeWaitUntilPhase(waitUntilPhase).toLowerCase();
+  if (!target) {
+    return false;
+  }
+  return [
+    job?.status,
+    job?.phase,
+    job?.progress?.phase,
+    job?.progress?.label
+  ].some((value) => normalizeString(value).toLowerCase() === target);
+}
+
+async function waitForDelegatedJobPhase(api = {}, jobId = "", options = {}) {
+  const waitUntilPhase = normalizeWaitUntilPhase(options.waitUntilPhase);
+  if (!waitUntilPhase) {
+    return null;
+  }
+  if (!jobId) {
+    throw new Error("delegated bot did not return a jobId");
+  }
+  if (typeof api.getJob !== "function") {
+    throw new Error("api.getJob is unavailable; cannot wait for delegated job phase");
+  }
+  const timeoutMs = clampInteger(options.timeoutSeconds || DEFAULT_WAIT_TIMEOUT_SECONDS, 5, 600) * 1000;
+  const pollIntervalMs = clampInteger(options.pollIntervalMs || DEFAULT_POLL_INTERVAL_MS, 500, 10_000);
+  const deadline = Date.now() + timeoutMs;
+  let lastJob = null;
+  while (true) {
+    api.throwIfCancelled?.();
+    const job = await api.getJob(jobId);
+    if (!job) {
+      throw new Error(`delegated job not found: ${jobId}`);
+    }
+    lastJob = job;
+    const reached = jobMatchesWaitUntilPhase(job, waitUntilPhase);
+    const terminal = ["succeeded", "failed", "cancelled", "expired"].includes(normalizeString(job.status));
+    if (reached || terminal) {
+      return {
+        targetPhase: waitUntilPhase,
+        reached,
+        timedOut: false,
+        terminal,
+        job
+      };
+    }
+    if (Date.now() > deadline) {
+      return {
+        targetPhase: waitUntilPhase,
+        reached: false,
+        timedOut: true,
+        terminal: false,
+        job: lastJob
+      };
+    }
+    await new Promise((resolve, reject) => {
+      let timer = null;
+      const cleanup = () => {
+        clearTimeout(timer);
+        api.signal?.removeEventListener?.("abort", onAbort);
+      };
+      const finish = () => {
+        cleanup();
+        resolve();
+      };
+      const onAbort = () => {
+        cleanup();
+        reject(Object.assign(new Error("job cancelled"), { name: "AbortError" }));
+      };
+      timer = setTimeout(finish, pollIntervalMs);
+      if (api.signal?.aborted) {
+        onAbort();
+        return;
+      }
+      api.signal?.addEventListener?.("abort", onAbort, { once: true });
+    });
+  }
+}
+
+function buildWaitUntilPhaseFields(waitResult = null) {
+  if (!waitResult) {
+    return {};
+  }
+  return {
+    waitUntilPhase: waitResult.targetPhase,
+    phaseReached: waitResult.reached === true,
+    waitTimedOut: waitResult.timedOut === true,
+    terminalBeforePhase: waitResult.terminal === true && waitResult.reached !== true,
+    job: buildDelegatedJobSnapshot(waitResult.job || {})
+  };
+}
+
 export function getDelegatedBotToolDefinitions() {
   return Object.values(DOWNLOAD_BOT_TOOL_CONFIGS).map((config) => ({
     name: config.name,
@@ -215,9 +332,10 @@ export function isDelegatedBotToolName(name = "") {
   return Boolean(DOWNLOAD_BOT_TOOL_CONFIGS[normalizeString(name)]);
 }
 
-export function buildDelegatedJobFollowup({ jobId = "", botId = "", waitForCompletion = false } = {}) {
+export function buildDelegatedJobFollowup({ jobId = "", botId = "", waitForCompletion = false, waitUntilPhase = "" } = {}) {
   const normalizedJobId = normalizeString(jobId);
   const normalizedBotId = normalizeString(botId);
+  const normalizedWaitUntilPhase = normalizeWaitUntilPhase(waitUntilPhase);
   if (!normalizedJobId) {
     return {
       logHint: "delegated job did not return a jobId",
@@ -235,7 +353,9 @@ export function buildDelegatedJobFollowup({ jobId = "", botId = "", waitForCompl
     logHint: `get_bot_job_status jobId=${normalizedJobId}；用户命令：${statusCommand} / ${logCommand} / ${traceCommand}`,
     nextAction: waitForCompletion
       ? "waited-for-completion"
-      : `把 jobId=${normalizedJobId} 告诉用户；用户追问进度时调用 get_bot_job_status，或让用户运行 ${statusCommand}。`,
+      : (normalizedWaitUntilPhase
+        ? `waited-until-phase:${normalizedWaitUntilPhase}`
+        : `把 jobId=${normalizedJobId} 告诉用户；用户追问进度时调用 get_bot_job_status，或让用户运行 ${statusCommand}。`),
     tracking: {
       available: true,
       botId: normalizedBotId,
@@ -281,8 +401,10 @@ export async function executeDelegatedBotToolCall(toolName = "", api = {}, input
     }
   });
   const jobId = normalizeString(delegatedJob?.jobId);
+  const waitUntilPhase = normalizeWaitUntilPhase(input.waitUntilPhase);
   const base = {
     status: normalizeString(delegatedJob?.status) || "queued",
+    phase: normalizeString(delegatedJob?.phase),
     delegated: true,
     botId: config.botId,
     jobId,
@@ -295,7 +417,8 @@ export async function executeDelegatedBotToolCall(toolName = "", api = {}, input
     ...buildDelegatedJobFollowup({
       jobId,
       botId: config.botId,
-      waitForCompletion: input.waitForCompletion === true
+      waitForCompletion: input.waitForCompletion === true,
+      waitUntilPhase
     })
   };
 
@@ -308,6 +431,19 @@ export async function executeDelegatedBotToolCall(toolName = "", api = {}, input
       status: completedJob.status || base.status,
       result: completedJob.result || {},
       error: completedJob.error || null
+    };
+  }
+
+  if (waitUntilPhase) {
+    const waitResult = await waitForDelegatedJobPhase(api, jobId, {
+      waitUntilPhase,
+      timeoutSeconds: input.timeoutSeconds
+    });
+    return {
+      ...base,
+      status: normalizeString(waitResult?.job?.status) || base.status,
+      phase: normalizeString(waitResult?.job?.phase) || base.phase,
+      ...buildWaitUntilPhaseFields(waitResult)
     };
   }
 

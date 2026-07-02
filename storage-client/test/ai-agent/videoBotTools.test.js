@@ -95,6 +95,40 @@ test("invoke_video_analyze delegates to video.analyze and returns a job id", asy
   });
 });
 
+test("invoke_video_analyze can wait until a delegated job phase", async () => {
+  const api = createFakeApi({
+    getJob: async (jobId) => ({
+      jobId,
+      botId: "video.analyze",
+      status: "running",
+      phase: "transcribe",
+      progress: { label: "Whisper 转字幕", percent: 35 }
+    })
+  });
+  const raw = await executeAiToolCall(
+    {
+      name: "invoke_video_analyze",
+      input: {
+        path: "Videos/demo.mp4",
+        waitUntilPhase: "transcribe",
+        timeoutSeconds: 5
+      }
+    },
+    { chat: {}, attachments: [] },
+    api
+  );
+  const result = JSON.parse(raw);
+
+  assert.equal(result.delegated, true);
+  assert.equal(result.status, "running");
+  assert.equal(result.phase, "transcribe");
+  assert.equal(result.waitUntilPhase, "transcribe");
+  assert.equal(result.phaseReached, true);
+  assert.equal(result.nextAction, "waited-until-phase:transcribe");
+  assert.equal(result.job.progress.percent, 35);
+  assert.equal(result.tracking.statusCommand, "@ai /job botjob_child");
+});
+
 test("invoke_video_tag delegates to video.tag with summary context", async () => {
   const api = createFakeApi();
   const raw = await executeAiToolCall(

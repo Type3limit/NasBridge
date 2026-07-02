@@ -38,6 +38,7 @@ const MAX_WEB_SEARCH_RESULTS = 6;
 const MAX_WEB_SEARCH_QUERIES = 3;
 const MAX_WEB_PAGE_SUMMARIES = 3;
 const MAX_BILIBILI_SEARCH_RESULTS = 5;
+const TERMINAL_JOB_STATUSES = new Set(["succeeded", "failed", "cancelled", "expired"]);
 
 function formatStepLabel(prefix = "", current = 1, total = 1, suffix = "") {
   const safeCurrent = Math.max(1, Number(current) || 1);
@@ -53,6 +54,39 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, Math.floor(numeric)));
 }
 
+function normalizeWaitUntilPhase(value = "") {
+  return String(value || "").trim().slice(0, 80);
+}
+
+function buildDelegatedJobSnapshot(job = {}) {
+  return {
+    jobId: String(job?.jobId || "").trim(),
+    botId: String(job?.botId || "").trim(),
+    status: String(job?.status || "").trim(),
+    phase: String(job?.phase || "").trim(),
+    progress: job?.progress && typeof job.progress === "object"
+      ? {
+        label: String(job.progress.label || "").trim(),
+        percent: Number.isFinite(Number(job.progress.percent)) ? Number(job.progress.percent) : null
+      }
+      : null,
+    error: job?.error || null
+  };
+}
+
+function jobMatchesWaitUntilPhase(job = {}, waitUntilPhase = "") {
+  const target = normalizeWaitUntilPhase(waitUntilPhase).toLowerCase();
+  if (!target) {
+    return false;
+  }
+  return [
+    job?.status,
+    job?.phase,
+    job?.progress?.phase,
+    job?.progress?.label
+  ].some((value) => String(value || "").trim().toLowerCase() === target);
+}
+
 async function waitForDelegatedBotJob(api, jobId, options = {}) {
   const timeoutMs = clamp(options.timeoutSeconds || 600, 5, 600) * 1000;
   const pollIntervalMs = clamp(options.pollIntervalMs || 3000, 500, 10_000);
@@ -66,8 +100,70 @@ async function waitForDelegatedBotJob(api, jobId, options = {}) {
     if (!job) {
       throw new Error(`任务不存在: ${jobId}`);
     }
-    if (["succeeded", "failed", "cancelled", "expired"].includes(job.status)) {
+    if (TERMINAL_JOB_STATUSES.has(job.status)) {
       return job;
+    }
+    await new Promise((resolve, reject) => {
+      let onAbort = null;
+      const cleanup = () => {
+        clearTimeout(timer);
+        if (api.signal && onAbort) {
+          api.signal.removeEventListener("abort", onAbort);
+        }
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        resolve();
+      }, pollIntervalMs);
+      if (api.signal) {
+        onAbort = () => {
+          cleanup();
+          reject(Object.assign(new Error("job cancelled"), { name: "AbortError" }));
+        };
+        api.signal.addEventListener("abort", onAbort, { once: true });
+      }
+    });
+  }
+}
+
+async function waitForDelegatedBotJobPhase(api, jobId, options = {}) {
+  const waitUntilPhase = normalizeWaitUntilPhase(options.waitUntilPhase);
+  if (!waitUntilPhase) {
+    return null;
+  }
+  if (typeof api.getJob !== "function") {
+    throw new Error("api.getJob is unavailable; cannot wait for delegated job phase");
+  }
+  const timeoutMs = clamp(options.timeoutSeconds || 120, 5, 600) * 1000;
+  const pollIntervalMs = clamp(options.pollIntervalMs || 1500, 500, 10_000);
+  const deadline = Date.now() + timeoutMs;
+  let lastJob = null;
+  while (true) {
+    api.throwIfCancelled?.();
+    const job = await api.getJob(jobId);
+    if (!job) {
+      throw new Error(`任务不存在: ${jobId}`);
+    }
+    lastJob = job;
+    const reached = jobMatchesWaitUntilPhase(job, waitUntilPhase);
+    const terminal = TERMINAL_JOB_STATUSES.has(String(job.status || ""));
+    if (reached || terminal) {
+      return {
+        targetPhase: waitUntilPhase,
+        reached,
+        timedOut: false,
+        terminal,
+        job
+      };
+    }
+    if (Date.now() > deadline) {
+      return {
+        targetPhase: waitUntilPhase,
+        reached: false,
+        timedOut: true,
+        terminal: false,
+        job: lastJob
+      };
     }
     await new Promise((resolve, reject) => {
       let onAbort = null;
@@ -122,12 +218,44 @@ function buildDelegatedJobFields(botId = "", delegatedJob = {}, options = {}) {
     botId,
     jobId,
     status: String(delegatedJob?.status || "queued").trim() || "queued",
+    phase: String(delegatedJob?.phase || "").trim(),
     ...buildDelegatedJobFollowup({
       jobId,
       botId,
-      waitForCompletion: options.waitForCompletion === true
+      waitForCompletion: options.waitForCompletion === true,
+      waitUntilPhase: normalizeWaitUntilPhase(options.waitUntilPhase)
     })
   };
+}
+
+function buildWaitUntilPhaseFields(waitResult = null) {
+  if (!waitResult) {
+    return {};
+  }
+  return {
+    waitUntilPhase: waitResult.targetPhase,
+    phaseReached: waitResult.reached === true,
+    waitTimedOut: waitResult.timedOut === true,
+    terminalBeforePhase: waitResult.terminal === true && waitResult.reached !== true,
+    job: buildDelegatedJobSnapshot(waitResult.job || {})
+  };
+}
+
+async function waitForDelegatedPhaseIfRequested(api, delegatedJob = {}, input = {}, options = {}) {
+  const waitUntilPhase = normalizeWaitUntilPhase(input.waitUntilPhase);
+  if (!waitUntilPhase || input.waitForCompletion === true) {
+    return null;
+  }
+  await api.emitProgress?.({
+    phase: options.progressPhase || "tool-wait-delegated-phase",
+    label: `${options.labelPrefix || "等待子任务进入"} ${waitUntilPhase}`,
+    percent: options.percent || 58
+  });
+  return waitForDelegatedBotJobPhase(api, delegatedJob.jobId, {
+    waitUntilPhase,
+    timeoutSeconds: input.timeoutSeconds || options.timeoutSeconds || 120,
+    pollIntervalMs: options.pollIntervalMs || 1500
+  });
 }
 
 function extractDirectWebUrls(text = "") {
@@ -488,10 +616,17 @@ async function buildAnalyzeFileContentResult(api = {}, input = {}) {
         };
       }
 
+      const phaseWait = await waitForDelegatedPhaseIfRequested(api, delegatedJob, input, {
+        progressPhase: "tool-analyze-file-content",
+        labelPrefix: "等待媒体分析任务进入"
+      });
       return {
         mode: "media-analysis-job",
         delegated: true,
-        ...buildDelegatedJobFields("video.analyze", delegatedJob),
+        ...buildDelegatedJobFields("video.analyze", phaseWait?.job || delegatedJob, {
+          waitUntilPhase: input.waitUntilPhase
+        }),
+        ...buildWaitUntilPhaseFields(phaseWait),
         file: fileInfo,
         message: "已提交视频/音频转录与 AI 总结任务，完成后会写入文件 metadata。"
       };
@@ -973,6 +1108,7 @@ export function getAiToolDefinitions() {
           analyze: { type: "boolean", description: "startAnalysis 的别名" },
           forceAnalyze: { type: "boolean", description: "即使已有摘要也重新委派 video.analyze" },
           waitForCompletion: { type: "boolean", description: "是否等待委派任务完成。长视频建议 false，默认 false" },
+          waitUntilPhase: { type: "string", description: "等待子任务 status/phase 到达指定值后返回，例如 running、transcribe；不要求任务完成" },
           timeoutSeconds: { type: "integer", minimum: 5, maximum: 600 },
           detail: { type: "string", enum: ["auto", "low", "high"], description: "图片分析细节等级" },
           maxTokens: { type: "integer", minimum: 200, maximum: 2000 }
@@ -1073,6 +1209,7 @@ export function getAiToolDefinitions() {
           force: { type: "boolean", description: "已有总结时是否重新跑总结，默认 false" },
           includeSubtitle: { type: "boolean", description: "已有总结时是否同时返回字幕文本，默认 false" },
           waitForCompletion: { type: "boolean", description: "是否等待任务完成再返回。长视频建议 false，默认 false" },
+          waitUntilPhase: { type: "string", description: "等待子任务 status/phase 到达指定值后返回，例如 running、extract-audio、transcribe；不要求任务完成" },
           timeoutSeconds: { type: "integer", minimum: 5, maximum: 600 }
         }
       }
@@ -1089,6 +1226,7 @@ export function getAiToolDefinitions() {
           force: { type: "boolean", description: "已有总结时是否重新跑总结，默认 false" },
           includeSubtitle: { type: "boolean", description: "已有总结时是否同时返回字幕文本，默认 false" },
           waitForCompletion: { type: "boolean", description: "是否等待任务完成再返回。长视频建议 false，默认 false" },
+          waitUntilPhase: { type: "string", description: "等待子任务 status/phase 到达指定值后返回，例如 running、extract-audio、transcribe；不要求任务完成" },
           timeoutSeconds: { type: "integer", minimum: 5, maximum: 600 }
         }
       }
@@ -1106,6 +1244,7 @@ export function getAiToolDefinitions() {
           force: { type: "boolean", description: "是否覆盖已有标签" },
           aiSummary: { type: "string", description: "已有摘要，可作为打标签输入" },
           waitForCompletion: { type: "boolean", description: "是否等待任务完成，默认 false" },
+          waitUntilPhase: { type: "string", description: "等待子任务 status/phase 到达指定值后返回，例如 running、tagging；不要求任务完成" },
           timeoutSeconds: { type: "integer", minimum: 5, maximum: 600 }
         }
       }
@@ -1123,6 +1262,7 @@ export function getAiToolDefinitions() {
           force: { type: "boolean", description: "是否覆盖已有标签" },
           aiSummary: { type: "string", description: "已有摘要，可作为打标签输入" },
           waitForCompletion: { type: "boolean", description: "是否等待任务完成，默认 false" },
+          waitUntilPhase: { type: "string", description: "等待子任务 status/phase 到达指定值后返回，例如 running、tagging；不要求任务完成" },
           timeoutSeconds: { type: "integer", minimum: 5, maximum: 600 }
         }
       }
@@ -1141,6 +1281,7 @@ export function getAiToolDefinitions() {
           source: { type: "string", description: "音源，例如 qq、netease、bilibili" },
           index: { type: "integer", minimum: 1, description: "选择最近搜索结果中的第几首" },
           waitForCompletion: { type: "boolean", description: "是否等待完成，默认 true" },
+          waitUntilPhase: { type: "string", description: "等待子任务 status/phase 到达指定值后返回，例如 running、searching、playing；不要求任务完成" },
           timeoutSeconds: { type: "integer", minimum: 5, maximum: 120 }
         }
       }
@@ -1431,9 +1572,16 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
       });
     }
 
+    const phaseWait = await waitForDelegatedPhaseIfRequested(api, delegatedJob, input, {
+      progressPhase: "tool-analyze-storage-video",
+      labelPrefix: "等待视频总结任务进入"
+    });
     return safeJson({
       delegated: true,
-      ...buildDelegatedJobFields("video.analyze", delegatedJob),
+      ...buildDelegatedJobFields("video.analyze", phaseWait?.job || delegatedJob, {
+        waitUntilPhase: input.waitUntilPhase
+      }),
+      ...buildWaitUntilPhaseFields(phaseWait),
       file: {
         fileId: file.id,
         path: file.relativePath,
@@ -1487,9 +1635,29 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
           toolName: name
         }
       });
+      if (input.waitForCompletion === true) {
+        await api.emitProgress({ phase: "tool-tag-storage-video", label: "等待批量视频打标签任务完成", percent: 58 });
+        const completedJob = await waitForDelegatedBotJob(api, delegatedJob.jobId, {
+          timeoutSeconds: input.timeoutSeconds || 600
+        });
+        return safeJson({
+          status: completedJob.status,
+          jobId: completedJob.jobId,
+          batch: true,
+          result: completedJob.result || {},
+          error: completedJob.error || null
+        });
+      }
+      const phaseWait = await waitForDelegatedPhaseIfRequested(api, delegatedJob, input, {
+        progressPhase: "tool-tag-storage-video",
+        labelPrefix: "等待批量打标签任务进入"
+      });
       return safeJson({
         delegated: true,
-        ...buildDelegatedJobFields("video.tag", delegatedJob),
+        ...buildDelegatedJobFields("video.tag", phaseWait?.job || delegatedJob, {
+          waitUntilPhase: input.waitUntilPhase
+        }),
+        ...buildWaitUntilPhaseFields(phaseWait),
         batch: true,
         message: "已提交批量视频打标签任务。"
       });
@@ -1546,9 +1714,16 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
       });
     }
 
+    const phaseWait = await waitForDelegatedPhaseIfRequested(api, delegatedJob, input, {
+      progressPhase: "tool-tag-storage-video",
+      labelPrefix: "等待视频打标签任务进入"
+    });
     return safeJson({
       delegated: true,
-      ...buildDelegatedJobFields("video.tag", delegatedJob),
+      ...buildDelegatedJobFields("video.tag", phaseWait?.job || delegatedJob, {
+        waitUntilPhase: input.waitUntilPhase
+      }),
+      ...buildWaitUntilPhaseFields(phaseWait),
       file: {
         fileId: file.id,
         path: file.relativePath,
@@ -1581,7 +1756,7 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
       }
     });
 
-    if (input.waitForCompletion !== false) {
+    if (input.waitForCompletion !== false && !normalizeWaitUntilPhase(input.waitUntilPhase)) {
       await api.emitProgress({ phase: "tool-invoke-music-control", label: "等待音乐助手返回", percent: 58 });
       const completedJob = await waitForDelegatedBotJob(api, delegatedJob.jobId, {
         timeoutSeconds: input.timeoutSeconds || 45,
@@ -1596,9 +1771,18 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
       });
     }
 
+    const phaseWait = await waitForDelegatedPhaseIfRequested(api, delegatedJob, input, {
+      progressPhase: "tool-invoke-music-control",
+      labelPrefix: "等待音乐任务进入",
+      timeoutSeconds: input.timeoutSeconds || 45,
+      pollIntervalMs: 700
+    });
     return safeJson({
       delegated: true,
-      ...buildDelegatedJobFields("music.control", delegatedJob),
+      ...buildDelegatedJobFields("music.control", phaseWait?.job || delegatedJob, {
+        waitUntilPhase: input.waitUntilPhase
+      }),
+      ...buildWaitUntilPhaseFields(phaseWait),
       prompt
     });
   }
