@@ -300,26 +300,42 @@ function formatJobTrackingLine(job = {}, prefix = "  ") {
   return `${prefix}命令：${commands.statusCommand} · ${commands.logCommand} · ${commands.traceCommand}`;
 }
 
-function buildBotJobCardActions(job = {}, fallbackJobId = "") {
+function buildBotJobTraceAction(job = {}, jobId = "") {
+  if (String(job?.botId || "").trim() !== "ai.chat") {
+    return null;
+  }
+  return {
+    type: "invoke-bot",
+    label: "查看 Trace",
+    botId: "ai.chat",
+    rawText: `/trace ${jobId}`
+  };
+}
+
+function buildBotJobCardActions(job = {}, fallbackJobId = "", options = {}) {
   const jobId = String(job?.jobId || fallbackJobId || "").trim();
   if (!jobId) {
     return [];
   }
   const status = String(job?.status || "").trim().toLowerCase();
+  const traceAction = options.includeTrace === false ? null : buildBotJobTraceAction(job, jobId);
+  const withTraceAction = (actions) => traceAction
+    ? [actions[0], traceAction, ...actions.slice(1)].filter(Boolean)
+    : actions;
   if (["queued", "running"].includes(status)) {
-    return [
+    return withTraceAction([
       { type: "continue-bot-job", label: "继续等待", jobId },
       { type: "open-bot-log", label: "查看日志", jobId },
       { type: "cancel-bot-job", label: "停止生成", jobId }
-    ];
+    ]);
   }
   if (["failed", "cancelled"].includes(status)) {
-    return [
+    return withTraceAction([
       { type: "open-bot-log", label: "查看日志", jobId },
       { type: "retry-bot-job", label: "重新生成", jobId }
-    ];
+    ]);
   }
-  return [{ type: "open-bot-log", label: "查看日志", jobId }];
+  return withTraceAction([{ type: "open-bot-log", label: "查看日志", jobId }]);
 }
 
 function formatBotJobLine(job = {}, prefix = "-") {
@@ -677,7 +693,7 @@ export async function handleAiChatCommandRoute(state = {}) {
               title: "AI Agent Trace",
               subtitle: withSessionSubtitle(trace.jobId ? `job: ${trace.jobId}` : "没有可用 trace", activeSession),
               body,
-              actions: trace.missing === true ? [] : buildBotJobCardActions(trace.snapshot || {}, trace.jobId || "")
+              actions: trace.missing === true ? [] : buildBotJobCardActions(trace.snapshot || {}, trace.jobId || "", { includeTrace: false })
             }
           }),
           importedFiles: [],
