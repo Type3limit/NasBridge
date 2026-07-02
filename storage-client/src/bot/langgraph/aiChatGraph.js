@@ -47,10 +47,12 @@ function buildNodeExitDetails(nodeName, state, update) {
         : Array.isArray(state?.pendingToolCalls) ? state.pendingToolCalls : [];
       const modelResult = update?.modelResult || state?.modelResult;
       if (modelResult?.model) details.model = modelResult.model;
+      if (modelResult?.fallback) details.fallback = modelResult.fallback;
+      if (modelResult?.finishReason) details.finishReason = modelResult.finishReason;
       if (pendingToolCalls.length) {
-        details.tools = pendingToolCalls.map((tc) => tc.name || tc.type || "tool");
-        details.toolRound = Number.isInteger(update?.toolRound) ? update.toolRound
-          : Number.isInteger(state?.toolRound) ? state.toolRound : 1;
+        details.tools = summarizeToolCallLabels(pendingToolCalls);
+        details.plannedToolCount = pendingToolCalls.length;
+        details.toolRound = getToolRound(update, state, 1);
       } else {
         details.directReply = true;
       }
@@ -61,7 +63,9 @@ function buildNodeExitDetails(nodeName, state, update) {
     case "textTools": {
       const prevPending = Array.isArray(state?.pendingToolCalls) ? state.pendingToolCalls : [];
       if (prevPending.length) {
-        details.executedTools = prevPending.map((tc) => tc.name || tc.type || "tool");
+        details.executedTools = summarizeToolCallLabels(prevPending);
+        details.executedToolCount = prevPending.length;
+        details.toolRound = getToolRound(update, state, 0);
       }
       break;
     }
@@ -119,6 +123,42 @@ const AGENT_PHASE_BY_NODE = {
   command: "Command",
   recovery: "Recovery"
 };
+
+function compactGraphText(value = "", limit = 96) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) {
+    return "";
+  }
+  return text.length > limit ? `${text.slice(0, Math.max(0, limit - 1))}…` : text;
+}
+
+function getToolCallName(toolCall = {}) {
+  return compactGraphText(toolCall?.name || toolCall?.type || "tool", 80);
+}
+
+function formatToolCallLabel(toolCall = {}) {
+  const name = getToolCallName(toolCall);
+  if (!name) {
+    return "";
+  }
+  const reason = compactGraphText(toolCall?.reason || "", 72);
+  const fallback = toolCall?.fallbackJsonPlan === true ? "json" : "";
+  const suffixes = [reason, fallback].filter(Boolean);
+  return suffixes.length ? `${name}：${suffixes.join(" · ")}` : name;
+}
+
+function summarizeToolCallLabels(toolCalls = [], limit = 6) {
+  return (Array.isArray(toolCalls) ? toolCalls : [])
+    .map(formatToolCallLabel)
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function getToolRound(update = null, state = null, fallback = 0) {
+  return Number.isInteger(update?.toolRound)
+    ? update.toolRound
+    : (Number.isInteger(state?.toolRound) ? state.toolRound : fallback);
+}
 
 function createTraceEntry(state, node, status = "completed") {
   return [{
