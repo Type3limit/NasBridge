@@ -28,12 +28,12 @@ const BOT_HEALTH_CHECKS = {
   "ai.chat": ["ai-model", "ai-tool-call", "storage-root"],
   "ai.multimodal-image": ["ai-model", "storage-root"],
   "music.control": ["music-bridge", "qq-music-cookie"],
-  "video.analyze": ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root"],
-  "video.tag": ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root"],
-  "bilibili.downloader": ["yt-dlp", "storage-root", "bilibili-auth"],
-  "ytdlp.downloader": ["yt-dlp", "storage-root"],
-  "torrent.downloader": ["storage-root"],
-  "aria2.downloader": ["storage-root"]
+  "video.analyze": ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root", "bot-queue"],
+  "video.tag": ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root", "bot-queue"],
+  "bilibili.downloader": ["yt-dlp", "storage-root", "bilibili-auth", "bot-queue"],
+  "ytdlp.downloader": ["yt-dlp", "storage-root", "bot-queue"],
+  "torrent.downloader": ["storage-root", "bot-queue"],
+  "aria2.downloader": ["storage-root", "bot-queue"]
 };
 
 const TOOL_RISK_LEVELS = {
@@ -81,16 +81,16 @@ const TOOL_HEALTH_CHECKS = {
   organize_files: ["storage-root"],
   explain_file_access: ["storage-root"],
   get_storage_file_details: ["storage-root"],
-  invoke_video_analyze: ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root"],
-  analyze_storage_video: ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root"],
-  invoke_video_tag: ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root"],
-  tag_storage_video: ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root"],
+  invoke_video_analyze: ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root", "bot-queue"],
+  analyze_storage_video: ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root", "bot-queue"],
+  invoke_video_tag: ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root", "bot-queue"],
+  tag_storage_video: ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root", "bot-queue"],
   invoke_music_control: ["music-bridge", "qq-music-cookie"],
-  invoke_bilibili_downloader: ["storage-root", "yt-dlp", "bilibili-auth"],
-  invoke_ytdlp_downloader: ["storage-root", "yt-dlp"],
-  invoke_torrent_downloader: ["storage-root"],
-  invoke_aria2_downloader: ["storage-root"],
-  import_bilibili_video: ["storage-root", "yt-dlp", "bilibili-auth"],
+  invoke_bilibili_downloader: ["storage-root", "yt-dlp", "bilibili-auth", "bot-queue"],
+  invoke_ytdlp_downloader: ["storage-root", "yt-dlp", "bot-queue"],
+  invoke_torrent_downloader: ["storage-root", "bot-queue"],
+  invoke_aria2_downloader: ["storage-root", "bot-queue"],
+  import_bilibili_video: ["storage-root", "yt-dlp", "bilibili-auth", "bot-queue"],
   search_bilibili_video: ["ai-model"],
   search_web: ["ai-model"],
   read_chat_history: ["storage-root"],
@@ -99,7 +99,7 @@ const TOOL_HEALTH_CHECKS = {
   read_bot_job_log: ["storage-root"],
   describe_image: ["ai-model", "storage-root"],
   search_yyets_show: ["ai-model"],
-  download_yyets_episodes: ["storage-root"]
+  download_yyets_episodes: ["storage-root", "bot-queue"]
 };
 
 const BLOCKING_WARN_HEALTH_CHECKS = {

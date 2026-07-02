@@ -330,9 +330,11 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.equal(byId.get("organize_files").riskLevel, "high");
   assert.equal(byId.get("organize_files").requiresConfirmation, true);
   assert.ok(byId.get("ai.chat").healthChecks.includes("ai-tool-call"));
+  assert.ok(byId.get("video.analyze").healthChecks.includes("bot-queue"));
   assert.ok(byId.get("read_text_excerpt").healthChecks.includes("document-text"));
   assert.deepEqual(byId.get("diagnose_file_access").healthChecks, ["storage-root"]);
   assert.deepEqual(byId.get("read_bot_job_log").healthChecks, ["storage-root"]);
+  assert.ok(byId.get("invoke_video_analyze").healthChecks.includes("bot-queue"));
   assert.ok(byId.get("analyze_file_content").healthChecks.includes("document-text"));
   assert.deepEqual(byId.get("invoke_music_control").healthChecks, ["music-bridge", "qq-music-cookie"]);
   assert.ok(byId.get("invoke_bilibili_downloader").healthChecks.includes("bilibili-auth"));
@@ -372,4 +374,19 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.doesNotMatch(summary, /C:\\Secret/);
   assert.match(report, /video\.analyze/);
   assert.match(report, /建议\(Whisper\): 配置 WHISPER_CPP_PATH 和 WHISPER_MODEL_PATH/);
+
+  const queueReport = formatCapabilityReport(descriptors, {
+    overall: "warn",
+    checks: [
+      {
+        id: "bot-queue",
+        label: "Bot 队列",
+        status: "warn",
+        detail: "running=2 queued=1 failedLastHour=0 checked=3",
+        repairHint: "运行 @ai /jobs 查看排队和失败任务"
+      }
+    ]
+  });
+  assert.match(queueReport, /invoke_video_analyze/);
+  assert.match(queueReport, /建议\(Bot 队列\): 运行 @ai \/jobs 查看排队和失败任务/);
 });
