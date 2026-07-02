@@ -104,7 +104,32 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
       durationMs: 1250,
       inputSummary: { tool: "invoke_video_analyze", fileId: "client:movie.mp4" },
       resultSummary: {
-        jobRefs: [{ botId: "video.analyze", jobId: "botjob_child" }]
+        jobRefs: [{ botId: "video.analyze", jobId: "botjob_child" }],
+        fileAccess: {
+          found: true,
+          contentAccess: {
+            analyzeMode: "media"
+          },
+          layers: [
+            { id: "metadata", available: true },
+            { id: "excerpt", available: false },
+            { id: "analysis", available: false }
+          ],
+          blockers: [
+            { id: "dependency-whisper", message: "Whisper 未配置" }
+          ],
+          nextActions: ["配置 WHISPER_MODEL_PATH 后重试"]
+        },
+        log: {
+          jobId: "botjob_parent",
+          length: 2048,
+          truncated: true
+        },
+        agentTrace: {
+          eventCount: 4,
+          childJobCount: 1
+        },
+        nextAction: "查看 @ai /log botjob_parent"
       }
     }]
   });
@@ -118,6 +143,11 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
   assert.match(body, /invoke_video_analyze: 1 次/);
   assert.match(body, /video\.analyze:botjob_child/);
   assert.match(body, /最近步骤/);
+  assert.match(body, /access: found=true · mode=media · layers=metadata · blockers=dependency-whisper/);
+  assert.match(body, /log: job=botjob_parent · chars=2048 · truncated/);
+  assert.match(body, /trace: events=4 · childJobs=1/);
+  assert.match(body, /next: 查看 @ai \/log botjob_parent/);
+  assert.doesNotMatch(body, /D:[/\\]NAS/);
 });
 
 test("formatBotJobStatusReport summarizes jobs, child jobs, and recovery hints", () => {

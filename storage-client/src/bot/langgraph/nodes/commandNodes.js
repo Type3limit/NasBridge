@@ -104,22 +104,85 @@ function compactJsonInline(value = null, maxLength = 180) {
   }
 }
 
+function summarizeTraceResultAccess(fileAccess = null) {
+  if (!fileAccess || typeof fileAccess !== "object") {
+    return "";
+  }
+  const parts = [];
+  if (typeof fileAccess.found === "boolean") {
+    parts.push(`found=${fileAccess.found}`);
+  }
+  if (fileAccess.contentAccess?.analyzeMode) {
+    parts.push(`mode=${fileAccess.contentAccess.analyzeMode}`);
+  }
+  const availableLayers = Array.isArray(fileAccess.layers)
+    ? fileAccess.layers.filter((layer) => layer?.available === true).map((layer) => layer.id || layer.label).filter(Boolean)
+    : [];
+  if (availableLayers.length) {
+    parts.push(`layers=${availableLayers.slice(0, 5).join(",")}`);
+  }
+  const blockers = Array.isArray(fileAccess.blockers)
+    ? fileAccess.blockers.map((blocker) => blocker?.id || blocker?.message).filter(Boolean)
+    : [];
+  if (blockers.length) {
+    parts.push(`blockers=${blockers.slice(0, 4).join(",")}`);
+  }
+  const nextActions = Array.isArray(fileAccess.nextActions) ? fileAccess.nextActions.filter(Boolean) : [];
+  if (nextActions.length) {
+    parts.push(`next=${nextActions[0]}`);
+  }
+  return parts.join(" · ");
+}
+
+function summarizeTraceResultLog(log = null) {
+  if (!log || typeof log !== "object") {
+    return "";
+  }
+  const length = Number.isFinite(Number(log.length)) ? Number(log.length) : null;
+  return [
+    log.jobId ? `job=${log.jobId}` : "",
+    length != null ? `chars=${length}` : "",
+    log.truncated === true ? "truncated" : ""
+  ].filter(Boolean).join(" · ");
+}
+
+function summarizeTraceResultAgentTrace(agentTrace = null) {
+  if (!agentTrace || typeof agentTrace !== "object") {
+    return "";
+  }
+  return [
+    Number.isFinite(Number(agentTrace.eventCount)) ? `events=${Number(agentTrace.eventCount)}` : "",
+    Number.isFinite(Number(agentTrace.childJobCount)) ? `childJobs=${Number(agentTrace.childJobCount)}` : ""
+  ].filter(Boolean).join(" · ");
+}
+
 function formatTraceTimelineItem(item = {}) {
   const label = String(item.label || item.tool || item.phase || item.node || "event").trim();
+  const resultSummary = item.resultSummary && typeof item.resultSummary === "object" ? item.resultSummary : {};
   const suffixes = [
     item.durationMs != null ? formatDurationMs(item.durationMs) : "",
     item.detailSummary?.pendingTools?.length
       ? `tools=${item.detailSummary.pendingTools.map((tool) => tool.name).filter(Boolean).join(",")}`
       : "",
-    item.resultSummary?.jobRefs?.length
-      ? `job=${item.resultSummary.jobRefs.map((ref) => `${ref.botId || "bot"}:${ref.jobId}`).join(",")}`
+    resultSummary.jobRefs?.length
+      ? `job=${resultSummary.jobRefs.map((ref) => `${ref.botId || "bot"}:${ref.jobId}`).join(",")}`
       : "",
     item.errorSummary?.message ? `error=${item.errorSummary.message}` : ""
   ].filter(Boolean);
   const input = compactJsonInline(item.inputSummary, 140);
+  const access = summarizeTraceResultAccess(resultSummary.fileAccess);
+  const log = summarizeTraceResultLog(resultSummary.log);
+  const agentTrace = summarizeTraceResultAgentTrace(resultSummary.agentTrace);
+  const nextAction = String(resultSummary.nextAction || "").trim();
+  const blockedReason = String(resultSummary.blockedReason || "").trim();
   return [
     `- ${item.index || "?"}. ${label}${suffixes.length ? ` · ${suffixes.join(" · ")}` : ""}`,
-    input ? `  input: ${input}` : ""
+    input ? `  input: ${input}` : "",
+    access ? `  access: ${access}` : "",
+    log ? `  log: ${log}` : "",
+    agentTrace ? `  trace: ${agentTrace}` : "",
+    blockedReason ? `  blocked: ${blockedReason}` : "",
+    nextAction ? `  next: ${nextAction}` : ""
   ].filter(Boolean).join("\n");
 }
 
