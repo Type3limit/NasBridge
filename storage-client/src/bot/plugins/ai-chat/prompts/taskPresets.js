@@ -75,9 +75,19 @@ const TASK_PRESETS = [
     ]
   },
   {
+    id: "document-read",
+    title: "Read NAS documents or text excerpts",
+    triggers: [/文档|正文|文本|前\s*\d+\s*字|读取|阅读|摘录|pdf|markdown|\.md|\.txt|read|document|excerpt/i],
+    lines: [
+      "先用 search_library_files/list_storage_files 定位 fileId，再调用 diagnose_file_access 确认 text/PDF/Office/字幕片段的可读层级。",
+      "用户要求读取、摘录、前 N 字、按正文回答或总结文档时，优先调用 read_text_excerpt；根据需要设置 maxChars、startChar 和 source，片段截断时继续分页读取。",
+      "只有需要跨多个片段综合分析、生成正式摘要，或 diagnose_file_access/actionPlan 明确建议时，才调用 analyze_file_content；不要跳过片段读取就声称已读完整文档。"
+    ]
+  },
+  {
     id: "video-analysis",
     title: "Analyze or summarize media",
-    triggers: [/视频|音频|字幕|转写|总结|摘要|tag|标签|video|audio|subtitle|summary/i],
+    triggers: [/视频|音频|字幕|转写|tag|标签|video|audio|subtitle/i],
     lines: [
       "先用 search_library_files 搜索文件，再用 read_media_summary 检查 aiSummary/subtitle 是否已有，并读取时长、分辨率、音轨等 probe 信息。用户说“没总结/没有摘要”时搜索参数要带 hasAiSummary=false；用户说“没字幕/未转写”时带 hasSubtitle=false。",
       "没有摘要时调用 invoke_video_analyze；长视频默认 waitForCompletion=false，可设置 waitUntilPhase=transcribe 或 running 等到任务真正开始后返回 jobId/status/phase。",
@@ -87,7 +97,7 @@ const TASK_PRESETS = [
   {
     id: "content-analysis",
     title: "Analyze a NAS file",
-    triggers: [/分析|阅读|读取|文档|图片|截图|看图|视觉|pdf|markdown|内容|analy[sz]e|read|document|image|vision/i],
+    triggers: [/分析|总结|摘要|阅读|读取|文档|图片|截图|看图|视觉|pdf|markdown|内容|analy[sz]e|summari[sz]e|summary|read|document|image|vision/i],
     lines: [
       "当前消息附件或最近聊天图片需要看图时，优先调用 describe_image；NAS 图片文件则先 search_library_files kind=image 定位 fileId，再调用 analyze_file_content mode=image。",
       "目标文件明确后优先调用 analyze_file_content；它会按文本、PDF/Office 文档、图片、媒体类型选择受控分析路径。",

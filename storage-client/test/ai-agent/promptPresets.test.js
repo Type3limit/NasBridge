@@ -88,6 +88,21 @@ test("image prompts route chat attachments and NAS images through vision tools",
   assert.match(prompt, /analyze_file_content: 分析这个 NAS 图片文件/);
 });
 
+test("document read prompts prefer bounded excerpts before analysis", () => {
+  const prompt = buildNasAgentTaskPresetPrompt({
+    prompt: "读取这个 PDF 文档的前 2000 字并总结"
+  });
+
+  assert.match(prompt, /Read NAS documents or text excerpts/);
+  assert.doesNotMatch(prompt, /Analyze or summarize media/);
+  assert.match(prompt, /diagnose_file_access/);
+  assert.match(prompt, /read_text_excerpt/);
+  assert.match(prompt, /maxChars/);
+  assert.match(prompt, /startChar/);
+  assert.match(prompt, /analyze_file_content/);
+  assert.match(prompt, /不要跳过片段读取/);
+});
+
 test("download prompts include concrete downloader adapters", () => {
   const prompt = buildNasAgentTaskPresetPrompt({
     prompt: "去 B 站找一个教程下载到库里，也可能给你一个 magnet"
