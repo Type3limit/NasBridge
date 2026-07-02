@@ -42,9 +42,9 @@ function Invoke-QqCookieRefresh {
   }
   try {
     Write-Host "[music-lib-bridge] refreshing QQ_COOKIE ($Reason)..."
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $RefreshCookieScript -EnvFile (Join-Path $BridgeRoot ".env")
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $RefreshCookieScript -EnvFile (Join-Path $BridgeRoot ".env") -BestEffort
     if ($LASTEXITCODE -eq 0) {
-      Write-Host "[music-lib-bridge] QQ_COOKIE refresh complete"
+      Write-Host "[music-lib-bridge] QQ_COOKIE refresh check finished"
     } else {
       Write-Warning "[music-lib-bridge] QQ_COOKIE refresh exited with code $LASTEXITCODE"
     }
