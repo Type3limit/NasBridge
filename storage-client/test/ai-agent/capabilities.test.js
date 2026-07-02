@@ -350,7 +350,7 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
         repairHint: "检查 C:\\Secret\\nas-data 的读写权限"
       }
     ]
-  }, { maxItems: 18 });
+  }, { maxItems: 24 });
   const report = formatCapabilityReport(descriptors, {
     overall: "warn",
     checks: [
@@ -365,10 +365,18 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   });
 
   assert.match(summary, /search_library_files/);
+  assert.match(summary, /read_media_summary/);
+  assert.match(summary, /read_text_excerpt/);
   assert.match(summary, /diagnose_file_access/);
   assert.match(summary, /explain_file_access/);
   assert.match(summary, /read_bot_job_log/);
   assert.match(summary, /organize_files/);
+  assert.match(summary, /Recommended task workflows/);
+  assert.match(summary, /media-summary: search_library_files -> read_media_summary -> invoke_video_analyze -> get_bot_job_status/);
+  assert.match(summary, /document-read: search_library_files -> diagnose_file_access -> read_text_excerpt -> analyze_file_content/);
+  assert.match(summary, /file-access-diagnostic: explain_file_access -> search_library_files -> diagnose_file_access/);
+  assert.match(summary, /download-into-library: search_bilibili_video -> invoke_bilibili_downloader -> invoke_ytdlp_downloader -> search_yyets_show -> download_yyets_episodes/);
+  assert.match(summary, /failure-diagnostic: get_bot_job_status -> read_agent_trace -> read_bot_job_log/);
   assert.match(summary, /fix=检查 \[local-path\] 的读写权限/);
   assert.match(summary, /\[local-path\]/);
   assert.doesNotMatch(summary, /C:\\Secret/);

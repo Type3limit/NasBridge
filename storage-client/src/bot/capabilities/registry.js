@@ -140,7 +140,12 @@ const CAPABILITY_EXAMPLES = {
 };
 
 const PROMPT_CORE_CAPABILITY_IDS = [
+  "list_storage_files",
   "search_library_files",
+  "read_file_metadata",
+  "get_storage_file_details",
+  "read_media_summary",
+  "read_text_excerpt",
   "diagnose_file_access",
   "explain_file_access",
   "analyze_file_content",
@@ -158,6 +163,51 @@ const PROMPT_CORE_CAPABILITY_IDS = [
   "get_bot_job_status",
   "read_agent_trace",
   "read_bot_job_log"
+];
+
+const CAPABILITY_WORKFLOWS = [
+  {
+    id: "media-summary",
+    title: "Summarize NAS video/audio",
+    tools: ["search_library_files", "read_media_summary", "invoke_video_analyze", "get_bot_job_status"],
+    guidance: "先定位 fileId，再复用已有 aiSummary/subtitle；没有摘要时启动 invoke_video_analyze，长任务返回 jobId/status/trace 命令。"
+  },
+  {
+    id: "document-read",
+    title: "Read or summarize documents",
+    tools: ["search_library_files", "diagnose_file_access", "read_text_excerpt", "analyze_file_content"],
+    guidance: "先诊断可读层级，再分页读取文本/PDF/Office 片段；需要综合分析时调用 analyze_file_content。"
+  },
+  {
+    id: "file-access-diagnostic",
+    title: "Explain file access",
+    tools: ["explain_file_access", "search_library_files", "diagnose_file_access"],
+    guidance: "用户问能否访问/读取时先说明边界；针对具体文件先搜索再诊断 blockers、layers 和 nextActions。"
+  },
+  {
+    id: "organize-files",
+    title: "Organize NAS files",
+    tools: ["search_library_files", "read_file_metadata", "organize_files"],
+    guidance: "先搜索和读取 metadata，organize_files 默认 dry-run；移动/重命名必须取得明确确认后才 confirmed=true。"
+  },
+  {
+    id: "music-playback",
+    title: "Control music",
+    tools: ["invoke_music_control"],
+    guidance: "点歌、暂停、切歌和队列直接调用 invoke_music_control；QQ cookie 降级时说明播放限制和恢复方式。"
+  },
+  {
+    id: "download-into-library",
+    title: "Download into NAS library",
+    tools: ["search_bilibili_video", "invoke_bilibili_downloader", "invoke_ytdlp_downloader", "search_yyets_show", "download_yyets_episodes"],
+    guidance: "B 站先 search_bilibili_video 再下载；明确 URL 用对应 downloader；剧集资源先 search_yyets_show 再 download_yyets_episodes。"
+  },
+  {
+    id: "failure-diagnostic",
+    title: "Diagnose bot or agent failure",
+    tools: ["get_bot_job_status", "read_agent_trace", "read_bot_job_log"],
+    guidance: "先读状态，再按需要读 trace/log；回答失败阶段、tool/bot、jobId、错误原因和可恢复动作。"
+  }
 ];
 
 function normalizeRiskLevel(value = "low") {
@@ -312,6 +362,7 @@ export function formatCapabilityReport(descriptors = [], health = {}) {
 
 export function formatCapabilityPromptSummary(descriptors = [], health = {}, options = {}) {
   const maxItems = Math.max(4, Math.min(24, Number(options.maxItems || PROMPT_CORE_CAPABILITY_IDS.length) || PROMPT_CORE_CAPABILITY_IDS.length));
+  const maxWorkflows = Math.max(0, Math.min(8, Number(options.maxWorkflows || 7) || 7));
   const checks = Array.isArray(health.checks) ? health.checks : [];
   const nonOkChecks = checks.filter((check) => check.status && check.status !== "ok");
   const byId = new Map((Array.isArray(descriptors) ? descriptors : []).map((item) => [item.id, item]));
@@ -335,6 +386,21 @@ export function formatCapabilityPromptSummary(descriptors = [], health = {}, opt
       const availability = summarizeCapabilityAvailability(item, health);
       const examples = Array.isArray(item.examples) && item.examples.length ? ` examples=${item.examples.slice(0, 2).join(" / ")}` : "";
       lines.push(`- ${item.id}: status=${availability.status}, risk=${item.riskLevel}, mode=${item.executionMode}.${examples}`);
+    }
+  }
+  const workflows = CAPABILITY_WORKFLOWS
+    .filter((workflow) => workflow.tools.some((toolId) => byId.has(toolId)))
+    .slice(0, maxWorkflows);
+  if (workflows.length) {
+    lines.push("Recommended task workflows:");
+    for (const workflow of workflows) {
+      const toolStatuses = workflow.tools
+        .filter((toolId) => byId.has(toolId))
+        .map((toolId) => {
+          const availability = summarizeCapabilityAvailability(byId.get(toolId), health);
+          return `${toolId}:${availability.status}`;
+        });
+      lines.push(`- ${workflow.id}: ${workflow.tools.filter((toolId) => byId.has(toolId)).join(" -> ")}. status=${toolStatuses.join(", ")}. ${workflow.guidance}`);
     }
   }
   lines.push("Use unavailable/degraded capability details to explain blockers before starting dependent jobs. High risk actions require explicit confirmation.");
