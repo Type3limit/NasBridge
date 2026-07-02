@@ -32,6 +32,99 @@ function formatErrorForLog(error) {
   return lines.join("\n");
 }
 
+const MAX_AUDIT_TOOL_CALLS = 120;
+const MAX_AUDIT_ARRAY_ITEMS = 24;
+const MAX_AUDIT_STRING_CHARS = 600;
+const SENSITIVE_AUDIT_KEY = /api[_-]?key|authorization|bearer|cookie|password|secret|token/i;
+
+function uniqueStrings(values = []) {
+  const result = [];
+  const seen = new Set();
+  for (const value of Array.isArray(values) ? values : []) {
+    const normalized = String(value || "").trim();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function redactAuditText(value = "") {
+  return String(value || "")
+    .replace(/[A-Za-z]:[\\/][^\s,;"'{}[\]]+/g, "[local-path]")
+    .replace(/\\\\[^\\/\s,;"'{}[\]]+[\\/][^\s,;"'{}[\]]+/g, "[network-path]")
+    .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, "sk-[redacted]");
+}
+
+function sanitizeAuditValue(value, depth = 0) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return redactAuditText(value).slice(0, MAX_AUDIT_STRING_CHARS);
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (depth >= 4) {
+    return "[truncated]";
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, MAX_AUDIT_ARRAY_ITEMS).map((item) => sanitizeAuditValue(item, depth + 1));
+  }
+  if (typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).slice(0, MAX_AUDIT_ARRAY_ITEMS).map(([key, item]) => [
+      key,
+      SENSITIVE_AUDIT_KEY.test(key) ? "[redacted]" : sanitizeAuditValue(item, depth + 1)
+    ]));
+  }
+  return String(value);
+}
+
+function extractAuditPermissions(event = {}) {
+  const capability = event.capability
+    || event.resultSummary?.capability
+    || event.errorSummary?.capability
+    || null;
+  return uniqueStrings([
+    ...(Array.isArray(event.permissions) ? event.permissions : []),
+    ...(Array.isArray(capability?.permissions) ? capability.permissions : [])
+  ]);
+}
+
+function summarizeAuditToolCall(event = {}) {
+  const capability = event.capability
+    || event.resultSummary?.capability
+    || event.errorSummary?.capability
+    || null;
+  return sanitizeAuditValue(Object.fromEntries(Object.entries({
+    name: String(event.name || event.tool || "").trim(),
+    status: String(event.status || "").trim(),
+    round: Number.isFinite(Number(event.round)) ? Number(event.round) : null,
+    riskLevel: String(event.riskLevel || capability?.riskLevel || "").trim(),
+    permissions: extractAuditPermissions(event),
+    startedAt: String(event.startedAt || "").trim(),
+    finishedAt: String(event.finishedAt || "").trim(),
+    durationMs: Number.isFinite(Number(event.durationMs)) ? Number(event.durationMs) : null,
+    inputSummary: event.inputSummary && typeof event.inputSummary === "object" ? event.inputSummary : null,
+    resultSummary: event.resultSummary && typeof event.resultSummary === "object" ? event.resultSummary : null,
+    errorSummary: event.errorSummary && typeof event.errorSummary === "object" ? event.errorSummary : null
+  }).filter(([, value]) => {
+    if (value === null || value === undefined || value === "") {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    if (value && typeof value === "object") {
+      return Object.keys(value).length > 0;
+    }
+    return true;
+  })));
+}
+
 function createInitialJob(context) {
   return {
     jobId: context.jobId,
@@ -276,8 +369,9 @@ export class BotRuntime {
     const api = this.createPluginApi(plugin, context, current, abortController.signal);
     try {
       const result = await plugin.execute(context, api);
+      const latestBeforeComplete = this.activeJobs.get(current.jobId) || await this.store.get(current.jobId) || current;
       current = await this.store.save({
-        ...current,
+        ...latestBeforeComplete,
         status: "succeeded",
         phase: "completed",
         progress: {
@@ -382,6 +476,35 @@ export class BotRuntime {
             graphState: Object.prototype.hasOwnProperty.call(patch, "graphState")
               ? (patch.graphState && typeof patch.graphState === "object" ? patch.graphState : null)
               : (current.progress?.graphState ?? null)
+          }
+        });
+        this.activeJobs.set(job.jobId, next);
+        this.events.emit("job", next);
+        return next;
+      },
+      recordAuditEvent: async (event = {}) => {
+        const current = this.activeJobs.get(job.jobId) || await this.store.get(job.jobId);
+        if (!current || current.status === "cancelled") {
+          return current;
+        }
+        const toolCall = summarizeAuditToolCall(event);
+        if (!toolCall.name) {
+          return current;
+        }
+        const permissionsUsed = uniqueStrings([
+          ...(Array.isArray(current.audit?.permissionsUsed) ? current.audit.permissionsUsed : []),
+          ...extractAuditPermissions(event)
+        ]);
+        const toolCalls = [
+          ...(Array.isArray(current.audit?.toolCalls) ? current.audit.toolCalls : []),
+          toolCall
+        ].slice(-MAX_AUDIT_TOOL_CALLS);
+        const next = await this.store.save({
+          ...current,
+          audit: {
+            ...(current.audit && typeof current.audit === "object" ? current.audit : {}),
+            permissionsUsed,
+            toolCalls
           }
         });
         this.activeJobs.set(job.jobId, next);

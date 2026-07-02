@@ -19,6 +19,7 @@ function createFakeApi() {
   const progress = [];
   const agentEvents = [];
   const toolEvents = [];
+  const auditEvents = [];
   return {
     storageRoot: "D:/NAS",
     clientId: "client",
@@ -27,6 +28,7 @@ function createFakeApi() {
     progress,
     agentEvents,
     toolEvents,
+    auditEvents,
     dependencies: {
       listLibraryFiles: async () => ({
         clientId: "client",
@@ -50,7 +52,8 @@ function createFakeApi() {
     traceHooks: {
       recordAgentEvent: async (event) => agentEvents.push(event),
       recordToolEvent: async (event) => toolEvents.push(event)
-    }
+    },
+    recordAuditEvent: async (event) => auditEvents.push(event)
   };
 }
 
@@ -199,6 +202,9 @@ test("JSON fallback plans, executes, observes, and finishes through tool message
   assert.equal(api.agentEvents[4].detail.finalAnswerLength, "Found demo.mp4 in Videos.".length);
   assert.equal(api.toolEvents[0].name, "search_library_files");
   assert.equal(api.toolEvents[0].input.__fallback, "json-plan");
+  assert.equal(api.auditEvents[0].name, "search_library_files");
+  assert.equal(api.auditEvents[0].status, "completed");
+  assert.equal(api.auditEvents[0].resultSummary.capability.id, "search_library_files");
 });
 
 test("native tool-call unsupported errors recover into JSON fallback", async () => {

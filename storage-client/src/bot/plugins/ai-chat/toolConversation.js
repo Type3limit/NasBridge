@@ -1322,6 +1322,11 @@ export function createToolCallAssistantMessage(result = {}) {
   };
 }
 
+async function recordToolExecutionEvent(traceHooks = null, api = {}, event = {}) {
+  await traceHooks?.recordToolEvent?.(event);
+  await api?.recordAuditEvent?.(event);
+}
+
 async function invokeJsonFallbackPlanningRound({
   planningMessages,
   tools,
@@ -1551,7 +1556,7 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
     if (blockedResult) {
       toolResult = JSON.stringify(blockedResult, null, 2);
       await api.appendLog(`tool-call-blocked ${toolCall.name}: ${blockedResult.blocker?.id || blockedResult.status || "blocked"} ${blockedResult.blocker?.status || blockedResult.blockedReason || "unavailable"}`);
-      await traceHooks?.recordToolEvent?.({
+      await recordToolExecutionEvent(traceHooks, api, {
         name: toolCall.name,
         round,
         status: "blocked",
@@ -1564,7 +1569,7 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
     } else {
       try {
         toolResult = await executeAiToolCall(toolCall, context, api, { recentMessages });
-        await traceHooks?.recordToolEvent?.({
+        await recordToolExecutionEvent(traceHooks, api, {
           name: toolCall.name,
           round,
           status: "completed",
@@ -1576,7 +1581,7 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
         });
       } catch (error) {
         const cancelled = error?.name === "AbortError" || /job cancelled/i.test(String(error?.message || ""));
-        await traceHooks?.recordToolEvent?.({
+        await recordToolExecutionEvent(traceHooks, api, {
           name: toolCall.name,
           round,
           status: cancelled ? "cancelled" : "failed",
