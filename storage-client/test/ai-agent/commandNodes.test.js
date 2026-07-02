@@ -341,6 +341,20 @@ test("formatBotJobLogReport summarizes redacted log and child jobs", () => {
       content: "[2026-07-02T00:00:00.000Z] OPENAI_API_KEY=***\n[2026-07-02T00:00:01.000Z] failed\n",
       truncated: false
     },
+    lifecycle: {
+      count: 3,
+      last: {
+        status: "failed",
+        phase: "failed",
+        label: "Failed",
+        percent: 99,
+        agentPhase: "ToolExecute/Observe"
+      },
+      phases: ["parse-input", "running", "failed"],
+      agentPhases: ["PrepareInput", "ToolExecute/Observe"],
+      statuses: ["queued", "running", "failed"],
+      events: []
+    },
     childJobs: [{
       jobId: "botjob_child",
       botId: "video.analyze",
@@ -364,6 +378,9 @@ test("formatBotJobLogReport summarizes redacted log and child jobs", () => {
   assert.match(body, /ai\.chat · botjob_parent · failed/);
   assert.match(body, /审计：工具调用 2 · 权限 readLibrary、bot:invoke、storage:content:read/);
   assert.match(body, /invoke_video_analyze · blocked · risk=medium · ids=client:Videos\/demo\.mp4 · perm=bot:invoke, storage:content:read · jobs=video\.analyze:botjob_child/);
+  assert.match(body, /生命周期：events=3 · last=failed\/failed · 99%/);
+  assert.match(body, /阶段链：parse-input -> running -> failed/);
+  assert.match(body, /Agent 阶段：PrepareInput -> ToolExecute\/Observe/);
   assert.match(body, /video\.analyze · botjob_child · failed/);
   assert.match(body, /命令：@ai \/job botjob_child · @ai \/log botjob_child · @ai \/trace botjob_child/);
   assert.match(body, /OPENAI_API_KEY=\*\*\*/);
@@ -1395,8 +1412,12 @@ test("log command route publishes redacted bot job log bundle", async () => {
     assert.match(result.result.chatReply.text, /Bot 日志：botjob_parent/);
     assert.match(result.result.chatReply.text, /OPENAI_API_KEY=\*\*\*/);
     assert.doesNotMatch(result.result.chatReply.text, /sk-should-not-leak/);
+    assert.match(result.result.chatReply.text, /生命周期：events=/);
+    assert.match(result.result.chatReply.text, /last=failed\/failed/);
     assert.match(result.result.chatReply.text, /video\.analyze · botjob_child · failed/);
     assert.equal(result.result.artifacts[0].type, "bot-job-log");
+    assert.ok(result.result.artifacts[0].lifecycle.count >= 1);
+    assert.equal(result.result.artifacts[0].lifecycle.last.status, "failed");
     assert.equal(result.result.artifacts[0].childJobs[0].jobId, "botjob_child");
   } finally {
     await fs.rm(appDataRoot, { recursive: true, force: true });

@@ -141,6 +141,88 @@ function summarizeJobResult(result = null) {
   };
 }
 
+function parseLifecycleTimestamp(line = "") {
+  const match = /^\[([^\]]+)\]/.exec(String(line || ""));
+  return match?.[1] ? String(match[1]).trim() : "";
+}
+
+function parseLifecycleLogPayload(line = "") {
+  const text = String(line || "");
+  const marker = "job-lifecycle ";
+  const index = text.indexOf(marker);
+  if (index < 0) {
+    return null;
+  }
+  const rawJson = text.slice(index + marker.length).trim();
+  if (!rawJson) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(rawJson);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function compactLifecycleEvent(line = "", maxPhaseLength = 120) {
+  const payload = parseLifecycleLogPayload(line);
+  if (!payload) {
+    return null;
+  }
+  const progress = payload.progress && typeof payload.progress === "object" ? payload.progress : {};
+  const graphState = progress.graphState && typeof progress.graphState === "object" ? progress.graphState : {};
+  return Object.fromEntries(Object.entries({
+    at: parseLifecycleTimestamp(line),
+    botId: redactAuditText(String(payload.botId || "").trim()).slice(0, 120),
+    status: redactAuditText(String(payload.status || "").trim()).slice(0, 80),
+    phase: redactAuditText(String(payload.phase || "").trim()).slice(0, maxPhaseLength),
+    label: redactAuditText(String(progress.label || "").trim()).slice(0, 120),
+    percent: Number.isFinite(Number(progress.percent)) ? Math.max(0, Math.min(100, Number(progress.percent))) : null,
+    activeNode: redactAuditText(String(graphState.activeNode || "").trim()).slice(0, 80),
+    agentPhase: redactAuditText(String(graphState.agentPhase || "").trim()).slice(0, 80),
+    startedAt: redactAuditText(String(payload.startedAt || "").trim()).slice(0, 40),
+    finishedAt: redactAuditText(String(payload.finishedAt || "").trim()).slice(0, 40)
+  }).filter(([, value]) => value !== null && value !== "" && value !== undefined));
+}
+
+function buildLifecycleSummaryFromLogContent(content = "") {
+  const events = String(content || "")
+    .split(/\r?\n/)
+    .map((line) => compactLifecycleEvent(line))
+    .filter(Boolean);
+  const phases = [];
+  const statuses = [];
+  const agentPhases = [];
+  const seenPhases = new Set();
+  const seenStatuses = new Set();
+  const seenAgentPhases = new Set();
+  for (const event of events) {
+    if (event.phase && !seenPhases.has(event.phase)) {
+      seenPhases.add(event.phase);
+      phases.push(event.phase);
+    }
+    if (event.status && !seenStatuses.has(event.status)) {
+      seenStatuses.add(event.status);
+      statuses.push(event.status);
+    }
+    if (event.agentPhase && !seenAgentPhases.has(event.agentPhase)) {
+      seenAgentPhases.add(event.agentPhase);
+      agentPhases.push(event.agentPhase);
+    }
+  }
+  const last = events[events.length - 1] || null;
+  return {
+    count: events.length,
+    first: events[0] || null,
+    last,
+    statuses,
+    phases,
+    agentPhases,
+    events: events.slice(-12)
+  };
+}
+
 function buildJobTracking(jobId = "") {
   const normalizedJobId = String(jobId || "").trim();
   if (!normalizedJobId) {
@@ -339,6 +421,8 @@ export async function buildBotJobLogBundle(api = {}, input = {}) {
   const logMaxBytes = clampInteger(input.maxBytes || input.logMaxBytes || 64 * 1024, 1024, 512 * 1024);
   const job = await readJob(api, store, jobId);
   const log = await store.readLog(jobId, { maxBytes: logMaxBytes });
+  const redactedLogContent = redactSensitiveText(log.content || "");
+  const lifecycle = buildLifecycleSummaryFromLogContent(redactedLogContent);
   const childJobIds = input.includeChildJobs === true
     ? await listChildJobIds(appDataRoot, jobId, input.childJobLimit || MAX_CHILD_JOB_SUMMARY_LIMIT)
     : [];
@@ -355,9 +439,10 @@ export async function buildBotJobLogBundle(api = {}, input = {}) {
     job: job ? summarizeJob(job) : null,
     log: {
       jobId,
-      content: redactSensitiveText(log.content || ""),
+      content: redactedLogContent,
       truncated: log.truncated === true
     },
+    lifecycle,
     agentTrace: input.includeTrace === true
       ? await buildAgentTraceResult(api, { jobId, maxEvents: input.maxTraceEvents || 40 })
       : null,
@@ -1094,10 +1179,12 @@ export async function buildBotJobStatusResult(api = {}, input = {}) {
     const summary = summarizeJob(job);
     if (includeLog) {
       const log = await store.readLog(jobId, { maxBytes: logMaxBytes });
+      const redactedLogContent = redactSensitiveText(log.content || "");
       summary.logTail = {
         truncated: log.truncated === true,
-        content: redactSensitiveText(log.content || "")
+        content: redactedLogContent
       };
+      summary.lifecycle = buildLifecycleSummaryFromLogContent(redactedLogContent);
     }
     if (includeTrace) {
       summary.agentTrace = await buildAgentTraceResult(api, { jobId, maxEvents: input.maxTraceEvents || 30 });

@@ -150,6 +150,10 @@ test("bot job log bundle includes redacted log, agent trace, and delegated child
   assert.equal(bundle.job.jobId, "botjob_parent");
   assert.equal(bundle.log.content.includes("sk-should-not-leak"), false);
   assert.match(bundle.log.content, /OPENAI_API_KEY=\*\*\*/);
+  assert.ok(bundle.lifecycle.count >= 1);
+  assert.equal(bundle.lifecycle.last.status, "running");
+  assert.ok(bundle.lifecycle.phases.includes("running"));
+  assert.ok(bundle.lifecycle.statuses.includes("running"));
   assert.equal(bundle.childJobs.length, 1);
   assert.equal(bundle.childJobs[0].jobId, "botjob_child");
   assert.equal(bundle.childJobs[0].botId, "video.analyze");
@@ -227,6 +231,9 @@ test("read_bot_job_log tool returns redacted job log bundle", async () => {
   assert.equal(result.job.jobId, "botjob_parent");
   assert.equal(result.log.content.includes("sk-should-not-leak"), false);
   assert.match(result.log.content, /OPENAI_API_KEY=\*\*\*/);
+  assert.ok(result.lifecycle.count >= 1);
+  assert.equal(result.lifecycle.last.status, "running");
+  assert.ok(result.lifecycle.phases.includes("running"));
   assert.equal(result.childJobs.length, 1);
   assert.equal(result.childJobs[0].jobId, "botjob_child");
   assert.equal(result.agentTrace, null);
@@ -280,7 +287,8 @@ test("bot job status includes delegated child jobs for an explicit parent job", 
     appDataRoot,
     getJob: (jobId) => store.get(jobId)
   }, {
-    jobId: "botjob_parent"
+    jobId: "botjob_parent",
+    includeLog: true
   });
 
   assert.equal(status.count, 1);
@@ -296,6 +304,9 @@ test("bot job status includes delegated child jobs for an explicit parent job", 
   assert.equal(status.jobs[0].audit.recentToolCalls[0].riskLevel, "medium");
   assert.deepEqual(status.jobs[0].audit.recentToolCalls[0].permissions, ["bot:invoke", "storage:metadata:write"]);
   assert.deepEqual(status.jobs[0].audit.recentToolCalls[0].jobRefs[0], { jobId: "botjob_child", botId: "video.analyze", status: "running" });
+  assert.ok(status.jobs[0].lifecycle.count >= 1);
+  assert.equal(status.jobs[0].lifecycle.last.phase, "textTools");
+  assert.ok(status.jobs[0].lifecycle.phases.includes("textTools"));
 });
 
 test("agent trace result includes delegated child job summaries by default", async () => {

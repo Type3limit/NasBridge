@@ -745,6 +745,7 @@ test("tool trace summarizes bot job log bundles", async () => {
   assert.equal(observation.role, "tool");
   assert.match(observation.content, /OPENAI_API_KEY=\*\*\*/);
   assert.doesNotMatch(observation.content, /sk-should-not-leak/);
+  assert.match(observation.content, /"lifecycle"/);
   assert.equal(api.progress[0].phase, "tool-read-bot-job-log");
   assert.equal(api.toolEvents[0].inputSummary.tool, "read_bot_job_log");
   assert.deepEqual(api.toolEvents[0].inputSummary.identifiers, ["botjob_parent"]);
@@ -753,6 +754,9 @@ test("tool trace summarizes bot job log bundles", async () => {
   assert.equal(api.toolEvents[0].resultSummary.status, "failed");
   assert.equal(api.toolEvents[0].resultSummary.log.jobId, "botjob_parent");
   assert.ok(api.toolEvents[0].resultSummary.log.length > 0);
+  assert.ok(api.toolEvents[0].resultSummary.lifecycle.count >= 1);
+  assert.equal(api.toolEvents[0].resultSummary.lifecycle.lastStatus, "failed");
+  assert.ok(api.toolEvents[0].resultSummary.lifecycle.phases.includes("failed"));
   assert.equal(api.toolEvents[0].resultSummary.childJobCount, 1);
   assert.deepEqual(api.toolEvents[0].resultSummary.jobRefs.map((ref) => ref.jobId), ["botjob_parent", "botjob_child"]);
 });

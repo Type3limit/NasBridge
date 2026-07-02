@@ -699,6 +699,27 @@ function formatJobAuditLines(job = {}, indent = "  ") {
   return lines;
 }
 
+function formatLifecycleLines(lifecycle = null, indent = "") {
+  if (!lifecycle || typeof lifecycle !== "object" || !Number(lifecycle.count || 0)) {
+    return [];
+  }
+  const last = lifecycle.last && typeof lifecycle.last === "object" ? lifecycle.last : {};
+  const phases = Array.isArray(lifecycle.phases) ? lifecycle.phases.filter(Boolean).slice(-8) : [];
+  const agentPhases = Array.isArray(lifecycle.agentPhases) ? lifecycle.agentPhases.filter(Boolean).slice(-6) : [];
+  const lines = [];
+  lines.push(`${indent}生命周期：events=${Number(lifecycle.count || 0)}${last.status ? ` · last=${last.status}` : ""}${last.phase ? `/${last.phase}` : ""}${last.percent != null ? ` · ${last.percent}%` : ""}`);
+  if (last.label || last.agentPhase) {
+    lines.push(`${indent}- 最后进度：${[last.label, last.agentPhase ? `agentPhase=${last.agentPhase}` : ""].filter(Boolean).join(" · ")}`);
+  }
+  if (phases.length) {
+    lines.push(`${indent}- 阶段链：${phases.join(" -> ")}`);
+  }
+  if (agentPhases.length) {
+    lines.push(`${indent}- Agent 阶段：${agentPhases.join(" -> ")}`);
+  }
+  return lines;
+}
+
 function formatRecoveryHintLines(trace = null, indent = "") {
   const hint = trace?.recoveryHint || null;
   if (!hint || typeof hint !== "object") {
@@ -740,6 +761,7 @@ export function formatBotJobStatusReport(status = {}) {
   for (const job of jobs) {
     lines.push(formatBotJobLine(job));
     lines.push(...formatJobAuditLines(job, "  "));
+    lines.push(...formatLifecycleLines(job.lifecycle, "  "));
     const childCount = Number(job.childJobCount || 0);
     if (childCount > 0) {
       const counts = formatStatusCounts(job.childJobStatusCounts || {});
@@ -770,6 +792,7 @@ export function formatBotJobLogReport(bundle = {}) {
     lines.push(formatBotJobLine(bundle.job));
     lines.push(...formatJobAuditLines(bundle.job));
   }
+  lines.push(...formatLifecycleLines(bundle.lifecycle));
   const childJobs = Array.isArray(bundle.childJobs) ? bundle.childJobs : [];
   if (childJobs.length) {
     lines.push(`子任务：${childJobs.length}`);
@@ -1205,6 +1228,7 @@ export async function handleAiChatCommandRoute(state = {}) {
             jobId: bundle.jobId || jobId,
             job: bundle.job || null,
             log: bundle.log || null,
+            lifecycle: bundle.lifecycle || null,
             childJobs: Array.isArray(bundle.childJobs) ? bundle.childJobs : [],
             agentTrace: bundle.agentTrace || null
           }]

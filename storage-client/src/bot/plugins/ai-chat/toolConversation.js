@@ -856,6 +856,31 @@ function summarizeLogForTrace(log = null) {
   };
 }
 
+function summarizeLifecycleForTrace(lifecycle = null) {
+  if (!lifecycle || typeof lifecycle !== "object") {
+    return null;
+  }
+  const last = lifecycle.last && typeof lifecycle.last === "object" ? lifecycle.last : {};
+  return Object.fromEntries(Object.entries({
+    count: Number.isFinite(Number(lifecycle.count)) ? Number(lifecycle.count) : null,
+    lastStatus: String(last.status || "").trim(),
+    lastPhase: String(last.phase || "").trim(),
+    lastLabel: String(last.label || "").trim().slice(0, 160),
+    lastAgentPhase: String(last.agentPhase || "").trim(),
+    statuses: Array.isArray(lifecycle.statuses) ? lifecycle.statuses.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 8) : [],
+    phases: Array.isArray(lifecycle.phases) ? lifecycle.phases.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 12) : [],
+    agentPhases: Array.isArray(lifecycle.agentPhases) ? lifecycle.agentPhases.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 8) : []
+  }).filter(([, value]) => {
+    if (value === null || value === "" || value === undefined) {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    return true;
+  }));
+}
+
 function summarizeAccessLayerForTrace(layer = null) {
   if (!layer || typeof layer !== "object") {
     return null;
@@ -1112,6 +1137,7 @@ function summarizeToolResultForTrace(toolResult = "", toolName = "", api = {}) {
       missing: Array.isArray(parsed.missing) ? parsed.missing.length : null
     },
     log: summarizeLogForTrace(parsed.log),
+    lifecycle: summarizeLifecycleForTrace(parsed.lifecycle),
     childJobCount: Array.isArray(parsed.childJobs) ? parsed.childJobs.length : null,
     agentTrace: parsed.agentTrace && typeof parsed.agentTrace === "object"
       ? {
