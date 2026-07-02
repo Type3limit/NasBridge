@@ -150,3 +150,57 @@ test("bilibili adapter allows login/status actions without a source", async () =
   assert.equal(api.invoked[0].trigger.rawText, "status");
   assert.equal(api.invoked[0].trigger.parsedArgs.action, "status");
 });
+
+test("import_bilibili_video reuses safe target folder validation", async () => {
+  const api = createFakeApi();
+  await assert.rejects(
+    () => executeAiToolCall(
+      {
+        name: "import_bilibili_video",
+        input: {
+          source: "BV1abc123456",
+          targetFolder: "../outside"
+        }
+      },
+      { chat: {}, attachments: [] },
+      api
+    ),
+    /invalid path segment/
+  );
+  await assert.rejects(
+    () => executeAiToolCall(
+      {
+        name: "import_bilibili_video",
+        input: {
+          source: "BV1abc123456",
+          targetFolder: ".nas-bot/cache"
+        }
+      },
+      { chat: {}, attachments: [] },
+      api
+    ),
+    /hidden\/system/
+  );
+
+  const raw = await executeAiToolCall(
+    {
+      name: "import_bilibili_video",
+      input: {
+        sources: ["BV1abc123456", "https://www.bilibili.com/video/BV2def123456"],
+        targetFolder: "/downloads//bilibili/教程"
+      }
+    },
+    { chat: {}, attachments: [] },
+    api
+  );
+  const result = JSON.parse(raw);
+
+  assert.equal(result.delegated, true);
+  assert.equal(result.botId, "bilibili.downloader");
+  assert.deepEqual(result.sources, ["BV1abc123456", "https://www.bilibili.com/video/BV2def123456"]);
+  assert.equal(result.tracking.statusCommand, "@ai /job botjob_child");
+  assert.equal(api.invoked.at(-1).trigger.rawText, "BV1abc123456 https://www.bilibili.com/video/BV2def123456");
+  assert.deepEqual(api.invoked.at(-1).trigger.parsedArgs, {
+    targetFolder: "downloads/bilibili/教程"
+  });
+});

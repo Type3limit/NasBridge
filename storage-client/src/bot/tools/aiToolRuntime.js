@@ -6,7 +6,7 @@ import { readRecentChatHistory } from "./chatHistory.js";
 import { listReferencedChatAttachments } from "./chatAssets.js";
 import { invokeMultimodalModel, invokeTextModel } from "./llmClient.js";
 import { fetchWebPageSummary, getSourcePreferenceLabel, normalizeSourcePreference, searchWeb } from "./httpFetch.js";
-import { buildDelegatedJobFollowup, executeDelegatedBotToolCall, getDelegatedBotToolDefinitions, isDelegatedBotToolName } from "./botToolAdapter.js";
+import { buildDelegatedJobFollowup, executeDelegatedBotToolCall, getDelegatedBotToolDefinitions, isDelegatedBotToolName, normalizeTargetFolder } from "./botToolAdapter.js";
 import { buildRealtimeContextText } from "./realtimeContext.js";
 import { searchYYeTsShows, getYYeTsResource, extractEpisodeMagnets, sanitizeShowName } from "./yyetsApi.js";
 import { MAX_AGENT_TRACE_EVENTS, MAX_CHILD_JOB_SUMMARY_LIMIT, MAX_JOB_LOG_BYTES, MAX_JOB_STATUS_LIMIT, buildAgentTraceResult, buildBotJobLogBundle, buildBotJobStatusResult } from "./botJobStatus.js";
@@ -1620,6 +1620,7 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
     if (!sourcesInput.length) {
       throw new Error("source or sources is required");
     }
+    const targetFolder = normalizeTargetFolder(input.targetFolder || "");
     // Put all sources in rawText so bilibili.downloader batch-mode picks them all up.
     const rawText = sourcesInput.join(" ");
     const isBatch = sourcesInput.length > 1;
@@ -1629,10 +1630,10 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
         type: "tool-call",
         rawText,
         parsedArgs: isBatch
-          ? { targetFolder: String(input.targetFolder || "").trim() }
+          ? { targetFolder }
           : {
             source: sourcesInput[0],
-            targetFolder: String(input.targetFolder || "").trim(),
+            targetFolder,
             page: Number.isInteger(input.page) ? input.page : undefined,
             quality: String(input.quality || "").trim()
           }

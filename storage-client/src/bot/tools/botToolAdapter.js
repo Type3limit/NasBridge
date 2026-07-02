@@ -106,7 +106,7 @@ function normalizeString(value = "") {
   return String(value || "").trim();
 }
 
-function normalizeTargetFolder(value = "") {
+export function normalizeTargetFolder(value = "") {
   const normalized = normalizeString(value).replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+/g, "/");
   if (!normalized) {
     return "";
