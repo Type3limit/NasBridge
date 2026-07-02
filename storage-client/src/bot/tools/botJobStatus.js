@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { BotJobStore } from "../jobStore.js";
 import { readExecutionPendingConfirmation, readExecutionSnapshot } from "../langgraph/checkpoints/aiSessionCheckpointer.js";
+import { resolveTextToolsRecoveryPolicy } from "../plugins/ai-chat/recovery.js";
 
 export const MAX_JOB_STATUS_LIMIT = 12;
 export const MAX_AGENT_TRACE_EVENTS = 80;
@@ -308,6 +309,106 @@ function summarizeTraceSnapshot(snapshot = null) {
   };
 }
 
+function buildTraceRecoveryHint(snapshot = null, pendingConfirmation = null) {
+  if (pendingConfirmation?.tool) {
+    const confirmation = pendingConfirmation.confirmation && typeof pendingConfirmation.confirmation === "object"
+      ? pendingConfirmation.confirmation
+      : {};
+    const impact = confirmation.impact && typeof confirmation.impact === "object" ? confirmation.impact : {};
+    return {
+      mode: "awaiting-confirmation",
+      route: "text",
+      canContinueDirectly: false,
+      requiresUserConfirmation: true,
+      tool: String(pendingConfirmation.tool || "").trim(),
+      riskLevel: String(confirmation.riskLevel || "unknown").trim(),
+      targetFileCount: Number.isFinite(Number(impact.targetFileCount)) ? Number(impact.targetFileCount) : null,
+      nextAction: `等待用户确认后继续执行 ${String(pendingConfirmation.tool || "工具").trim()}`
+    };
+  }
+
+  if (!snapshot || typeof snapshot !== "object") {
+    return null;
+  }
+
+  const status = String(snapshot.status || "unknown").trim() || "unknown";
+  const route = String(snapshot.route || "unknown").trim() || "unknown";
+  const lastNode = String(snapshot.traceSummary?.lastNode || "").trim();
+  const base = {
+    status,
+    route,
+    lastNode,
+    canContinueDirectly: false,
+    requiresUserConfirmation: false,
+    nextAction: ""
+  };
+
+  if (lastNode === "textTools") {
+    const retryPolicy = resolveTextToolsRecoveryPolicy(snapshot.recoveryState || null);
+    if (retryPolicy.directRetryAllowed) {
+      return {
+        ...base,
+        mode: "text-retry-tools",
+        route: "textTools",
+        canContinueDirectly: true,
+        nextAction: `直接重试未完成的只读工具：${retryPolicy.retryableToolNames.join("、")}`,
+        retryPolicy
+      };
+    }
+    return {
+      ...base,
+      mode: "text-replan",
+      route: "text",
+      nextAction: retryPolicy.blockedRetryToolNames.length
+        ? `重新规划，并避免直接重试这些工具：${retryPolicy.blockedRetryToolNames.join("、")}`
+        : "重新规划文本链路。",
+      retryPolicy
+    };
+  }
+
+  if (lastNode === "visionBuild") {
+    return {
+      ...base,
+      mode: "vision-require-attachment",
+      route: "recovery",
+      requiresAttachment: true,
+      nextAction: "请用户重新上传图片后再继续。"
+    };
+  }
+
+  if (lastNode === "textAnswer" || lastNode === "visionAnswer") {
+    return {
+      ...base,
+      mode: "answer-rebuild",
+      route: route === "vision" ? "vision" : "text",
+      nextAction: "复用已有上下文并重建完整回答。"
+    };
+  }
+
+  if (status === "cancelled") {
+    return {
+      ...base,
+      mode: "cancelled-replan",
+      nextAction: "按当前请求重新规划。"
+    };
+  }
+
+  if (status === "failed") {
+    return {
+      ...base,
+      mode: "failed-replan",
+      nextAction: "结合失败节点重新规划。"
+    };
+  }
+
+  return {
+    ...base,
+    mode: "resume-default",
+    route: route === "vision" ? "vision" : "text",
+    nextAction: "延续当前会话并重新组织上下文。"
+  };
+}
+
 async function readJob(api = {}, store, jobId = "") {
   if (typeof api.getJob === "function") {
     const liveJob = await api.getJob(jobId);
@@ -408,6 +509,7 @@ export async function buildAgentTraceResult(api = {}, input = {}) {
     missing: !snapshot && !events.length,
     snapshot: summarizeTraceSnapshot(snapshot),
     pendingConfirmation: pendingConfirmation ? redactValue(pendingConfirmation) : null,
+    recoveryHint: buildTraceRecoveryHint(snapshot, pendingConfirmation),
     events
   };
 }

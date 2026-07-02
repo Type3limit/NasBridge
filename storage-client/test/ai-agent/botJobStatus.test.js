@@ -217,5 +217,61 @@ test("agent trace result exposes pending confirmation summary", async () => {
   assert.equal(trace.pendingConfirmation.confirmInput.dryRun, false);
   assert.equal(trace.pendingConfirmation.confirmInput.apiKey, "***");
   assert.equal(trace.pendingConfirmation.confirmation.impact.targetFileCount, 2);
+  assert.equal(trace.recoveryHint.mode, "awaiting-confirmation");
+  assert.equal(trace.recoveryHint.requiresUserConfirmation, true);
+  assert.equal(trace.recoveryHint.tool, "update_file_metadata");
+  assert.equal(trace.recoveryHint.riskLevel, "medium");
+  assert.equal(trace.recoveryHint.targetFileCount, 2);
   assert.equal(trace.events[0].input.apiKey, "***");
+});
+
+test("agent trace result includes direct retry recovery hints for read-only tools", async () => {
+  const appDataRoot = await createTempAppDataRoot();
+  const jobId = "botjob_recover_readonly";
+  const graphRoot = path.join(appDataRoot, "ai-chat-graph");
+  await fs.mkdir(path.join(graphRoot, "executions"), { recursive: true });
+  await fs.mkdir(path.join(graphRoot, "traces"), { recursive: true });
+  await fs.writeFile(
+    path.join(graphRoot, "executions", `${jobId}.json`),
+    `${JSON.stringify({
+      savedAt: "2026-07-02T00:00:00.000Z",
+      jobId,
+      botId: "ai.chat",
+      status: "failed",
+      route: "text",
+      traceSummary: {
+        count: 3,
+        nodes: ["prepareInput", "prepareContext", "textTools"],
+        lastNode: "textTools",
+        lastStatus: "failed",
+        lastAt: "2026-07-02T00:00:00.000Z"
+      },
+      recoveryState: {
+        toolRound: 2,
+        planningMessages: [{ role: "user", content: "刚才任务怎么样" }],
+        pendingToolCalls: [
+          {
+            id: "call_status",
+            name: "get_bot_job_status",
+            input: { jobId: "botjob_parent" }
+          },
+          {
+            id: "call_summary",
+            name: "read_media_summary",
+            input: { fileId: "client:movie.mp4" }
+          }
+        ]
+      }
+    }, null, 2)}\n`,
+    "utf8"
+  );
+
+  const trace = await buildAgentTraceResult({ appDataRoot }, { jobId });
+
+  assert.equal(trace.recoveryHint.mode, "text-retry-tools");
+  assert.equal(trace.recoveryHint.route, "textTools");
+  assert.equal(trace.recoveryHint.canContinueDirectly, true);
+  assert.deepEqual(trace.recoveryHint.retryPolicy.retryableToolNames, ["get_bot_job_status", "read_media_summary"]);
+  assert.deepEqual(trace.recoveryHint.retryPolicy.blockedRetryToolNames, []);
+  assert.match(trace.recoveryHint.nextAction, /直接重试/);
 });
