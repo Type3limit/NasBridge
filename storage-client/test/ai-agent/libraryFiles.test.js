@@ -10,6 +10,7 @@ import {
   buildFileAccessPolicy,
   buildFileAccessExplanation,
   buildPublicFileAccessPolicy,
+  buildLibraryListResult,
   buildLibraryMetadataResult,
   buildMediaSummaryResult,
   buildOrganizeFilesResult,
@@ -543,6 +544,72 @@ test("file access policy matches the agent FileAccessPolicy contract", async () 
     assert.equal(publicPolicy.rootLabel, "STORAGE_ROOT");
     assert.equal(publicPolicy.storageRootConfigured, true);
     assert.equal(publicPolicy.absolutePathExposed, false);
+  });
+});
+
+test("library search results include agent next steps and action plans", async () => {
+  await withTempDir(async (root) => {
+    const files = [
+      {
+        id: "client:Videos/a.mp4",
+        clientId: "client",
+        path: "Videos/a.mp4",
+        name: "a.mp4",
+        size: 100,
+        mimeType: "video/mp4",
+        updatedAt: "2026-07-02T00:00:00.000Z",
+        aiSummary: "A summary"
+      },
+      {
+        id: "client:Videos/b.mp4",
+        clientId: "client",
+        path: "Videos/b.mp4",
+        name: "b.mp4",
+        size: 100,
+        mimeType: "video/mp4",
+        updatedAt: "2026-07-01T00:00:00.000Z"
+      },
+      {
+        id: "client:Docs/readme.md",
+        clientId: "client",
+        path: "Docs/readme.md",
+        name: "readme.md",
+        size: 20,
+        mimeType: "text/markdown",
+        updatedAt: "2026-07-01T00:00:00.000Z"
+      }
+    ];
+    const api = createApi(root, files);
+
+    const single = await buildLibraryListResult(api, {
+      query: "a.mp4",
+      kind: "video",
+      limit: 5
+    });
+    assert.equal(single.selection.status, "single-match");
+    assert.equal(single.selection.confidence, "high");
+    assert.match(single.nextActions[0], /read_file_metadata/);
+    assert.deepEqual(single.actionPlan.map((action) => action.tool), ["read_file_metadata", "diagnose_file_access"]);
+    assert.equal(single.actionPlan[0].input.fileId, "client:Videos/a.mp4");
+
+    const multiple = await buildLibraryListResult(api, {
+      kind: "video",
+      limit: 5
+    });
+    assert.equal(multiple.selection.status, "multiple-matches");
+    assert.match(multiple.nextActions[0], /找到 2 个候选/);
+    assert.equal(multiple.actionPlan[0].tool, "read_file_metadata");
+    assert.deepEqual(multiple.actionPlan[0].input.fileIds, ["client:Videos/a.mp4", "client:Videos/b.mp4"]);
+    assert.equal(multiple.actionPlan[1].tool, "diagnose_file_access");
+
+    const empty = await buildLibraryListResult(api, {
+      query: "missing",
+      kind: "video"
+    });
+    assert.equal(empty.selection.status, "no-results");
+    assert.match(empty.nextActions[0], /放宽/);
+    assert.equal(empty.actionPlan[0].tool, "search_library_files");
+    assert.doesNotMatch(JSON.stringify({ single, multiple, empty }), new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
   });
 });
 

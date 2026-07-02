@@ -1173,18 +1173,121 @@ function buildOrganizeTargetPath(file = {}, action = {}) {
   return assertSafeMutationRelativePath([targetFolder, targetName].filter(Boolean).join("/"));
 }
 
+function buildLibrarySearchSelection(page = [], total = 0, input = {}) {
+  const query = String(input.query || "").trim();
+  const kind = String(input.kind || "all").trim() || "all";
+  const hasNarrowingFilter = Boolean(
+    query ||
+    kind !== "all" ||
+    normalizeRelativePath(input.pathPrefix || input.folder || "") ||
+    normalizeExtensionList(input).length ||
+    normalizeTagFilter(input).tags.length ||
+    typeof input.hasAiSummary === "boolean" ||
+    typeof input.hasSubtitle === "boolean"
+  );
+  return {
+    status: total === 0 ? "no-results" : (total === 1 ? "single-match" : "multiple-matches"),
+    confidence: total === 0 ? "none" : (total === 1 && hasNarrowingFilter ? "high" : (total <= page.length ? "medium" : "low")),
+    candidateCount: total,
+    visibleCandidateCount: page.length,
+    narrowedByUserInput: hasNarrowingFilter
+  };
+}
+
+function buildLibrarySearchNextActions(page = [], total = 0, input = {}) {
+  if (total === 0) {
+    return [
+      "没有匹配文件；放宽 kind/pathPrefix/tags/hasAiSummary/hasSubtitle 等筛选，或换关键词再次调用 search_library_files。",
+      "如果用户提供的是模糊描述，先向用户列出当前筛选条件并询问更具体的目录、类型或文件名片段。"
+    ];
+  }
+  if (total === 1) {
+    const file = page[0] || {};
+    const hints = buildContentAccessHints(file);
+    if (hints.aiSummaryAvailable || hints.subtitleAvailable || hints.media) {
+      return ["候选唯一；先调用 read_file_metadata 确认目标，再调用 read_media_summary 或 diagnose_file_access 决定是否需要进一步分析。"];
+    }
+    if (hints.textReadable) {
+      return ["候选唯一；先调用 read_file_metadata 确认目标，再调用 read_text_excerpt 分页读取受控片段。"];
+    }
+    return ["候选唯一；先调用 read_file_metadata 和 diagnose_file_access 判断可读取层级。"];
+  }
+  return [
+    `找到 ${total} 个候选；如果用户没有明确选择依据，先向用户展示前 ${Math.min(page.length, 5)} 个候选并询问确认。`,
+    "如果用户目标足够明确，可先调用 read_file_metadata 读取前几个候选的 metadata，再基于摘要/字幕/标签状态选择下一步。"
+  ];
+}
+
+function buildLibrarySearchActionPlan(page = [], total = 0, input = {}) {
+  if (total === 0) {
+    return [
+      buildAccessAction({
+        id: "broaden-search",
+        tool: "search_library_files",
+        input: {
+          query: input.query || "",
+          kind: input.kind || "all",
+          limit: input.limit || 20
+        },
+        reason: "当前筛选没有命中；放宽筛选或换关键词后重新搜索。",
+        contentLayer: "index"
+      })
+    ];
+  }
+  if (!page.length) {
+    return [];
+  }
+  const first = page[0];
+  if (total === 1) {
+    return [
+      buildAccessAction({
+        id: "read-selected-metadata",
+        tool: "read_file_metadata",
+        input: buildFileIdentifierInput(first),
+        reason: "候选唯一，先确认 metadata、标签、摘要/字幕状态。",
+        contentLayer: "metadata"
+      }),
+      buildAccessAction({
+        id: "diagnose-selected-access",
+        tool: "diagnose_file_access",
+        input: buildFileIdentifierInput(first),
+        reason: "确认可读取层级、依赖状态和安全边界，再选择内容读取或分析工具。",
+        contentLayer: "metadata"
+      })
+    ];
+  }
+  return [
+    buildAccessAction({
+      id: "read-candidate-metadata",
+      tool: "read_file_metadata",
+      input: { fileIds: page.slice(0, 3).map((file) => file.id).filter(Boolean) },
+      reason: "多个候选时先读取前几个 metadata，比直接分析单个文件更稳妥。",
+      contentLayer: "metadata"
+    }),
+    buildAccessAction({
+      id: "diagnose-leading-candidate",
+      tool: "diagnose_file_access",
+      input: buildFileIdentifierInput(first),
+      reason: "如需立即推进，可先诊断排序第一的候选文件访问层级。",
+      contentLayer: "metadata"
+    })
+  ];
+}
+
 export async function buildLibraryListResult(api, input = {}) {
   const snapshot = await loadLibrarySnapshot(api);
   const offset = clampInteger(input.offset || 0, 0, Number.MAX_SAFE_INTEGER);
   const limit = clampInteger(input.limit || 20, 1, MAX_LIBRARY_LIST_LIMIT);
   const filtered = sortFiles(filterLibraryFiles(snapshot.files, input), input.sortBy, input.sortDirection);
   const page = filtered.slice(offset, offset + limit);
+  const compactFiles = page.map((file, index) => compactLibraryFile(file, offset + index));
   return {
     clientId: snapshot.clientId,
     total: filtered.length,
     offset,
     limit,
     hasMore: offset + page.length < filtered.length,
+    selection: buildLibrarySearchSelection(page, filtered.length, input),
     filters: {
       query: String(input.query || "").trim(),
       kind: String(input.kind || "all").trim() || "all",
@@ -1201,7 +1304,9 @@ export async function buildLibraryListResult(api, input = {}) {
       hasAiSummary: typeof input.hasAiSummary === "boolean" ? input.hasAiSummary : null,
       hasSubtitle: typeof input.hasSubtitle === "boolean" ? input.hasSubtitle : null
     },
-    files: page.map((file, index) => compactLibraryFile(file, offset + index))
+    nextActions: buildLibrarySearchNextActions(page, filtered.length, input),
+    actionPlan: buildLibrarySearchActionPlan(page, filtered.length, input),
+    files: compactFiles
   };
 }
 
