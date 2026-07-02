@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   buildDiagnoseFileAccessResult,
@@ -17,7 +18,8 @@ import {
   buildOrganizeFilesResult,
   buildTextExcerptResult,
   buildTrashFilesResult,
-  buildUpdateFileMetadataResult
+  buildUpdateFileMetadataResult,
+  resolveLibraryFile
 } from "../../src/bot/tools/libraryFiles.js";
 
 async function withTempDir(fn) {
@@ -96,6 +98,27 @@ function createStoredZip(entries = []) {
   writeUInt32(eocd, centralOffset, 16);
   return Buffer.concat([...localParts, central, eocd]);
 }
+
+test("library file resolver maps Windows storage-root paths without accepting outside paths", () => {
+  const files = [
+    {
+      id: "client:Videos/demo.mp4",
+      relativePath: "Videos/demo.mp4",
+      path: "Videos/demo.mp4",
+      name: "demo.mp4"
+    }
+  ];
+
+  assert.equal(
+    resolveLibraryFile(files, "D:\\NAS\\Videos\\demo.mp4", { storageRoot: "D:\\NAS" })?.id,
+    "client:Videos/demo.mp4"
+  );
+  assert.equal(
+    resolveLibraryFile(files, "\"D:\\NAS\\Videos\\demo.mp4\"", { storageRoot: "D:\\NAS" })?.id,
+    "client:Videos/demo.mp4"
+  );
+  assert.equal(resolveLibraryFile(files, "D:\\Other\\Videos\\demo.mp4", { storageRoot: "D:\\NAS" }), null);
+});
 
 test("text excerpt reads bounded content without exposing absolute paths", async () => {
   await withTempDir(async (root) => {
@@ -552,6 +575,44 @@ test("file metadata reports missing files as searchable", async () => {
     assert.match(result.nextActions[0], /search_library_files/);
     assert.deepEqual(result.actionPlan, []);
     assert.equal(result.policy.contentLayer, "metadata");
+  });
+});
+
+test("file tools accept absolute paths only when they stay inside storage root", async () => {
+  await withTempDir(async (root) => {
+    await fs.mkdir(path.join(root, "docs"), { recursive: true });
+    const relativePath = "docs/note.md";
+    const absolutePath = path.join(root, relativePath);
+    await fs.writeFile(absolutePath, "absolute path note", "utf8");
+    const api = createApi(root, [
+      {
+        id: `client:${relativePath}`,
+        clientId: "client",
+        path: relativePath,
+        name: "note.md",
+        size: 18,
+        mimeType: "text/markdown",
+        updatedAt: "2026-07-01T00:00:00.000Z"
+      }
+    ]);
+
+    const metadata = await buildLibraryMetadataResult(api, { path: `"${absolutePath}"` });
+    assert.equal(metadata.count, 1);
+    assert.equal(metadata.files[0].fileId, `client:${relativePath}`);
+    assert.equal(metadata.files[0].path, relativePath);
+
+    const excerpt = await buildTextExcerptResult(api, {
+      path: pathToFileURL(absolutePath).href,
+      maxChars: 8
+    });
+    assert.equal(excerpt.file.fileId, `client:${relativePath}`);
+    assert.equal(excerpt.excerpt.text, "absolute");
+    assert.doesNotMatch(JSON.stringify({ metadata, excerpt }), new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
+
+    const outsidePath = path.join(path.dirname(root), `${path.basename(root)}-outside`, relativePath);
+    const outside = await buildLibraryMetadataResult(api, { path: outsidePath });
+    assert.equal(outside.count, 0);
+    assert.deepEqual(outside.files, []);
   });
 });
 

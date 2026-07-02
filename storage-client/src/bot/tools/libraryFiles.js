@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getStorageHiddenDirectoryNames, getStorageTrashDirectoryName, safeJoin, scanFiles } from "../../fsIndex.js";
 import { extractDocumentTextExcerpt, isExtractableDocumentPath } from "./documentText.js";
 import { probeMediaFile } from "./mediaProbe.js";
@@ -51,6 +52,74 @@ export function clampInteger(value, min, max) {
 
 function normalizeRelativePath(value = "") {
   return String(value || "").replace(/\\/g, "/").replace(/^\/+/, "").trim();
+}
+
+function unwrapPathLikeIdentifier(value = "") {
+  let normalized = String(value || "").trim();
+  while (normalized.length >= 2) {
+    const first = normalized[0];
+    const last = normalized[normalized.length - 1];
+    if ((first === "\"" && last === "\"") || (first === "'" && last === "'") || (first === "`" && last === "`")) {
+      normalized = normalized.slice(1, -1).trim();
+      continue;
+    }
+    break;
+  }
+  return normalized;
+}
+
+function decodeFileUriPath(value = "") {
+  const normalized = unwrapPathLikeIdentifier(value);
+  if (!/^file:/i.test(normalized)) {
+    return normalized;
+  }
+  try {
+    return fileURLToPath(normalized);
+  } catch {
+    return normalized;
+  }
+}
+
+function isAbsolutePathLike(value = "") {
+  const normalized = decodeFileUriPath(value);
+  return path.isAbsolute(normalized) || path.win32.isAbsolute(normalized) || path.posix.isAbsolute(normalized);
+}
+
+function getPathComparisonApi(left = "", right = "") {
+  if (path.win32.isAbsolute(left) || path.win32.isAbsolute(right)) {
+    return path.win32;
+  }
+  if (path.posix.isAbsolute(left) || path.posix.isAbsolute(right)) {
+    return path.posix;
+  }
+  return path;
+}
+
+function isOutsideRootRelativePath(relative = "", pathApi = path) {
+  return relative === ".." || relative.startsWith(`..${pathApi.sep}`) || relative.startsWith("../") || relative.startsWith("..\\");
+}
+
+function normalizeStorageRootRelativeIdentifier(identifier = "", storageRoot = "") {
+  const raw = unwrapPathLikeIdentifier(identifier);
+  const root = decodeFileUriPath(storageRoot);
+  if (!raw || !root) {
+    return null;
+  }
+  const candidate = decodeFileUriPath(raw);
+  if (!isAbsolutePathLike(candidate) || !isAbsolutePathLike(root)) {
+    return null;
+  }
+  const pathApi = getPathComparisonApi(root, candidate);
+  const rootAbs = pathApi.resolve(root);
+  const candidateAbs = pathApi.resolve(candidate);
+  const relative = pathApi.relative(rootAbs, candidateAbs);
+  if (!relative || relative === ".") {
+    return "";
+  }
+  if (isOutsideRootRelativePath(relative, pathApi) || pathApi.isAbsolute(relative) || path.isAbsolute(relative) || path.win32.isAbsolute(relative) || path.posix.isAbsolute(relative)) {
+    return null;
+  }
+  return normalizeRelativePath(relative);
 }
 
 function normalizeStringList(value) {
@@ -544,8 +613,8 @@ export function createFileLookup(files = []) {
   return { byId, byPath };
 }
 
-export function resolveLibraryFile(files = [], identifier = "") {
-  const normalized = String(identifier || "").trim();
+export function resolveLibraryFile(files = [], identifier = "", options = {}) {
+  const normalized = unwrapPathLikeIdentifier(identifier);
   if (!normalized) {
     return null;
   }
@@ -553,7 +622,11 @@ export function resolveLibraryFile(files = [], identifier = "") {
   if (byId.has(normalized)) {
     return byId.get(normalized);
   }
-  const maybePath = normalizeRelativePath(normalized.includes(":") ? normalized.split(":").slice(1).join(":") : normalized);
+  const storageRelative = normalizeStorageRootRelativeIdentifier(normalized, options.storageRoot || options.root || "");
+  const isAbsoluteInput = isAbsolutePathLike(normalized);
+  const maybePath = storageRelative !== null
+    ? storageRelative
+    : normalizeRelativePath((normalized.includes(":") && !isAbsoluteInput) ? normalized.split(":").slice(1).join(":") : normalized);
   return byPath.get(maybePath.toLowerCase()) || null;
 }
 
@@ -1794,7 +1867,7 @@ export async function buildLibraryMetadataResult(api, input = {}) {
   const files = [];
   const missing = [];
   for (const identifier of identifiers) {
-    const file = resolveLibraryFile(snapshot.files, identifier);
+    const file = resolveLibraryFile(snapshot.files, identifier, { storageRoot: api.storageRoot });
     if (!file) {
       missing.push(identifier);
       continue;
@@ -1838,7 +1911,7 @@ export async function buildTextExcerptResult(api, input = {}) {
     throw new Error("fileId or path is required");
   }
 
-  const file = resolveLibraryFile(snapshot.files, identifier);
+  const file = resolveLibraryFile(snapshot.files, identifier, { storageRoot: api.storageRoot });
   if (!file) {
     throw new Error(`文件未找到: ${identifier}`);
   }
@@ -1930,7 +2003,7 @@ export async function buildMediaSummaryResult(api, input = {}) {
   if (!identifier) {
     throw new Error("fileId or path is required");
   }
-  const file = resolveLibraryFile(snapshot.files, identifier);
+  const file = resolveLibraryFile(snapshot.files, identifier, { storageRoot: api.storageRoot });
   if (!file) {
     throw new Error(`文件未找到: ${identifier}`);
   }
@@ -2121,7 +2194,7 @@ export async function buildDiagnoseFileAccessResult(api, input = {}) {
     throw new Error("fileId or path is required");
   }
 
-  const file = resolveLibraryFile(snapshot.files, identifier);
+  const file = resolveLibraryFile(snapshot.files, identifier, { storageRoot: api.storageRoot });
   if (!file) {
     return {
       generatedAt: new Date().toISOString(),
@@ -2351,7 +2424,7 @@ export async function buildLibraryDetailsResult(api, input = {}) {
   const files = [];
   const missing = [];
   for (const identifier of uniqueIdentifiers) {
-    const file = resolveLibraryFile(snapshot.files, identifier);
+    const file = resolveLibraryFile(snapshot.files, identifier, { storageRoot: api.storageRoot });
     if (!file) {
       missing.push(identifier);
       continue;
@@ -2890,7 +2963,7 @@ export async function buildUpdateFileMetadataResult(api, input = {}) {
   const missing = [];
   const allChangedFields = new Set();
   for (const identifier of identifiers) {
-    const file = resolveLibraryFile(snapshot.files, identifier);
+    const file = resolveLibraryFile(snapshot.files, identifier, { storageRoot: api.storageRoot });
     if (!file) {
       missing.push(identifier);
       continue;
@@ -3014,7 +3087,7 @@ export async function buildOrganizeFilesResult(api, input = {}) {
       });
       continue;
     }
-    const file = resolveLibraryFile(snapshot.files, identifier);
+    const file = resolveLibraryFile(snapshot.files, identifier, { storageRoot: api.storageRoot });
     if (!file) {
       missing.push(identifier);
       planned.push({
@@ -3238,7 +3311,7 @@ export async function buildTrashFilesResult(api, input = {}) {
       });
       continue;
     }
-    const file = resolveLibraryFile(snapshot.files, identifier);
+    const file = resolveLibraryFile(snapshot.files, identifier, { storageRoot: api.storageRoot });
     if (!file) {
       missing.push(identifier);
       planned.push({

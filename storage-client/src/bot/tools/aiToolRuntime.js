@@ -474,7 +474,7 @@ async function buildAnalyzeFileContentResult(api = {}, input = {}) {
     throw new Error("fileId or path is required");
   }
   const snapshot = await loadLibrarySnapshot(api);
-  const file = resolveLibraryFile(snapshot.files, identifier);
+  const file = resolveLibraryFile(snapshot.files, identifier, { storageRoot: api.storageRoot });
   if (!file) {
     throw new Error(`文件未找到: ${identifier}`);
   }
@@ -1576,7 +1576,7 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
       throw new Error("fileId or path is required");
     }
     const snapshot = await loadLibrarySnapshot(api);
-    const file = resolveLibraryFile(snapshot.files, identifier);
+    const file = resolveLibraryFile(snapshot.files, identifier, { storageRoot: api.storageRoot });
     if (!file) {
       throw new Error(`文件未找到: ${identifier}`);
     }
@@ -1738,7 +1738,7 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
       throw new Error("fileId or path is required");
     }
     const snapshot = await loadLibrarySnapshot(api);
-    const file = resolveLibraryFile(snapshot.files, identifier);
+    const file = resolveLibraryFile(snapshot.files, identifier, { storageRoot: api.storageRoot });
     if (!file) {
       throw new Error(`文件未找到: ${identifier}`);
     }
