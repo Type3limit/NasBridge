@@ -623,6 +623,48 @@ function buildAccessLayer({ id = "", label = "", available = false, tools = [], 
   };
 }
 
+function redactDependencyDetail(value = "") {
+  return String(value || "")
+    .replace(/[A-Za-z]:[\\/][^\s；,，]+/g, "[local-path]")
+    .replace(/\\\\[^\s；,，]+/g, "[network-path]")
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted]")
+    .slice(0, 240);
+}
+
+function buildDependencyStatus(required = [], api = {}, options = {}) {
+  const requiredIds = uniqueToolList(required);
+  const checks = Array.isArray(api?.healthSnapshot?.checks) ? api.healthSnapshot.checks : [];
+  const byId = new Map(checks.map((check) => [String(check?.id || "").trim(), check]).filter(([id]) => id));
+  const blockingWarnIds = new Set((Array.isArray(options.blockingWarnIds) ? options.blockingWarnIds : []).map((item) => String(item || "").trim()).filter(Boolean));
+  const items = requiredIds.map((id) => {
+    const check = byId.get(id);
+    const status = String(check?.status || "unknown").trim() || "unknown";
+    const blocking = status === "error" || (status === "warn" && blockingWarnIds.has(id));
+    return {
+      id,
+      label: String(check?.label || id).trim(),
+      status,
+      blocking,
+      detail: redactDependencyDetail(check?.detail || "")
+    };
+  });
+  const blockers = items.filter((item) => item.blocking);
+  const status = blockers.some((item) => item.status === "error")
+    ? "error"
+    : (blockers.length ? "warn" : (items.some((item) => item.status === "warn") ? "warn" : (items.some((item) => item.status === "unknown") ? "unknown" : "ok")));
+  return {
+    healthAvailable: checks.length > 0,
+    status,
+    ready: blockers.length === 0,
+    required: requiredIds,
+    checks: items,
+    blockers,
+    nextAction: blockers.length
+      ? `先修复依赖：${blockers.map((item) => `${item.label}=${item.status}`).join("、")}，再继续分析。`
+      : (checks.length ? "依赖未发现阻塞，可继续执行推荐工具。" : "本次没有 health snapshot；执行前仍需以工具返回为准。")
+  };
+}
+
 function inferAnalyzeAccessMode(file = {}, hints = {}) {
   if (hints.image) {
     return "image";
@@ -636,12 +678,34 @@ function inferAnalyzeAccessMode(file = {}, hints = {}) {
   return "metadata";
 }
 
-function buildAccessNextActions(file = {}, hints = {}, pathSafe = true, hiddenDirectory = false) {
+function getAnalysisDependencyRequirements(analyzeMode = "metadata", hints = {}) {
+  if (analyzeMode === "media" && hints.videoOrAudio && !hints.aiSummaryAvailable) {
+    return ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root"];
+  }
+  if (analyzeMode === "text" && hints.documentTextExtractable) {
+    return ["ai-model", "storage-root", "document-text"];
+  }
+  if (analyzeMode === "image") {
+    return ["ai-model", "storage-root"];
+  }
+  if (analyzeMode === "text") {
+    return ["ai-model", "storage-root"];
+  }
+  return ["storage-root"];
+}
+
+function buildAccessNextActions(file = {}, hints = {}, pathSafe = true, hiddenDirectory = false, analysisDependencies = null) {
   if (!pathSafe) {
     return ["该文件索引路径未通过 storage root 安全校验；不要继续读取内容，先重新扫描或修复索引。"];
   }
   if (hiddenDirectory) {
     return ["该文件位于隐藏/系统目录；默认只应查看索引信息，不要继续读取或修改。"];
+  }
+  if (Array.isArray(analysisDependencies?.blockers) && analysisDependencies.blockers.length) {
+    return [
+      analysisDependencies.nextAction,
+      "修复后重新调用 diagnose_file_access 确认依赖状态，再启动内容分析。"
+    ];
   }
   if (hints.aiSummaryAvailable) {
     return ["调用 read_media_summary 或 get_storage_file_details 读取已有 AI 摘要。"];
@@ -1136,6 +1200,10 @@ export async function buildDiagnoseFileAccessResult(api, input = {}) {
   const hiddenDirectory = isHiddenRelativePath(file.relativePath);
   const hints = buildContentAccessHints(file);
   const analyzeMode = inferAnalyzeAccessMode(file, hints);
+  const analysisDependencyRequirements = getAnalysisDependencyRequirements(analyzeMode, hints);
+  const analysisDependencies = buildDependencyStatus(analysisDependencyRequirements, api, {
+    blockingWarnIds: analyzeMode === "media" && hints.videoOrAudio && !hints.aiSummaryAvailable ? ["whisper"] : []
+  });
   const canReadExcerpt = pathSafe && !hiddenDirectory && (hints.textReadable || hints.subtitleAvailable);
   const canReadMediaSummary = pathSafe && !hiddenDirectory && (hints.media || hints.aiSummaryAvailable || hints.subtitleAvailable);
   const canAnalyze = pathSafe && !hiddenDirectory && (hints.textReadable || hints.image || hints.videoOrAudio || hints.aiSummaryAvailable || hints.subtitleAvailable);
@@ -1178,6 +1246,14 @@ export async function buildDiagnoseFileAccessResult(api, input = {}) {
       requires: ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root"]
     });
   }
+  for (const blocker of analysisDependencies.blockers) {
+    blockers.push({
+      id: `dependency-${blocker.id}`,
+      severity: blocker.status === "error" ? "error" : "warn",
+      message: `分析依赖不可用：${blocker.label}=${blocker.status}${blocker.detail ? `；${blocker.detail}` : ""}`,
+      requires: [blocker.id]
+    });
+  }
 
   return {
     generatedAt: new Date().toISOString(),
@@ -1210,6 +1286,9 @@ export async function buildDiagnoseFileAccessResult(api, input = {}) {
       ...hints,
       analyzeMode,
       recommendedTools
+    },
+    dependencies: {
+      analysis: analysisDependencies
     },
     layers: [
       buildAccessLayer({
@@ -1245,11 +1324,13 @@ export async function buildDiagnoseFileAccessResult(api, input = {}) {
       buildAccessLayer({
         id: "analysis",
         label: "Analysis",
-        available: canAnalyze,
+        available: canAnalyze && analysisDependencies.ready,
         tools: canAnalyze ? uniqueToolList(["analyze_file_content", hints.videoOrAudio && !hints.aiSummaryAvailable ? "invoke_video_analyze" : ""]) : [],
-        requires: analyzeMode === "media" && hints.videoOrAudio && !hints.aiSummaryAvailable ? ["ai-model", "ffmpeg", "ffprobe", "whisper"] : ["ai-model"],
-        detail: canAnalyze ? `建议分析模式：${analyzeMode}` : "",
-        reason: canAnalyze ? "" : "当前文件类型只能读取 metadata。"
+        requires: analysisDependencyRequirements,
+        detail: canAnalyze ? `建议分析模式：${analyzeMode}；依赖状态=${analysisDependencies.status}` : "",
+        reason: canAnalyze
+          ? (analysisDependencies.ready ? "" : analysisDependencies.nextAction)
+          : "当前文件类型只能读取 metadata。"
       }),
       buildAccessLayer({
         id: "write-metadata",
@@ -1270,7 +1351,7 @@ export async function buildDiagnoseFileAccessResult(api, input = {}) {
     ],
     blockers,
     recommendedTools,
-    nextActions: buildAccessNextActions(file, hints, pathSafe, hiddenDirectory)
+    nextActions: buildAccessNextActions(file, hints, pathSafe, hiddenDirectory, analysisDependencies)
   };
 }
 

@@ -383,6 +383,49 @@ test("diagnose_file_access explains concrete file layers without exposing absolu
   });
 });
 
+test("diagnose_file_access includes health dependency blockers for unanalyzed media", async () => {
+  await withTempDir(async (root) => {
+    const api = {
+      ...createApi(root, [
+        {
+          id: "client:Videos/raw.mp4",
+          clientId: "client",
+          path: "Videos/raw.mp4",
+          name: "raw.mp4",
+          size: 100,
+          mimeType: "video/mp4",
+          updatedAt: "2026-07-01T00:00:00.000Z"
+        }
+      ]),
+      healthSnapshot: {
+        overall: "warn",
+        checks: [
+          { id: "ai-model", label: "AI 模型", status: "ok", detail: "text model ok" },
+          { id: "ffmpeg", label: "ffmpeg", status: "ok", detail: "available" },
+          { id: "ffprobe", label: "ffprobe", status: "ok", detail: "available" },
+          { id: "whisper", label: "Whisper", status: "warn", detail: "C:\\secret\\whisper.exe 缺少模型文件" },
+          { id: "storage-root", label: "NAS 文件访问", status: "ok", detail: `${root} 可读写` }
+        ]
+      }
+    };
+
+    const result = await buildDiagnoseFileAccessResult(api, {
+      fileId: "client:Videos/raw.mp4"
+    });
+
+    assert.equal(result.dependencies.analysis.healthAvailable, true);
+    assert.equal(result.dependencies.analysis.ready, false);
+    assert.equal(result.dependencies.analysis.status, "warn");
+    assert.deepEqual(result.dependencies.analysis.required, ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root"]);
+    assert.equal(result.dependencies.analysis.blockers[0].id, "whisper");
+    assert.match(result.dependencies.analysis.blockers[0].detail, /\[local-path\]/);
+    assert.ok(result.blockers.some((item) => item.id === "dependency-whisper"));
+    assert.equal(result.layers.find((layer) => layer.id === "analysis")?.available, false);
+    assert.match(result.nextActions[0], /Whisper|依赖/);
+    assert.doesNotMatch(JSON.stringify(result), /C:\\secret/);
+  });
+});
+
 test("diagnose_file_access reports missing files as searchable instead of reading outside the index", async () => {
   await withTempDir(async (root) => {
     const result = await buildDiagnoseFileAccessResult(createApi(root, []), {

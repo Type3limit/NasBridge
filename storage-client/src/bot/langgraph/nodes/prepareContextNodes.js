@@ -55,6 +55,9 @@ export async function handleAiChatPrepareContextRoute(state = {}) {
   const combinedHistoryMessages = [...buildSessionHistoryMessages(sessionMessages), ...historyMessages]
     .slice(-(MAX_CONTEXT_MESSAGES + MAX_SESSION_CONTEXT_MESSAGES));
   const taskPresetPrompt = buildNasAgentTaskPresetPrompt({ prompt: toolAwarePrompt });
+  const replyApi = prepared.replyApi && typeof prepared.replyApi === "object"
+    ? { ...prepared.replyApi, healthSnapshot }
+    : prepared.replyApi;
   const systemPrompt = [
     "你是 NAS 聊天室里的 AI 助手。",
     buildRealtimeContextText(),
@@ -96,6 +99,7 @@ export async function handleAiChatPrepareContextRoute(state = {}) {
       recentMessages,
       combinedHistoryMessages,
       healthSnapshot,
+      replyApi,
       capabilityPromptSummary,
       taskPresetPrompt,
       systemPrompt
