@@ -131,6 +131,84 @@ function buildCapabilityStatusBadges(artifact = {}) {
   ].filter(Boolean);
 }
 
+function getWorkflowStatus(workflow = {}) {
+  if (workflow.blocked === true) {
+    return "blocked";
+  }
+  const steps = Array.isArray(workflow.steps) ? workflow.steps : [];
+  if (!steps.length) {
+    return "unknown";
+  }
+  if (steps.some((step) => step.status === "error")) {
+    return "error";
+  }
+  if (steps.some((step) => step.status === "warn" || step.status === "unknown")) {
+    return "warn";
+  }
+  return "ok";
+}
+
+function buildWorkflowStatusBadges(artifact = {}) {
+  const workflows = Array.isArray(artifact.workflows) ? artifact.workflows : [];
+  const counts = countByStatus(workflows, getWorkflowStatus);
+  return [
+    Number.isFinite(Number(workflows.length))
+      ? { label: `工作流 ${Number(workflows.length)}`, color: "informative", appearance: "tint" }
+      : null,
+    counts.blocked ? createStatusBadge("blocked", counts.blocked) : null,
+    counts.error ? createStatusBadge("error", counts.error) : null,
+    counts.warn ? createStatusBadge("warn", counts.warn) : null,
+    counts.ok ? createStatusBadge("ok", counts.ok) : null,
+    counts.unknown ? createStatusBadge("unknown", counts.unknown) : null
+  ].filter(Boolean);
+}
+
+function formatWorkflowStepStatuses(workflow = {}) {
+  return (Array.isArray(workflow.steps) ? workflow.steps : [])
+    .map((step) => {
+      const status = String(step?.status || "unknown").trim() || "unknown";
+      const blocker = step?.blockerId ? `(${step.blockerId})` : "";
+      return `${step.id}:${status}${blocker}`;
+    })
+    .filter(Boolean)
+    .join(", ");
+}
+
+function formatAgentWorkflowReport(artifact = {}) {
+  const workflows = Array.isArray(artifact.workflows) ? artifact.workflows : [];
+  if (!workflows.length) {
+    return [
+      "AI Agent 工作流：0",
+      "",
+      "当前没有可展示的工作流。先运行 @ai /tools 查看能力注册表，或检查 capability registry 是否加载成功。"
+    ].join("\n");
+  }
+  const lines = [
+    `AI Agent 工作流：${workflows.length}`,
+    "",
+    "这些是 NAS agent 的常用任务路线；blocked 先按 @ai /health 修复依赖，warn 可以尝试但可能降级。"
+  ];
+  for (const workflow of workflows) {
+    const status = getWorkflowStatus(workflow);
+    const toolChain = Array.isArray(workflow.tools) ? workflow.tools.join(" -> ") : "";
+    const stepStatuses = formatWorkflowStepStatuses(workflow);
+    lines.push("");
+    lines.push(`- [${status}] ${workflow.id} · ${workflow.title || workflow.id}`);
+    if (toolChain) {
+      lines.push(`  工具链：${toolChain}`);
+    }
+    if (stepStatuses) {
+      lines.push(`  状态：${stepStatuses}`);
+    }
+    if (workflow.guidance) {
+      lines.push(`  指引：${workflow.guidance}`);
+    }
+  }
+  lines.push("");
+  lines.push("辅助命令：@ai /health · @ai /tools · @ai /smoke · @ai /trace <jobId>");
+  return lines.join("\n");
+}
+
 function buildSmokeStatusBadges(checklist = {}) {
   const counts = checklist.statusCounts || countByStatus(checklist.steps);
   return [
@@ -949,6 +1027,30 @@ export async function handleAiChatCommandRoute(state = {}) {
           }),
           importedFiles: [],
           artifacts: [{ type: "agent-tools", ...artifact, health }]
+        }
+      };
+    }
+
+    if (modelDirective.command.type === "workflows") {
+      const health = await collectAiAgentHealth(api, { modelSettings, signal: api.signal });
+      const descriptors = buildCapabilityDescriptors(api);
+      const artifact = buildCapabilityArtifactSummary(descriptors, health);
+      const body = formatAgentWorkflowReport(artifact);
+      return {
+        result: {
+          chatReply: await api.publishChatReply({
+            text: body,
+            card: {
+              type: "ai-answer",
+              status: health.overall === "error" ? "failed" : "succeeded",
+              title: "AI Agent 工作流",
+              subtitle: withSessionSubtitle(`共 ${artifact.workflows.length} 条路线`, activeSession),
+              body,
+              badges: buildWorkflowStatusBadges(artifact)
+            }
+          }),
+          importedFiles: [],
+          artifacts: [{ type: "agent-workflows", ...artifact, health }]
         }
       };
     }

@@ -119,6 +119,17 @@ export function parseModelDirective(rawPrompt = "") {
     };
   }
 
+  if (/^\/(?:(?:agent\s+)?workflows?|(?:agent\s+)?playbooks?|flows?)\s*$/i.test(prompt)) {
+    return {
+      prompt: "",
+      modelOverride: "",
+      inspectOnly: false,
+      command: {
+        type: "workflows"
+      }
+    };
+  }
+
   if (/^\/(?:smoke|smoke-test|self-test|agent\s+smoke)\s*$/i.test(prompt)) {
     return {
       prompt: "",

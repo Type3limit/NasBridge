@@ -750,6 +750,106 @@ test("tools command route publishes structured capability artifact", async () =>
   }
 });
 
+test("workflows command route publishes agent task routes with readiness", async () => {
+  const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-workflows-command-"));
+  const storageRoot = path.join(appDataRoot, "storage");
+  const originalFetch = globalThis.fetch;
+  try {
+    await fs.mkdir(storageRoot, { recursive: true });
+    globalThis.fetch = async (url) => {
+      const text = String(url || "");
+      if (text.includes("/models")) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          text: async () => JSON.stringify({
+            data: [{
+              id: "deepseek-v4-pro",
+              name: "DeepSeek V4 Pro",
+              capabilities: { supports: { tool_calls: false } }
+            }]
+          }),
+          json: async () => ({})
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        text: async () => "{}",
+        json: async () => ({ sources: ["qq"] })
+      };
+    };
+
+    await withEnv({
+      AI_PROVIDER: "openai",
+      OPENAI_BASE_URL: "https://example.invalid/v1",
+      OPENAI_API_KEY: "sk-test",
+      OPENAI_MODEL: "deepseek-v4-pro",
+      MUSIC_LIB_BRIDGE_URL: "http://music.invalid",
+      BOT_BILIBILI_COOKIE_HEADER: undefined,
+      BOT_BILIBILI_COOKIE_FILE: undefined,
+      WHISPER_CPP_PATH: undefined,
+      WHISPER_MODEL_PATH: undefined
+    }, async () => {
+      const replies = [];
+      const api = {
+        appDataRoot,
+        storageRoot,
+        signal: null,
+        throwIfCancelled() {},
+        async publishChatReply(payload) {
+          replies.push(payload);
+          return {
+            id: "reply_workflows",
+            text: payload.text,
+            card: payload.card
+          };
+        }
+      };
+
+      const result = await handleAiChatCommandRoute({
+        prepared: {
+          api,
+          modelDirective: {
+            command: {
+              type: "workflows"
+            }
+          },
+          modelSettings: {
+            textModel: "openai::deepseek-v4-pro",
+            lastListedModels: []
+          }
+        }
+      });
+
+      const artifact = result.result.artifacts[0];
+      assert.equal(replies[0].card.title, "AI Agent 工作流");
+      assert.ok(replies[0].card.badges.some((badge) => /^工作流 \d+/.test(badge.label)));
+      assert.ok(replies[0].card.badges.some((badge) => /^阻断|^警告|^可用|^未知/.test(badge.label)));
+      assert.equal(artifact.type, "agent-workflows");
+      assert.ok(artifact.health);
+      assert.ok(Array.isArray(artifact.workflows));
+      assert.ok(artifact.workflows.some((workflow) => workflow.id === "media-summary"));
+      assert.ok(artifact.workflows.some((workflow) => workflow.id === "download-into-library"));
+      assert.ok(artifact.workflows.some((workflow) => workflow.id === "failure-diagnostic"));
+      const mediaWorkflow = artifact.workflows.find((workflow) => workflow.id === "media-summary");
+      assert.ok(mediaWorkflow.steps.some((step) => step.id === "invoke_video_analyze"));
+      assert.match(replies[0].text, /AI Agent 工作流/);
+      assert.match(replies[0].text, /media-summary/);
+      assert.match(replies[0].text, /search_library_files -> read_media_summary -> invoke_video_analyze/);
+      assert.match(replies[0].text, /download-into-library/);
+      assert.match(replies[0].text, /failure-diagnostic/);
+      assert.match(replies[0].text, /@ai \/health/);
+      assert.doesNotMatch(JSON.stringify(artifact), /sk-test/);
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(appDataRoot, { recursive: true, force: true });
+  }
+});
+
 test("file access command route publishes NAS access policy without local paths", async () => {
   const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-access-command-"));
   const storageRoot = path.join(appDataRoot, "storage");
