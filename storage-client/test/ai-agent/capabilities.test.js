@@ -557,6 +557,15 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
       }
     ]
   });
+  const leakyDescriptors = descriptors.map((item) => item.id === "search_library_files"
+    ? {
+        ...item,
+        examples: ["查 D:\\Secret\\nas-data\\movie.mp4 key=sk-should-not-leak-123456"]
+      }
+    : item);
+  const leakySummary = formatCapabilityPromptSummary(leakyDescriptors, { overall: "ok", checks: [] }, { maxItems: 28 });
+  const leakyArtifact = buildCapabilityArtifactSummary(leakyDescriptors, { overall: "ok", checks: [] });
+  const leakySearchArtifact = leakyArtifact.capabilities.find((item) => item.id === "search_library_files");
 
   assert.match(summary, /search_library_files/);
   assert.match(summary, /read_media_summary/);
@@ -600,6 +609,13 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(summary, /fix=检查 \[local-path\] 的读写权限/);
   assert.match(summary, /\[local-path\]/);
   assert.doesNotMatch(summary, /C:\\Secret/);
+  assert.match(leakySummary, /\[local-path\]/);
+  assert.match(leakySummary, /sk-\[redacted\]/);
+  assert.doesNotMatch(leakySummary, /D:\\Secret/);
+  assert.doesNotMatch(leakySummary, /sk-should-not-leak/);
+  assert.ok(leakySearchArtifact.examples.some((example) => example.includes("[local-path]") && example.includes("sk-[redacted]")));
+  assert.doesNotMatch(JSON.stringify(leakySearchArtifact), /D:\\Secret/);
+  assert.doesNotMatch(JSON.stringify(leakySearchArtifact), /sk-should-not-leak/);
   assert.match(blockedSummary, /invoke_video_analyze: status=warn, ready=blocked, blocker=whisper/);
   assert.match(blockedSummary, /media-summary: .*invoke_video_analyze:blocked\(whisper\)/);
   const videoAnalyzeArtifact = artifact.capabilities.find((item) => item.id === "invoke_video_analyze");

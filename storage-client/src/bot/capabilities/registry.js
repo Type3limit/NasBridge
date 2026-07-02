@@ -862,6 +862,13 @@ function compactRepairHints(repairHints = []) {
   })).filter((hint) => hint.id || hint.label || hint.hint).slice(0, 5);
 }
 
+function compactCapabilityExamples(examples = [], { maxItems = 3, limit = 160 } = {}) {
+  return uniqueStrings(examples)
+    .map((example) => redactCapabilityArtifactText(example, limit))
+    .filter(Boolean)
+    .slice(0, maxItems);
+}
+
 function compactReadinessBlocker(blocker = null) {
   if (!blocker || typeof blocker !== "object") {
     return null;
@@ -891,7 +898,7 @@ function buildCapabilityArtifactItem(item = {}, health = {}) {
     permissions: uniqueStrings(item.permissions).slice(0, 12),
     healthChecks: uniqueStrings(item.healthChecks).slice(0, 12),
     output: summarizeOutputSchemaContract(item.outputSchema),
-    examples: uniqueStrings(item.examples).slice(0, 3),
+    examples: compactCapabilityExamples(item.examples),
     status: visibleStatus,
     availability: {
       status: availability.status || "unknown",
@@ -1042,7 +1049,8 @@ export function formatCapabilityPromptSummary(descriptors = [], health = {}, opt
       const caps = formatCapabilityListValue(item.capabilities, { maxItems: 3 });
       const permissions = formatCapabilityListValue(item.permissions, { maxItems: 3 });
       const returns = summarizeOutputSchemaFields(item.outputSchema, { maxItems: 4 });
-      const examples = Array.isArray(item.examples) && item.examples.length ? ` examples=${item.examples.slice(0, 2).join(" / ")}` : "";
+      const safeExamples = compactCapabilityExamples(item.examples, { maxItems: 2, limit: 120 });
+      const examples = safeExamples.length ? ` examples=${safeExamples.join(" / ")}` : "";
       const blockerId = readiness.ready === false
         ? String(readiness.blocker?.id || readiness.blocker?.label || "").trim()
         : "";
