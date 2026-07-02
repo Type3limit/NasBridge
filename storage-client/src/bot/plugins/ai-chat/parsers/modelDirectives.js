@@ -110,6 +110,20 @@ export function parseModelDirective(rawPrompt = "") {
     };
   }
 
+  const traceCommand = prompt.match(/^\/(?:trace|timeline|(?:agent|job)\s+trace)(?:\s+([^\s]+))?\s*$/i);
+  if (traceCommand) {
+    const jobId = String(traceCommand[1] || "").trim();
+    return {
+      prompt: "",
+      modelOverride: "",
+      inspectOnly: false,
+      command: {
+        type: "trace",
+        jobId: /^(?:latest|last|recent)$/i.test(jobId) ? "" : jobId
+      }
+    };
+  }
+
   const setAllCommand = prompt.match(/^\/model\s+set-all\s+([\s\S]+?)\s*$/i);
   if (setAllCommand?.[1]) {
     return {

@@ -6,6 +6,7 @@ import { compressAiSessionContext } from "../../plugins/ai-chat/services/compres
 import { getEffectiveMultimodalModel, getEffectiveTextModel, writeAiModelSettings } from "../../plugins/ai-chat/services/modelSettings.js";
 import { buildCapabilityDescriptors, formatCapabilityReport } from "../../capabilities/registry.js";
 import { collectAiAgentHealth, formatHealthReport } from "../../capabilities/health.js";
+import { buildAgentTraceResult } from "../../tools/botJobStatus.js";
 import { getDefaultTextModelName, listAvailableModels, resolveModelReference } from "../../tools/llmClient.js";
 
 const MODEL_PROVIDER_SEPARATOR = "::";
@@ -72,6 +73,118 @@ function buildEffectiveProviderBadges(settings = {}) {
     createProviderBadge(textProvider, "文本"),
     createProviderBadge(visionProvider, "看图")
   ].filter(Boolean);
+}
+
+function formatDurationMs(value) {
+  const durationMs = Number(value);
+  if (!Number.isFinite(durationMs)) {
+    return "";
+  }
+  if (durationMs < 1000) {
+    return `${Math.max(0, Math.round(durationMs))}ms`;
+  }
+  return `${(Math.max(0, durationMs) / 1000).toFixed(1)}s`;
+}
+
+function formatStatusCounts(counts = {}) {
+  const entries = Object.entries(counts || {}).filter(([, count]) => Number(count) > 0);
+  return entries.length ? entries.map(([status, count]) => `${status} ${count}`).join(" / ") : "";
+}
+
+function compactJsonInline(value = null, maxLength = 180) {
+  if (value == null) {
+    return "";
+  }
+  try {
+    const text = JSON.stringify(value);
+    return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+  } catch {
+    const text = String(value || "");
+    return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+  }
+}
+
+function formatTraceTimelineItem(item = {}) {
+  const label = String(item.label || item.tool || item.phase || item.node || "event").trim();
+  const suffixes = [
+    item.durationMs != null ? formatDurationMs(item.durationMs) : "",
+    item.resultSummary?.jobRefs?.length
+      ? `job=${item.resultSummary.jobRefs.map((ref) => `${ref.botId || "bot"}:${ref.jobId}`).join(",")}`
+      : "",
+    item.errorSummary?.message ? `error=${item.errorSummary.message}` : ""
+  ].filter(Boolean);
+  const input = compactJsonInline(item.inputSummary, 140);
+  return [
+    `- ${item.index || "?"}. ${label}${suffixes.length ? ` · ${suffixes.join(" · ")}` : ""}`,
+    input ? `  input: ${input}` : ""
+  ].filter(Boolean).join("\n");
+}
+
+export function formatAgentTraceReport(trace = {}) {
+  const jobId = String(trace.jobId || "").trim();
+  if (!jobId) {
+    return "还没有找到最近一次 ai.chat 执行 trace。可以先运行一个 @ai 任务，再用 @ai /trace 查看。";
+  }
+
+  if (trace.missing === true) {
+    return [
+      `没有找到 ${jobId} 的 agent trace。`,
+      "可能原因：jobId 不是 ai.chat 执行、trace 已被清理，或这次任务还没写入 trace。"
+    ].join("\n");
+  }
+
+  const snapshot = trace.snapshot || {};
+  const traceSummary = snapshot.traceSummary || {};
+  const header = [
+    `Agent job: ${jobId}${trace.latest ? "（最近一次）" : ""}`,
+    snapshot.status ? `状态: ${snapshot.status}` : "",
+    snapshot.route ? `路线: ${snapshot.route}` : "",
+    traceSummary.lastNode ? `最后节点: ${traceSummary.lastNode}` : "",
+    snapshot.savedAt ? `保存时间: ${String(snapshot.savedAt).slice(0, 19).replace("T", " ")}` : ""
+  ].filter(Boolean).join("\n");
+
+  const pending = trace.pendingConfirmation?.tool
+    ? [
+        "等待确认:",
+        `- tool: ${trace.pendingConfirmation.tool}`,
+        trace.pendingConfirmation.confirmation?.riskLevel ? `- risk: ${trace.pendingConfirmation.confirmation.riskLevel}` : "",
+        Number.isFinite(Number(trace.pendingConfirmation.confirmation?.impact?.targetFileCount))
+          ? `- 影响文件数: ${trace.pendingConfirmation.confirmation.impact.targetFileCount}`
+          : ""
+      ].filter(Boolean).join("\n")
+    : "";
+
+  const recovery = trace.recoveryHint?.nextAction
+    ? [
+        "恢复建议:",
+        `- mode: ${trace.recoveryHint.mode || "unknown"}`,
+        `- next: ${trace.recoveryHint.nextAction}`
+      ].join("\n")
+    : "";
+
+  const toolStats = trace.toolStats || {};
+  const toolRows = Array.isArray(toolStats.tools)
+    ? toolStats.tools.slice(0, 6).map((tool) => {
+        const stats = formatStatusCounts(tool.statusCounts);
+        const avg = tool.averageDurationMs != null ? `avg ${formatDurationMs(tool.averageDurationMs)}` : "";
+        const refs = Array.isArray(tool.jobRefs) && tool.jobRefs.length
+          ? `jobs ${tool.jobRefs.map((ref) => `${ref.botId || "bot"}:${ref.jobId}`).join(", ")}`
+          : "";
+        return `- ${tool.tool}: ${tool.callCount} 次${stats ? ` · ${stats}` : ""}${avg ? ` · ${avg}` : ""}${refs ? ` · ${refs}` : ""}`;
+      })
+    : [];
+  const tools = [
+    "工具统计:",
+    `- 总调用: ${Number(toolStats.count || 0)}${formatStatusCounts(toolStats.statusCounts) ? ` · ${formatStatusCounts(toolStats.statusCounts)}` : ""}`,
+    ...toolRows
+  ].join("\n");
+
+  const timelineItems = Array.isArray(trace.timeline) ? trace.timeline.slice(-12) : [];
+  const timeline = timelineItems.length
+    ? ["最近步骤:", ...timelineItems.map(formatTraceTimelineItem)].join("\n")
+    : "最近步骤: trace 里没有可展示的事件。";
+
+  return [header, pending, recovery, tools, timeline].filter(Boolean).join("\n\n");
 }
 
 async function resolveModelForSettings(rawModel = "", modelSettings = {}, api = {}, purpose = "text") {
@@ -214,6 +327,37 @@ export async function handleAiChatCommandRoute(state = {}) {
           }),
           importedFiles: [],
           artifacts: [{ type: "agent-tools", count: descriptors.length, health }]
+        }
+      };
+    }
+
+    if (modelDirective.command.type === "trace") {
+      const trace = await buildAgentTraceResult(api, {
+        jobId: modelDirective.command.jobId || "",
+        maxEvents: 60
+      });
+      const body = formatAgentTraceReport(trace);
+      return {
+        result: {
+          chatReply: await api.publishChatReply({
+            text: body,
+            card: {
+              type: "ai-answer",
+              status: trace.missing === true ? "failed" : "succeeded",
+              title: "AI Agent Trace",
+              subtitle: withSessionSubtitle(trace.jobId ? `job: ${trace.jobId}` : "没有可用 trace", activeSession),
+              body
+            }
+          }),
+          importedFiles: [],
+          artifacts: [{
+            type: "agent-trace",
+            jobId: trace.jobId || "",
+            latest: trace.latest === true,
+            missing: trace.missing === true,
+            recoveryHint: trace.recoveryHint || null,
+            toolStats: trace.toolStats || null
+          }]
         }
       };
     }
