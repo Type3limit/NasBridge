@@ -479,14 +479,23 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.ok(byId.get("update_file_metadata").outputSchema.properties.confirmation);
   assert.deepEqual(byId.get("trash_files").outputSchema.required, ["operation", "actions"]);
   assert.ok(byId.get("trash_files").outputSchema.properties.audit);
-  assert.deepEqual(byId.get("invoke_music_control").outputSchema.required, ["status", "botId", "jobId"]);
+  assert.deepEqual(byId.get("invoke_music_control").outputSchema.required, ["status", "botId", "jobId", "logHint", "nextAction", "tracking"]);
+  assert.ok(byId.get("invoke_music_control").outputSchema.properties.logHint);
+  assert.ok(byId.get("invoke_music_control").outputSchema.properties.nextAction);
   assert.ok(byId.get("invoke_music_control").outputSchema.properties.tracking);
   assert.ok(byId.get("invoke_music_control").outputSchema.properties.prompt);
   assert.deepEqual(byId.get("describe_image").outputSchema.required, ["imageCount", "analysis"]);
   assert.equal(byId.get("describe_image").outputSchema.properties.analysis.type, "string");
-  assert.deepEqual(byId.get("invoke_bilibili_downloader").outputSchema.required, ["status", "botId", "jobId"]);
+  assert.deepEqual(byId.get("invoke_bilibili_downloader").outputSchema.required, ["status", "botId", "jobId", "logHint", "nextAction", "tracking"]);
+  assert.ok(byId.get("invoke_bilibili_downloader").outputSchema.properties.logHint);
+  assert.ok(byId.get("invoke_bilibili_downloader").outputSchema.properties.nextAction);
   assert.ok(byId.get("invoke_bilibili_downloader").outputSchema.properties.tracking);
   assert.ok(byId.get("video.analyze").outputSchema.properties.jobId);
+  assert.deepEqual(byId.get("video.analyze").outputSchema.required, ["status", "botId", "jobId"]);
+  assert.ok(byId.get("invoke_video_analyze").outputSchema.required.includes("logHint"));
+  assert.ok(byId.get("invoke_video_analyze").outputSchema.required.includes("tracking"));
+  assert.ok(byId.get("download_yyets_episodes").outputSchema.required.includes("nextAction"));
+  assert.ok(byId.get("analyze_file_content").outputSchema.properties.logHint);
 
   const summary = formatCapabilityPromptSummary(descriptors, {
     overall: "warn",

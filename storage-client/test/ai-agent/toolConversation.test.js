@@ -614,7 +614,14 @@ test("delegated tool results write structured job refs into tool trace events", 
   assert.equal(api.toolEvents[0].resultSummary.capability.id, "invoke_video_analyze");
   assert.equal(api.toolEvents[0].resultSummary.capability.riskLevel, "medium");
   assert.ok(api.toolEvents[0].resultSummary.capability.permissions.includes("storage:metadata:write"));
-  assert.deepEqual(api.toolEvents[0].resultSummary.capability.output.required, ["status", "botId", "jobId"]);
+  assert.deepEqual(api.toolEvents[0].resultSummary.capability.output.required, [
+    "status",
+    "botId",
+    "jobId",
+    "logHint",
+    "nextAction",
+    "tracking"
+  ]);
   assert.deepEqual(api.toolEvents[0].resultSummary.jobRefs, [
     {
       jobId: "botjob_child",

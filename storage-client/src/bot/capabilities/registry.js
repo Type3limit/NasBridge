@@ -63,6 +63,11 @@ const DELEGATED_JOB_OUTPUT_SCHEMA = {
   additionalProperties: true
 };
 
+const DELEGATED_TOOL_OUTPUT_SCHEMA = {
+  ...DELEGATED_JOB_OUTPUT_SCHEMA,
+  required: ["status", "botId", "jobId", "logHint", "nextAction", "tracking"]
+};
+
 const BOT_OUTPUT_SCHEMAS = {
   "ai.chat": {
     type: "object",
@@ -101,9 +106,9 @@ const BOT_OUTPUT_SCHEMAS = {
 
 const MUSIC_CONTROL_TOOL_OUTPUT_SCHEMA = {
   type: "object",
-  required: ["status", "botId", "jobId"],
+  required: DELEGATED_TOOL_OUTPUT_SCHEMA.required,
   properties: {
-    ...DELEGATED_JOB_OUTPUT_SCHEMA.properties,
+    ...DELEGATED_TOOL_OUTPUT_SCHEMA.properties,
     delegated: { type: "boolean" },
     prompt: { type: "string" },
     result: { type: "object" },
@@ -238,6 +243,9 @@ const TOOL_OUTPUT_SCHEMAS = {
       analysis: { type: "string" },
       delegated: { type: "boolean" },
       jobId: { type: "string" },
+      logHint: { type: "string" },
+      nextAction: { type: "string" },
+      tracking: { type: "object" },
       ...FILE_ACTION_OUTPUT_FIELDS
     },
     additionalProperties: true
@@ -311,17 +319,17 @@ const TOOL_OUTPUT_SCHEMAS = {
     },
     additionalProperties: true
   },
-  invoke_video_analyze: DELEGATED_JOB_OUTPUT_SCHEMA,
-  analyze_storage_video: DELEGATED_JOB_OUTPUT_SCHEMA,
-  invoke_video_tag: DELEGATED_JOB_OUTPUT_SCHEMA,
-  tag_storage_video: DELEGATED_JOB_OUTPUT_SCHEMA,
+  invoke_video_analyze: DELEGATED_TOOL_OUTPUT_SCHEMA,
+  analyze_storage_video: DELEGATED_TOOL_OUTPUT_SCHEMA,
+  invoke_video_tag: DELEGATED_TOOL_OUTPUT_SCHEMA,
+  tag_storage_video: DELEGATED_TOOL_OUTPUT_SCHEMA,
   invoke_music_control: MUSIC_CONTROL_TOOL_OUTPUT_SCHEMA,
-  invoke_bilibili_downloader: DELEGATED_JOB_OUTPUT_SCHEMA,
-  invoke_ytdlp_downloader: DELEGATED_JOB_OUTPUT_SCHEMA,
-  invoke_torrent_downloader: DELEGATED_JOB_OUTPUT_SCHEMA,
-  invoke_aria2_downloader: DELEGATED_JOB_OUTPUT_SCHEMA,
-  import_bilibili_video: DELEGATED_JOB_OUTPUT_SCHEMA,
-  download_yyets_episodes: DELEGATED_JOB_OUTPUT_SCHEMA,
+  invoke_bilibili_downloader: DELEGATED_TOOL_OUTPUT_SCHEMA,
+  invoke_ytdlp_downloader: DELEGATED_TOOL_OUTPUT_SCHEMA,
+  invoke_torrent_downloader: DELEGATED_TOOL_OUTPUT_SCHEMA,
+  invoke_aria2_downloader: DELEGATED_TOOL_OUTPUT_SCHEMA,
+  import_bilibili_video: DELEGATED_TOOL_OUTPUT_SCHEMA,
+  download_yyets_episodes: DELEGATED_TOOL_OUTPUT_SCHEMA,
   get_bot_job_status: {
     type: "object",
     required: ["jobs"],
