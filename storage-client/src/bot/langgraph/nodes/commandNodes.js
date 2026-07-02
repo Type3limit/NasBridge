@@ -221,6 +221,23 @@ function buildSmokeStatusBadges(checklist = {}) {
   ].filter(Boolean);
 }
 
+function buildSmokeCardActions(checklist = {}) {
+  const command = String(checklist.nextStep?.command || "").trim();
+  if (!command) {
+    return [];
+  }
+  const rawText = command.replace(/^@ai\b\s*/i, "").trim();
+  if (!rawText) {
+    return [];
+  }
+  return [{
+    type: "invoke-bot",
+    label: "执行下一步",
+    botId: "ai.chat",
+    rawText
+  }];
+}
+
 function buildFileAccessStatusBadges(explanation = {}) {
   const policy = explanation.policy && typeof explanation.policy === "object" ? explanation.policy : {};
   const currentStatus = explanation.currentStatus && typeof explanation.currentStatus === "object" ? explanation.currentStatus : {};
@@ -1377,7 +1394,8 @@ export async function handleAiChatCommandRoute(state = {}) {
               title: "AI Agent Smoke Checklist",
               subtitle: withSessionSubtitle(`overall: ${checklist.overall}`, activeSession),
               body,
-              badges: buildSmokeStatusBadges(checklist)
+              badges: buildSmokeStatusBadges(checklist),
+              actions: buildSmokeCardActions(checklist)
             }
           }),
           importedFiles: [],

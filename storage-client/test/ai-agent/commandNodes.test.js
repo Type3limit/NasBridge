@@ -1115,6 +1115,12 @@ test("smoke command route publishes local agent smoke checklist", async () => {
       assert.ok(artifact.nextStep?.command);
       assert.ok(artifact.steps.some((step) => step.id === artifact.nextStep.id));
       assert.ok(Array.isArray(artifact.blockedSteps));
+      assert.deepEqual(replies[0].card.actions, [{
+        type: "invoke-bot",
+        label: "执行下一步",
+        botId: "ai.chat",
+        rawText: artifact.nextStep.command.replace(/^@ai\b\s*/i, "")
+      }]);
       assert.ok(artifact.steps.some((step) => step.id === "health" && step.command === "@ai /health"));
       assert.ok(artifact.steps.some((step) => step.id === "models" && step.command === "@ai /models refresh"));
       assert.ok(artifact.steps.some((step) => step.id === "file-search" && step.requiredCapabilities.includes("search_library_files")));
