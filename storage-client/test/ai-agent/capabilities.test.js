@@ -424,6 +424,18 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
       }
     ]
   });
+  const blockedSummary = formatCapabilityPromptSummary(descriptors, {
+    overall: "warn",
+    checks: [
+      {
+        id: "whisper",
+        label: "Whisper",
+        status: "warn",
+        detail: "WHISPER_MODEL_PATH 未配置",
+        repairHint: "配置 WHISPER_CPP_PATH 和 WHISPER_MODEL_PATH 后重启 storage-client"
+      }
+    ]
+  }, { maxItems: 28 });
 
   assert.match(summary, /search_library_files/);
   assert.match(summary, /read_media_summary/);
@@ -459,7 +471,12 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(summary, /fix=检查 \[local-path\] 的读写权限/);
   assert.match(summary, /\[local-path\]/);
   assert.doesNotMatch(summary, /C:\\Secret/);
+  assert.match(blockedSummary, /invoke_video_analyze: status=warn, ready=blocked, blocker=whisper/);
+  assert.match(blockedSummary, /media-summary: .*invoke_video_analyze:blocked\(whisper\)/);
   assert.match(report, /video\.analyze/);
+  assert.match(report, /\[blocked\] video\.analyze/);
+  assert.match(report, /invoke_video_analyze · .*ready=no · blockedBy=whisper/);
+  assert.match(report, /阻断: Whisper: WHISPER_MODEL_PATH 未配置/);
   assert.match(report, /perms=storage:content:read/);
   assert.match(report, /caps=file-mutation/);
   assert.match(report, /perms=storage:file:move, storage:file:rename/);
@@ -467,6 +484,7 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(report, /returns=status, botId, jobId/);
   assert.match(report, /常用工作流/);
   assert.match(report, /media-summary · Summarize NAS video\/audio: search_library_files -> read_media_summary -> invoke_video_analyze -> get_bot_job_status/);
+  assert.match(report, /状态: .*invoke_video_analyze:blocked\(whisper\)/);
   assert.match(report, /hasAiSummary=false/);
   assert.match(report, /waitUntilPhase=transcribe\/running/);
   assert.match(report, /download-into-library · Download into NAS library: search_bilibili_video -> invoke_bilibili_downloader -> invoke_ytdlp_downloader -> invoke_torrent_downloader -> invoke_aria2_downloader -> search_yyets_show -> download_yyets_episodes/);
@@ -486,5 +504,6 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
     ]
   });
   assert.match(queueReport, /invoke_video_analyze/);
+  assert.match(queueReport, /\[warn\] invoke_video_analyze · .*ready=yes/);
   assert.match(queueReport, /建议\(Bot 队列\): 运行 @ai \/jobs 查看排队和失败任务/);
 });

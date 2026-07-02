@@ -700,6 +700,11 @@ function formatWorkflowToolStatuses(workflow = {}, descriptors = [], health = {}
         return "";
       }
       const availability = summarizeCapabilityAvailability(descriptor, health);
+      const readiness = summarizeCapabilityExecutionReadiness(descriptor, health);
+      if (readiness.ready === false) {
+        const blockerId = String(readiness.blocker?.id || readiness.blocker?.label || "").trim();
+        return blockerId ? `${toolId}:blocked(${blockerId})` : `${toolId}:blocked`;
+      }
       return `${toolId}:${availability.status}`;
     })
     .filter(Boolean);
@@ -782,6 +787,7 @@ export function formatCapabilityReport(descriptors = [], health = {}) {
     ok: "ok",
     warn: "warn",
     error: "error",
+    blocked: "blocked",
     unknown: "unknown"
   };
   const lines = ["AI Agent 工具与 Bot 能力："];
@@ -793,19 +799,30 @@ export function formatCapabilityReport(descriptors = [], health = {}) {
     lines.push("", kind === "bot" ? "Bot:" : "Tools:");
     for (const item of items) {
       const availability = summarizeCapabilityAvailability(item, health);
+      const readiness = summarizeCapabilityExecutionReadiness(item, health);
+      const visibleStatus = readiness.ready === false ? "blocked" : availability.status;
       const caps = formatCapabilityListValue(item.capabilities, { maxItems: 4, separator: ", " });
       const permissions = formatCapabilityListValue(item.permissions, { maxItems: 4, separator: ", " });
       const returns = summarizeOutputSchemaFields(item.outputSchema, { maxItems: 5, separator: ", " });
+      const blockerId = readiness.ready === false
+        ? String(readiness.blocker?.id || readiness.blocker?.label || "").trim()
+        : "";
       const metadata = [
         `risk=${item.riskLevel}`,
         `mode=${item.executionMode}`,
+        readiness.ready === false ? "ready=no" : (availability.status === "warn" ? "ready=yes" : ""),
+        blockerId ? `blockedBy=${blockerId}` : "",
         caps ? `caps=${caps}` : "",
         permissions ? `perms=${permissions}` : "",
         returns ? `returns=${returns}` : ""
       ].filter(Boolean).join(" · ");
-      lines.push(`- [${statusLabel[availability.status] || availability.status}] ${item.id} · ${item.displayName || item.id} · ${metadata}`);
-      if (availability.status !== "ok") {
+      lines.push(`- [${statusLabel[visibleStatus] || visibleStatus}] ${item.id} · ${item.displayName || item.id} · ${metadata}`);
+      if (readiness.ready === false) {
+        lines.push(`  - 阻断: ${readiness.detail}`);
+      } else if (availability.status !== "ok") {
         lines.push(`  - ${availability.detail}`);
+      }
+      if (visibleStatus !== "ok") {
         for (const hint of (Array.isArray(availability.repairHints) ? availability.repairHints : []).slice(0, 3)) {
           lines.push(`  - 建议(${hint.label || hint.id}): ${hint.hint}`);
         }
@@ -856,11 +873,18 @@ export function formatCapabilityPromptSummary(descriptors = [], health = {}, opt
     lines.push("Core capabilities available to consider:");
     for (const item of selected) {
       const availability = summarizeCapabilityAvailability(item, health);
+      const readiness = summarizeCapabilityExecutionReadiness(item, health);
       const caps = formatCapabilityListValue(item.capabilities, { maxItems: 3 });
       const permissions = formatCapabilityListValue(item.permissions, { maxItems: 3 });
       const returns = summarizeOutputSchemaFields(item.outputSchema, { maxItems: 4 });
       const examples = Array.isArray(item.examples) && item.examples.length ? ` examples=${item.examples.slice(0, 2).join(" / ")}` : "";
-      lines.push(`- ${item.id}: status=${availability.status}, risk=${item.riskLevel}, mode=${item.executionMode}${caps ? `, caps=${caps}` : ""}${permissions ? `, perms=${permissions}` : ""}${returns ? `, returns=${returns}` : ""}.${examples}`);
+      const blockerId = readiness.ready === false
+        ? String(readiness.blocker?.id || readiness.blocker?.label || "").trim()
+        : "";
+      const readyBits = readiness.ready === false
+        ? `, ready=blocked${blockerId ? `, blocker=${blockerId}` : ""}`
+        : ", ready=yes";
+      lines.push(`- ${item.id}: status=${availability.status}${readyBits}, risk=${item.riskLevel}, mode=${item.executionMode}${caps ? `, caps=${caps}` : ""}${permissions ? `, perms=${permissions}` : ""}${returns ? `, returns=${returns}` : ""}.${examples}`);
     }
   }
   const workflows = selectCapabilityWorkflows(descriptors, maxWorkflows);
