@@ -3846,14 +3846,6 @@ export default function App() {
         bio: draft.bio
       };
 
-        const finished = await apiRequest(`/api/upload-jobs/${jobId}/finish`, {
-          method: "POST",
-          token,
-          body: { message: "转存完成，等待资源列表刷新" }
-        });
-        if (finished?.job) {
-          upsertUploadJob(finished.job);
-        }
       if (draft.avatarFile) {
         if (!p2p) {
           throw new Error("当前 P2P 通道尚未就绪，无法上传头像");
