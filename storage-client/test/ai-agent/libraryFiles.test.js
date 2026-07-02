@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  buildDiagnoseFileAccessResult,
   buildFileAccessPolicy,
   buildFileAccessExplanation,
   buildLibraryMetadataResult,
@@ -121,7 +122,8 @@ test("text excerpt reads bounded content without exposing absolute paths", async
     assert.equal(result.policy.allowRawTextRead, true);
     assert.equal(result.policy.allowBinaryRead, false);
     assert.equal(result.policy.maxInlineTextChars, 20_000);
-    assert.doesNotMatch(JSON.stringify(result), new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
+    const absoluteFilePath = path.join(root, "Videos", "demo.mp4");
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(absoluteFilePath.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
   });
 });
 
@@ -333,7 +335,89 @@ test("file access explanation exposes policy boundaries and tool list", async ()
     assert.equal(result.policy.writeRequiresConfirmation, true);
     assert.ok(result.blockedLayers.some((item) => item.includes("STORAGE_ROOT")));
     assert.ok(result.detail.includes("search_library_files"));
+    assert.ok(result.detail.includes("diagnose_file_access"));
     assert.ok(result.detail.includes("organize_files"));
+  });
+});
+
+test("diagnose_file_access explains concrete file layers without exposing absolute paths", async () => {
+  await withTempDir(async (root) => {
+    const files = [
+      {
+        id: "client:Videos/demo.mp4",
+        clientId: "client",
+        path: "Videos/demo.mp4",
+        name: "demo.mp4",
+        size: 100,
+        mimeType: "video/mp4",
+        updatedAt: "2026-07-01T00:00:00.000Z"
+      },
+      {
+        id: "client:Videos/demo.srt",
+        clientId: "client",
+        path: "Videos/demo.srt",
+        name: "demo.srt",
+        size: 20,
+        mimeType: "text/plain",
+        updatedAt: "2026-07-01T00:00:00.000Z"
+      }
+    ];
+    const result = await buildDiagnoseFileAccessResult(createApi(root, files), {
+      fileId: "client:Videos/demo.mp4"
+    });
+
+    assert.equal(result.found, true);
+    assert.equal(result.file.path, "Videos/demo.mp4");
+    assert.equal(result.safety.storageRootOnly, true);
+    assert.equal(result.safety.absolutePathExposed, false);
+    assert.equal(result.safety.binaryRawContentAllowed, false);
+    assert.equal(result.contentAccess.videoOrAudio, true);
+    assert.equal(result.contentAccess.subtitleAvailable, true);
+    assert.equal(result.contentAccess.analyzeMode, "media");
+    assert.ok(result.layers.find((layer) => layer.id === "excerpt")?.available);
+    assert.ok(result.recommendedTools.includes("read_text_excerpt"));
+    assert.ok(result.recommendedTools.includes("read_media_summary"));
+    assert.ok(result.recommendedTools.includes("invoke_video_analyze"));
+    assert.ok(result.nextActions.some((item) => item.includes("字幕")));
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
+  });
+});
+
+test("diagnose_file_access reports missing files as searchable instead of reading outside the index", async () => {
+  await withTempDir(async (root) => {
+    const result = await buildDiagnoseFileAccessResult(createApi(root, []), {
+      path: "missing.mp4"
+    });
+
+    assert.equal(result.found, false);
+    assert.equal(result.blockers[0].id, "file-not-found");
+    assert.deepEqual(result.recommendedTools, ["search_library_files", "list_storage_files"]);
+    assert.match(result.nextActions[0], /search_library_files/);
+  });
+});
+
+test("image metadata recommends visual analysis rather than video analyze", async () => {
+  await withTempDir(async (root) => {
+    const api = createApi(root, [
+      {
+        id: "client:Images/photo.png",
+        clientId: "client",
+        path: "Images/photo.png",
+        name: "photo.png",
+        size: 100,
+        mimeType: "image/png",
+        updatedAt: "2026-07-01T00:00:00.000Z"
+      }
+    ]);
+
+    const result = await buildLibraryMetadataResult(api, {
+      fileId: "client:Images/photo.png"
+    });
+
+    assert.equal(result.files[0].contentAccess.image, true);
+    assert.equal(result.files[0].contentAccess.videoOrAudio, false);
+    assert.ok(result.files[0].contentAccess.recommendedTools.includes("analyze_file_content"));
+    assert.ok(!result.files[0].contentAccess.recommendedTools.includes("invoke_video_analyze"));
   });
 });
 

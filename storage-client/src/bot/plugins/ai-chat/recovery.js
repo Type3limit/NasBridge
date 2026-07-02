@@ -8,6 +8,7 @@ const DIRECT_RETRY_TEXT_TOOLS = new Set([
   "list_storage_files",
   "search_library_files",
   "read_file_metadata",
+  "diagnose_file_access",
   "get_storage_file_details",
   "read_text_excerpt",
   "read_media_summary",

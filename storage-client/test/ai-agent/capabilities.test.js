@@ -282,11 +282,13 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   const byId = new Map(descriptors.map((item) => [item.id, item]));
   assert.equal(byId.get("video.analyze").executionMode, "async-job");
   assert.equal(byId.get("search_library_files").riskLevel, "low");
+  assert.equal(byId.get("diagnose_file_access").riskLevel, "low");
   assert.equal(byId.get("analyze_file_content").riskLevel, "medium");
   assert.equal(byId.get("organize_files").riskLevel, "high");
   assert.equal(byId.get("organize_files").requiresConfirmation, true);
   assert.ok(byId.get("ai.chat").healthChecks.includes("ai-tool-call"));
   assert.ok(byId.get("read_text_excerpt").healthChecks.includes("document-text"));
+  assert.deepEqual(byId.get("diagnose_file_access").healthChecks, ["storage-root"]);
   assert.ok(byId.get("analyze_file_content").healthChecks.includes("document-text"));
   assert.deepEqual(byId.get("invoke_music_control").healthChecks, ["music-bridge", "qq-music-cookie"]);
   assert.ok(byId.get("invoke_bilibili_downloader").healthChecks.includes("bilibili-auth"));
@@ -304,6 +306,7 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   }, { maxItems: 16 });
 
   assert.match(summary, /search_library_files/);
+  assert.match(summary, /diagnose_file_access/);
   assert.match(summary, /explain_file_access/);
   assert.match(summary, /organize_files/);
   assert.match(summary, /\[local-path\]/);

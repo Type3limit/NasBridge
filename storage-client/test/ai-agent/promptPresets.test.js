@@ -60,5 +60,6 @@ test("includeAll exposes every preset with the always-on operating rules first",
   const prompt = buildNasAgentTaskPresetPrompt({ includeAll: true });
   assert.match(prompt, /organize_files/);
   assert.match(prompt, /explain_file_access/);
+  assert.match(prompt, /diagnose_file_access/);
   assert.match(prompt, /High risk|高风险|confirmed=true/);
 });

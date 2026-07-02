@@ -125,6 +125,15 @@ function isMediaFile(file = {}) {
   return mimeType.startsWith("video/") || mimeType.startsWith("audio/") || mimeType.startsWith("image/");
 }
 
+function isVideoOrAudioFile(file = {}) {
+  const mimeType = String(file.mimeType || "").toLowerCase();
+  return mimeType.startsWith("video/") || mimeType.startsWith("audio/");
+}
+
+function isImageFile(file = {}) {
+  return String(file.mimeType || "").toLowerCase().startsWith("image/");
+}
+
 function getSubtitleCandidates(relativePath = "", explicitPath = "") {
   const normalizedExplicit = normalizeRelativePath(explicitPath);
   const basePath = normalizeRelativePath(relativePath).replace(/\.[^/.]+$/, "");
@@ -562,14 +571,16 @@ function buildContentAccessHints(file = {}) {
   const documentTextExtractable = isDocumentTextExtractable(file);
   const textReadable = rawTextReadable || documentTextExtractable;
   const media = isMediaFile(file);
-  const tools = ["read_file_metadata", "analyze_file_content"];
+  const videoOrAudio = isVideoOrAudioFile(file);
+  const image = isImageFile(file);
+  const tools = ["read_file_metadata", "diagnose_file_access", "analyze_file_content"];
   if (textReadable) {
     tools.push("read_text_excerpt");
   }
   if (file.subtitleAvailable || file.aiSummaryAvailable || media) {
     tools.push("read_media_summary");
   }
-  if ((media || file.subtitleAvailable) && !file.aiSummaryAvailable) {
+  if ((videoOrAudio || file.subtitleAvailable) && !file.aiSummaryAvailable) {
     tools.push("invoke_video_analyze");
   }
   return {
@@ -577,10 +588,77 @@ function buildContentAccessHints(file = {}) {
     documentTextExtractable,
     textReadable,
     media,
+    videoOrAudio,
+    image,
     subtitleAvailable: Boolean(file.subtitleAvailable),
     aiSummaryAvailable: Boolean(file.aiSummaryAvailable),
     recommendedTools: tools
   };
+}
+
+function uniqueToolList(items = []) {
+  const seen = new Set();
+  const result = [];
+  for (const item of items) {
+    const value = String(item || "").trim();
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function buildAccessLayer({ id = "", label = "", available = false, tools = [], riskLevel = "low", detail = "", reason = "", requires = [] } = {}) {
+  return {
+    id,
+    label,
+    available: available === true,
+    riskLevel,
+    tools: uniqueToolList(tools),
+    requires: uniqueToolList(requires),
+    detail: String(detail || "").trim(),
+    reason: String(reason || "").trim()
+  };
+}
+
+function inferAnalyzeAccessMode(file = {}, hints = {}) {
+  if (hints.image) {
+    return "image";
+  }
+  if (hints.videoOrAudio || file.subtitleAvailable || file.aiSummaryAvailable) {
+    return "media";
+  }
+  if (hints.textReadable) {
+    return "text";
+  }
+  return "metadata";
+}
+
+function buildAccessNextActions(file = {}, hints = {}, pathSafe = true, hiddenDirectory = false) {
+  if (!pathSafe) {
+    return ["该文件索引路径未通过 storage root 安全校验；不要继续读取内容，先重新扫描或修复索引。"];
+  }
+  if (hiddenDirectory) {
+    return ["该文件位于隐藏/系统目录；默认只应查看索引信息，不要继续读取或修改。"];
+  }
+  if (hints.aiSummaryAvailable) {
+    return ["调用 read_media_summary 或 get_storage_file_details 读取已有 AI 摘要。"];
+  }
+  if (hints.subtitleAvailable) {
+    return ["调用 read_text_excerpt 并设置 source=subtitle 读取字幕片段，或调用 read_media_summary 查看媒体派生信息。"];
+  }
+  if (hints.textReadable) {
+    return ["调用 read_text_excerpt 分页读取受控文本片段；需要总结时再调用 analyze_file_content。"];
+  }
+  if (hints.image) {
+    return ["调用 analyze_file_content 分析图片内容；不会把本机绝对路径暴露给模型。"];
+  }
+  if (hints.videoOrAudio) {
+    return ["调用 invoke_video_analyze 或 analyze_file_content(startAnalysis=true) 生成字幕和 AI 摘要。"];
+  }
+  return ["只能读取 metadata；二进制原文不会直接进入模型上下文。"];
 }
 
 function buildTagsPatch(currentTags = [], input = {}) {
@@ -1011,8 +1089,188 @@ export async function buildFileAccessExplanation(api, input = {}) {
       "未经确认的删除、移动、重命名、批量覆盖"
     ],
     detail: kind === "tools"
-      ? ["list_storage_files", "search_library_files", "read_file_metadata", "get_storage_file_details", "read_text_excerpt", "read_media_summary", "analyze_file_content", "update_file_metadata", "organize_files", "invoke_video_analyze", "invoke_video_tag", "analyze_storage_video"]
+      ? ["list_storage_files", "search_library_files", "read_file_metadata", "diagnose_file_access", "get_storage_file_details", "read_text_excerpt", "read_media_summary", "analyze_file_content", "update_file_metadata", "organize_files", "invoke_video_analyze", "invoke_video_tag", "analyze_storage_video"]
       : []
+  };
+}
+
+export async function buildDiagnoseFileAccessResult(api, input = {}) {
+  const snapshot = await loadLibrarySnapshot(api);
+  const identifier = collectFileIdentifiers(input)[0] || "";
+  const policy = buildFileAccessPolicy(api);
+  if (!identifier) {
+    throw new Error("fileId or path is required");
+  }
+
+  const file = resolveLibraryFile(snapshot.files, identifier);
+  if (!file) {
+    return {
+      generatedAt: new Date().toISOString(),
+      identifier,
+      found: false,
+      policy,
+      safety: {
+        storageRootOnly: true,
+        absolutePathExposed: false,
+        binaryRawContentAllowed: false
+      },
+      blockers: [
+        {
+          id: "file-not-found",
+          severity: "error",
+          message: "文件不在当前 storage-client 索引中。"
+        }
+      ],
+      recommendedTools: ["search_library_files", "list_storage_files"],
+      nextActions: ["先调用 search_library_files/list_storage_files 重新定位文件，拿到 fileId 后再诊断或读取。"]
+    };
+  }
+
+  let pathSafe = true;
+  try {
+    safeJoin(api.storageRoot, file.relativePath);
+  } catch {
+    pathSafe = false;
+  }
+
+  const hiddenDirectory = isHiddenRelativePath(file.relativePath);
+  const hints = buildContentAccessHints(file);
+  const analyzeMode = inferAnalyzeAccessMode(file, hints);
+  const canReadExcerpt = pathSafe && !hiddenDirectory && (hints.textReadable || hints.subtitleAvailable);
+  const canReadMediaSummary = pathSafe && !hiddenDirectory && (hints.media || hints.aiSummaryAvailable || hints.subtitleAvailable);
+  const canAnalyze = pathSafe && !hiddenDirectory && (hints.textReadable || hints.image || hints.videoOrAudio || hints.aiSummaryAvailable || hints.subtitleAvailable);
+  const recommendedTools = uniqueToolList([
+    "read_file_metadata",
+    "get_storage_file_details",
+    canReadExcerpt ? "read_text_excerpt" : "",
+    canReadMediaSummary ? "read_media_summary" : "",
+    canAnalyze ? "analyze_file_content" : "",
+    hints.videoOrAudio && !hints.aiSummaryAvailable ? "invoke_video_analyze" : "",
+    hints.videoOrAudio && !hints.aiSummaryAvailable ? "analyze_storage_video" : ""
+  ]);
+  const blockers = [];
+  if (!pathSafe) {
+    blockers.push({
+      id: "unsafe-relative-path",
+      severity: "error",
+      message: "索引中的相对路径未通过 storage root 安全校验，已阻止内容读取建议。"
+    });
+  }
+  if (hiddenDirectory) {
+    blockers.push({
+      id: "hidden-directory",
+      severity: "warn",
+      message: "文件位于隐藏/系统目录，默认不建议读取内容或执行写操作。"
+    });
+  }
+  if (!hints.textReadable && !hints.subtitleAvailable) {
+    blockers.push({
+      id: "no-direct-text-layer",
+      severity: "info",
+      message: "没有可直接读取的文本/字幕层；不要尝试读取二进制原文。"
+    });
+  }
+  if (hints.videoOrAudio && !hints.aiSummaryAvailable && !hints.subtitleAvailable) {
+    blockers.push({
+      id: "needs-derived-media-content",
+      severity: "info",
+      message: "媒体文件还没有 AI 摘要或字幕；需要 video.analyze 生成派生内容。",
+      requires: ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root"]
+    });
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    identifier,
+    found: true,
+    file: {
+      fileId: file.id,
+      clientId: file.clientId,
+      path: file.relativePath,
+      name: file.name,
+      size: file.size,
+      mimeType: file.mimeType,
+      createdAt: file.createdAt,
+      updatedAt: file.updatedAt,
+      tags: file.tags || [],
+      aiSummaryAvailable: Boolean(file.aiSummaryAvailable),
+      subtitleAvailable: Boolean(file.subtitleAvailable),
+      subtitlePath: file.subtitlePath || ""
+    },
+    policy,
+    safety: {
+      storageRootOnly: true,
+      pathSafe,
+      hiddenDirectory,
+      absolutePathExposed: false,
+      binaryRawContentAllowed: false,
+      writeRequiresConfirmation: true
+    },
+    contentAccess: {
+      ...hints,
+      analyzeMode,
+      recommendedTools
+    },
+    layers: [
+      buildAccessLayer({
+        id: "index",
+        label: "Index",
+        available: true,
+        tools: ["list_storage_files", "search_library_files"],
+        detail: "文件名、相对路径、MIME、大小、mtime、标签和摘要/字幕状态。"
+      }),
+      buildAccessLayer({
+        id: "metadata",
+        label: "Metadata",
+        available: true,
+        tools: ["read_file_metadata", "get_storage_file_details"],
+        detail: "文件元数据、标签、已有摘要和字幕 sidecar 状态。"
+      }),
+      buildAccessLayer({
+        id: "excerpt",
+        label: "Excerpt",
+        available: canReadExcerpt,
+        tools: canReadExcerpt ? ["read_text_excerpt"] : [],
+        detail: canReadExcerpt ? "可分页读取受控长度的文本、文档抽取文本或字幕片段。" : "",
+        reason: canReadExcerpt ? "" : "当前文件没有可直接读取的文本/字幕层，或路径不允许读取。"
+      }),
+      buildAccessLayer({
+        id: "derived-media",
+        label: "Derived Content",
+        available: canReadMediaSummary,
+        tools: canReadMediaSummary ? ["read_media_summary"] : [],
+        detail: canReadMediaSummary ? "可读取已有 AI summary、字幕状态和媒体 probe 信息。" : "",
+        reason: canReadMediaSummary ? "" : "没有可用媒体派生信息。"
+      }),
+      buildAccessLayer({
+        id: "analysis",
+        label: "Analysis",
+        available: canAnalyze,
+        tools: canAnalyze ? uniqueToolList(["analyze_file_content", hints.videoOrAudio && !hints.aiSummaryAvailable ? "invoke_video_analyze" : ""]) : [],
+        requires: analyzeMode === "media" && hints.videoOrAudio && !hints.aiSummaryAvailable ? ["ai-model", "ffmpeg", "ffprobe", "whisper"] : ["ai-model"],
+        detail: canAnalyze ? `建议分析模式：${analyzeMode}` : "",
+        reason: canAnalyze ? "" : "当前文件类型只能读取 metadata。"
+      }),
+      buildAccessLayer({
+        id: "write-metadata",
+        label: "Write Metadata",
+        available: pathSafe && !hiddenDirectory,
+        riskLevel: "medium",
+        tools: ["update_file_metadata"],
+        detail: "可写入 tags/aiSummary；批量写入需要确认并记录审计。"
+      }),
+      buildAccessLayer({
+        id: "file-mutation",
+        label: "File Mutation",
+        available: pathSafe && !hiddenDirectory,
+        riskLevel: "high",
+        tools: ["organize_files"],
+        detail: "移动/重命名必须先 dry-run 预览，并在用户确认后执行。"
+      })
+    ],
+    blockers,
+    recommendedTools,
+    nextActions: buildAccessNextActions(file, hints, pathSafe, hiddenDirectory)
   };
 }
 

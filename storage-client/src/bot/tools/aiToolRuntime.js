@@ -16,6 +16,7 @@ import {
   MAX_LIBRARY_LIST_LIMIT,
   MAX_METADATA_UPDATE_FILES,
   MAX_TEXT_EXCERPT_CHARS,
+  buildDiagnoseFileAccessResult,
   buildFileAccessExplanation,
   buildLibraryDetailsResult,
   buildLibraryListResult,
@@ -875,6 +876,18 @@ export function getAiToolDefinitions() {
       }
     },
     {
+      name: "diagnose_file_access",
+      description: "诊断单个 NAS 文件当前可访问层级：能否读 metadata、文本/字幕片段、媒体派生信息、是否需要 video.analyze、哪些写操作需要确认。用于读取或分析具体文件前做安全决策。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          fileId: { type: "string", description: "文件 ID，优先使用 list_storage_files/search_library_files 返回的 fileId" },
+          path: { type: "string", description: "相对路径（与 fileId 二选一）" },
+          filePath: { type: "string", description: "相对路径别名" }
+        }
+      }
+    },
+    {
       name: "read_text_excerpt",
       description: "受控读取文本类文件、PDF/Office 文档抽取文本或字幕 sidecar 的片段。只接受 fileId/相对路径，不暴露绝对路径；视频/音频默认读取字幕片段而不是二进制内容。",
       inputSchema: {
@@ -1266,6 +1279,11 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
   if (name === "read_file_metadata") {
     await api.emitProgress({ phase: "tool-read-file-metadata", label: "读取 NAS 文件元数据", percent: 43 });
     return safeJson(await buildLibraryMetadataResult(api, input));
+  }
+
+  if (name === "diagnose_file_access") {
+    await api.emitProgress({ phase: "tool-diagnose-file-access", label: "诊断 NAS 文件访问能力", percent: 43 });
+    return safeJson(await buildDiagnoseFileAccessResult(api, input));
   }
 
   if (name === "read_text_excerpt") {

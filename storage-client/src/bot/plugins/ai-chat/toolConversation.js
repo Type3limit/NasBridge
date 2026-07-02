@@ -491,6 +491,13 @@ export function getAiToolProgress(toolName = "", round = 0) {
       percent: 43 + offset
     };
   }
+  if (normalized === "diagnose_file_access") {
+    return {
+      phase: "tool-diagnose-file-access",
+      label: safeRound > 0 ? `继续诊断文件访问能力（第 ${safeRound + 1} 轮）` : "诊断 NAS 文件访问能力",
+      percent: 43 + offset
+    };
+  }
   if (normalized === "read_text_excerpt") {
     return {
       phase: "tool-read-text-excerpt",

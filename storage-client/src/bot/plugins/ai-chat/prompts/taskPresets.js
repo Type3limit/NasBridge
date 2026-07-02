@@ -13,6 +13,7 @@ const ALWAYS_ON_GUIDANCE = {
   lines: [
     "先用最小只读工具确认事实，再选择写入、下载或长任务工具。",
     "需要文件内容时先拿 fileId/relativePath；不要编造绝对路径或声称读取了未通过工具读取的内容。",
+    "具体文件能否读取/分析不确定时，先调用 diagnose_file_access，根据 layers、blockers 和 nextActions 选择下一步工具。",
     "长任务提交后必须在回答里给出 botId、jobId、当前 status 和下一步可用的 get_bot_job_status/read_agent_trace。",
     "工具不可用或 health degraded 时，先解释具体依赖项，再给可恢复步骤。"
   ]
@@ -45,6 +46,7 @@ const TASK_PRESETS = [
     triggers: [/分析|阅读|读取|文档|图片|pdf|markdown|内容|analy[sz]e|read|document|image/i],
     lines: [
       "目标文件明确后优先调用 analyze_file_content；它会按文本、PDF/Office 文档、图片、媒体类型选择受控分析路径。",
+      "如果文件类型、字幕/摘要状态或所需依赖不确定，先调用 diagnose_file_access，再决定读片段、复用摘要或启动 video.analyze。",
       "大文本和文档只读取抽取片段，必要时分页/抽样；图片走视觉模型；视频/音频优先复用字幕/摘要。"
     ]
   },
