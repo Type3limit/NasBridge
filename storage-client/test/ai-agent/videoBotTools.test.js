@@ -71,6 +71,9 @@ test("standard video bot tool names are exposed and registered as async medium-r
   const videoAnalyzeTool = getAiToolDefinitions().find((tool) => tool.name === "invoke_video_analyze");
   assert.ok(videoAnalyzeTool.inputSchema.properties.source);
   assert.ok(videoAnalyzeTool.inputSchema.properties.url);
+  const videoTagTool = getAiToolDefinitions().find((tool) => tool.name === "invoke_video_tag");
+  assert.ok(videoTagTool.inputSchema.properties.fileIds);
+  assert.ok(videoTagTool.inputSchema.properties.paths);
 
   const descriptors = new Map(buildCapabilityDescriptors({ listBots: () => [] }).map((item) => [item.id, item]));
   assert.equal(descriptors.get("invoke_video_analyze").riskLevel, "medium");
@@ -310,6 +313,96 @@ test("invoke_video_tag batch returns confirmation preview before delegation", as
     batch: true,
     force: false
   });
+});
+
+test("invoke_video_tag selected fileIds confirms scope then delegates individual jobs", async () => {
+  const selectedFiles = [
+    {
+      id: "client:Videos/a.mp4",
+      clientId: "client",
+      path: "Videos/a.mp4",
+      name: "a.mp4",
+      size: 2048,
+      mimeType: "video/mp4",
+      updatedAt: "2026-07-01T01:00:00.000Z",
+      aiSummary: "A summary"
+    },
+    {
+      id: "client:Videos/b.mkv",
+      clientId: "client",
+      path: "Videos/b.mkv",
+      name: "b.mkv",
+      size: 4096,
+      mimeType: "video/x-matroska",
+      updatedAt: "2026-07-01T02:00:00.000Z"
+    }
+  ];
+  const api = createFakeApi({
+    dependencies: {
+      listLibraryFiles: async () => ({
+        clientId: "client",
+        directories: [],
+        files: selectedFiles
+      })
+    }
+  });
+  api.invokeBot = async (payload) => {
+    api.invoked.push(payload);
+    return { jobId: `botjob_child_${api.invoked.length}`, status: "queued" };
+  };
+
+  const previewRaw = await executeAiToolCall(
+    {
+      name: "invoke_video_tag",
+      input: {
+        fileIds: ["client:Videos/a.mp4", "client:Videos/b.mkv"],
+        force: true
+      }
+    },
+    { chat: {}, attachments: [] },
+    api
+  );
+  const preview = JSON.parse(previewRaw);
+
+  assert.equal(preview.status, "confirmation_required");
+  assert.equal(preview.selected, true);
+  assert.equal(preview.confirmation.impact.targetFileCount, 2);
+  assert.deepEqual(preview.confirmation.confirmWith.fileIds, ["client:Videos/a.mp4", "client:Videos/b.mkv"]);
+  assert.equal(preview.confirmation.confirmWith.batch, undefined);
+  assert.equal(preview.confirmation.confirmWith.force, true);
+  assert.equal(api.invoked.length, 0);
+
+  const confirmedRaw = await executeAiToolCall(
+    {
+      name: "invoke_video_tag",
+      input: {
+        fileIds: ["client:Videos/a.mp4", "client:Videos/b.mkv"],
+        force: true,
+        confirmed: true
+      }
+    },
+    { chat: {}, attachments: [] },
+    api
+  );
+  const confirmed = JSON.parse(confirmedRaw);
+
+  assert.equal(confirmed.delegated, true);
+  assert.equal(confirmed.selected, true);
+  assert.equal(confirmed.total, 2);
+  assert.deepEqual(confirmed.jobs.map((job) => job.jobId), ["botjob_child_1", "botjob_child_2"]);
+  assert.deepEqual(api.invoked.map((payload) => payload.trigger.parsedArgs.fileId), ["client:Videos/a.mp4", "client:Videos/b.mkv"]);
+  assert.deepEqual(api.invoked[0].trigger.parsedArgs, {
+    fileId: "client:Videos/a.mp4",
+    force: true,
+    aiSummary: "A summary"
+  });
+  assert.deepEqual(api.invoked[1].trigger.parsedArgs, {
+    fileId: "client:Videos/b.mkv",
+    force: true,
+    aiSummary: ""
+  });
+  assert.equal(api.invoked[0].options.toolName, "invoke_video_tag");
+  assert.equal(confirmed.tracking.jobsCommand, "@ai /jobs");
 });
 
 test("NAS metadata recommends standard invoke_video_analyze for unanalyzed media", async () => {

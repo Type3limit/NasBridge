@@ -397,6 +397,20 @@ function isVideoOrAudioStorageFile(file = {}) {
 
 function buildBatchVideoTagConfirmation(files = [], input = {}) {
   const targetFiles = (Array.isArray(files) ? files : []).filter(isVideoOrAudioStorageFile);
+  const selectedFileIds = input.selected === true
+    ? targetFiles.map((file) => String(file.id || "").trim()).filter(Boolean).slice(0, MAX_METADATA_UPDATE_FILES)
+    : [];
+  const confirmWith = {
+    confirmed: true
+  };
+  if (selectedFileIds.length) {
+    confirmWith.fileIds = selectedFileIds;
+  } else {
+    confirmWith.batch = true;
+  }
+  if (input.force === true) {
+    confirmWith.force = true;
+  }
   return {
     required: true,
     operation: "invoke_video_tag",
@@ -410,11 +424,47 @@ function buildBatchVideoTagConfirmation(files = [], input = {}) {
     },
     recoverability: "标签写入后可再次用 update_file_metadata 调整；force=true 可能覆盖已有标签，恢复成本更高。",
     estimatedDuration: targetFiles.length <= 5 ? "< 1 分钟" : (targetFiles.length <= 30 ? "1-5 分钟" : "数分钟到更久，取决于视频数量和模型速度"),
-    confirmWith: {
-      confirmed: true,
-      batch: true
-    }
+    confirmWith
   };
+}
+
+function collectVideoTagIdentifiers(input = {}) {
+  return [
+    ...(Array.isArray(input.fileIds) ? input.fileIds : []),
+    ...(Array.isArray(input.paths) ? input.paths : []),
+    input.fileId,
+    input.path,
+    input.filePath
+  ]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .filter((item, index, array) => array.indexOf(item) === index)
+    .slice(0, MAX_METADATA_UPDATE_FILES);
+}
+
+function resolveVideoTagTargetFiles(files = [], identifiers = [], options = {}) {
+  const targetFiles = [];
+  const missing = [];
+  const unsupported = [];
+  const seenTargets = new Set();
+  for (const identifier of identifiers) {
+    const file = resolveLibraryFile(files, identifier, { storageRoot: options.storageRoot || "" });
+    if (!file) {
+      missing.push(identifier);
+      continue;
+    }
+    const key = String(file.id || file.relativePath || identifier || "").trim();
+    if (!key || seenTargets.has(key)) {
+      continue;
+    }
+    seenTargets.add(key);
+    if (!isVideoOrAudioStorageFile(file)) {
+      unsupported.push(file);
+      continue;
+    }
+    targetFiles.push(file);
+  }
+  return { targetFiles, missing, unsupported };
 }
 
 function isAnalyzableTextFile(file = {}) {
@@ -1310,8 +1360,10 @@ export function getAiToolDefinitions() {
         type: "object",
         properties: {
           fileId: { type: "string", description: "文件 ID，优先使用 search_library_files 返回的 fileId" },
+          fileIds: { type: "array", items: { type: "string" }, maxItems: MAX_METADATA_UPDATE_FILES, description: "多个 search_library_files 返回的文件 ID；只处理这些候选文件，适合“最近下载的几个视频”等明确集合" },
           path: { type: "string", description: "相对路径（与 fileId 二选一）" },
-          batch: { type: "boolean", description: "是否批量处理所有视频文件" },
+          paths: { type: "array", items: { type: "string" }, maxItems: MAX_METADATA_UPDATE_FILES, description: "多个相对路径；只处理这些候选文件" },
+          batch: { type: "boolean", description: "是否批量处理所有视频文件；已有 fileIds/paths 时只处理所选候选，不扫描全库" },
           confirmed: { type: "boolean", description: "批量写标签前必须由用户确认" },
           force: { type: "boolean", description: "是否覆盖已有标签" },
           aiSummary: { type: "string", description: "已有摘要，可作为打标签输入" },
@@ -1328,8 +1380,10 @@ export function getAiToolDefinitions() {
         type: "object",
         properties: {
           fileId: { type: "string", description: "文件 ID，优先使用 search_library_files 返回的 fileId" },
+          fileIds: { type: "array", items: { type: "string" }, maxItems: MAX_METADATA_UPDATE_FILES, description: "多个 search_library_files 返回的文件 ID；只处理这些候选文件，适合“最近下载的几个视频”等明确集合" },
           path: { type: "string", description: "相对路径（与 fileId 二选一）" },
-          batch: { type: "boolean", description: "是否批量处理所有视频文件" },
+          paths: { type: "array", items: { type: "string" }, maxItems: MAX_METADATA_UPDATE_FILES, description: "多个相对路径；只处理这些候选文件" },
+          batch: { type: "boolean", description: "是否批量处理所有视频文件；已有 fileIds/paths 时只处理所选候选，不扫描全库" },
           confirmed: { type: "boolean", description: "批量写标签前必须由用户确认" },
           force: { type: "boolean", description: "是否覆盖已有标签" },
           aiSummary: { type: "string", description: "已有摘要，可作为打标签输入" },
@@ -1727,7 +1781,127 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
 
   if (name === "tag_storage_video" || name === "invoke_video_tag") {
     await api.emitProgress({ phase: "tool-tag-storage-video", label: "准备视频打标签任务", percent: 46 });
-    if (input.batch === true) {
+    const selectedIdentifiers = collectVideoTagIdentifiers(input);
+    if (selectedIdentifiers.length > 1) {
+      const snapshot = await loadLibrarySnapshot(api);
+      const { targetFiles, missing, unsupported } = resolveVideoTagTargetFiles(snapshot.files, selectedIdentifiers, {
+        storageRoot: api.storageRoot
+      });
+      if (missing.length) {
+        throw new Error(`文件未找到: ${missing.join(", ")}`);
+      }
+      if (unsupported.length) {
+        throw new Error(`video tag 仅支持视频/音频文件: ${unsupported.map((file) => file.relativePath || file.path || file.id).join(", ")}`);
+      }
+      if (!targetFiles.length) {
+        throw new Error("fileIds or paths did not match any video/audio files");
+      }
+
+      if (input.confirmed !== true) {
+        return safeJson({
+          status: "confirmation_required",
+          delegated: false,
+          botId: "video.tag",
+          batch: true,
+          selected: true,
+          confirmed: false,
+          count: targetFiles.length,
+          files: targetFiles.slice(0, 10).map(compactStorageFileForTool),
+          requiresConfirmation: true,
+          blocked: true,
+          blockedReason: "批量视频打标签会写入所选多个文件的 metadata；本次只返回影响范围预览，未创建子任务。",
+          confirmation: buildBatchVideoTagConfirmation(targetFiles, { ...input, batch: false, selected: true }),
+          nextAction: "向用户确认这些候选文件后，以 confirmed=true 再次调用；确认输入会固定为这些 fileIds。"
+        });
+      }
+
+      const jobs = [];
+      for (let index = 0; index < targetFiles.length; index += 1) {
+        const file = targetFiles[index];
+        await api.emitProgress({
+          phase: "tool-tag-storage-video",
+          label: formatStepLabel("创建视频打标签任务：", index + 1, targetFiles.length, ""),
+          percent: Math.round(48 + ((index + 1) / targetFiles.length) * 10)
+        });
+        const delegatedJob = await api.invokeBot({
+          botId: "video.tag",
+          trigger: {
+            type: "tool-call",
+            rawText: file.relativePath,
+            parsedArgs: {
+              fileId: file.id,
+              force: input.force === true,
+              aiSummary: String(file.aiSummary || "")
+            }
+          },
+          options: {
+            delegatedBy: api.botId,
+            parentJobId: api.jobId,
+            toolName: name
+          }
+        });
+        jobs.push({
+          ...buildDelegatedJobFields("video.tag", delegatedJob, {
+            waitForCompletion: false,
+            waitUntilPhase: input.waitUntilPhase
+          }),
+          file: compactStorageFileForTool(file)
+        });
+      }
+
+      if (input.waitForCompletion === true) {
+        const completedJobs = [];
+        for (let index = 0; index < jobs.length; index += 1) {
+          const job = jobs[index];
+          await api.emitProgress({
+            phase: "tool-tag-storage-video",
+            label: formatStepLabel("等待视频打标签任务完成：", index + 1, jobs.length, ""),
+            percent: Math.round(60 + ((index + 1) / jobs.length) * 30)
+          });
+          const completedJob = await waitForDelegatedBotJob(api, job.jobId, {
+            timeoutSeconds: input.timeoutSeconds || 600
+          });
+          completedJobs.push({
+            ...buildDelegatedJobFields("video.tag", completedJob, {
+              waitForCompletion: true
+            }),
+            file: job.file,
+            result: completedJob.result || {},
+            error: completedJob.error || null
+          });
+        }
+        return safeJson({
+          delegated: true,
+          status: completedJobs.every((job) => job.status === "succeeded") ? "succeeded" : "completed",
+          botId: "video.tag",
+          batch: true,
+          selected: true,
+          total: targetFiles.length,
+          jobs: completedJobs,
+          files: targetFiles.slice(0, 10).map(compactStorageFileForTool),
+          message: "所选视频打标签任务已完成；结果已写入文件 metadata。"
+        });
+      }
+
+      return safeJson({
+        delegated: true,
+        status: "queued",
+        botId: "video.tag",
+        batch: true,
+        selected: true,
+        total: targetFiles.length,
+        jobs,
+        files: targetFiles.slice(0, 10).map(compactStorageFileForTool),
+        tracking: {
+          jobsCommand: "@ai /jobs",
+          statusCommands: jobs.map((job) => job.tracking?.statusCommand || `@ai /job ${job.jobId}`).filter(Boolean).slice(0, 10)
+        },
+        logHint: `已创建 ${jobs.length} 个 video.tag 子任务。可用 @ai /jobs 查看队列，或用 ${jobs[0]?.tracking?.statusCommand || `@ai /job ${jobs[0]?.jobId || ""}`} 查看首个任务。`,
+        message: "已为所选视频/音频提交打标签任务，完成后会写入各自文件 metadata。"
+      });
+    }
+
+    if (input.batch === true && selectedIdentifiers.length === 0) {
       if (input.confirmed !== true) {
         const snapshot = await loadLibrarySnapshot(api);
         const targetFiles = snapshot.files.filter(isVideoOrAudioStorageFile);
@@ -1794,7 +1968,7 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
       });
     }
 
-    const identifier = String(input.fileId || input.path || input.filePath || "").trim();
+    const identifier = selectedIdentifiers[0] || String(input.fileId || input.path || input.filePath || "").trim();
     if (!identifier) {
       throw new Error("fileId or path is required");
     }
