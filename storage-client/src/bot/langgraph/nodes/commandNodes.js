@@ -496,6 +496,30 @@ function formatBotJobLine(job = {}, prefix = "-") {
   return `${prefix} ${parts.join(" · ")}`;
 }
 
+function formatJobAuditLines(job = {}, indent = "  ") {
+  const audit = job.audit && typeof job.audit === "object" ? job.audit : {};
+  const permissions = Array.isArray(audit.permissionsUsed) ? audit.permissionsUsed.filter(Boolean) : [];
+  const toolCallCount = Number.isFinite(Number(audit.toolCallCount)) ? Number(audit.toolCallCount) : 0;
+  const recentToolCalls = Array.isArray(audit.recentToolCalls) ? audit.recentToolCalls.filter(Boolean) : [];
+  if (!permissions.length && !toolCallCount && !recentToolCalls.length) {
+    return [];
+  }
+  const lines = [];
+  lines.push(`${indent}审计：工具调用 ${toolCallCount}${permissions.length ? ` · 权限 ${permissions.slice(0, 8).join("、")}${permissions.length > 8 ? "…" : ""}` : ""}`);
+  for (const call of recentToolCalls.slice(-3)) {
+    const parts = [
+      call.name || "tool",
+      call.status || "",
+      call.riskLevel ? `risk=${call.riskLevel}` : "",
+      Array.isArray(call.identifiers) && call.identifiers.length ? `ids=${call.identifiers.slice(0, 3).join(", ")}` : "",
+      Array.isArray(call.permissions) && call.permissions.length ? `perm=${call.permissions.slice(0, 4).join(", ")}` : "",
+      Array.isArray(call.jobRefs) && call.jobRefs.length ? `jobs=${call.jobRefs.map((ref) => `${ref.botId || "bot"}:${ref.jobId}`).join(", ")}` : ""
+    ].filter(Boolean);
+    lines.push(`${indent}- ${parts.join(" · ")}`);
+  }
+  return lines;
+}
+
 function formatRecoveryHintLines(trace = null, indent = "") {
   const hint = trace?.recoveryHint || null;
   if (!hint || typeof hint !== "object") {
@@ -536,6 +560,7 @@ export function formatBotJobStatusReport(status = {}) {
   }
   for (const job of jobs) {
     lines.push(formatBotJobLine(job));
+    lines.push(...formatJobAuditLines(job, "  "));
     const childCount = Number(job.childJobCount || 0);
     if (childCount > 0) {
       const counts = formatStatusCounts(job.childJobStatusCounts || {});
@@ -564,6 +589,7 @@ export function formatBotJobLogReport(bundle = {}) {
   const lines = [`Bot 日志：${jobId || "unknown"}`];
   if (bundle.job) {
     lines.push(formatBotJobLine(bundle.job));
+    lines.push(...formatJobAuditLines(bundle.job));
   }
   const childJobs = Array.isArray(bundle.childJobs) ? bundle.childJobs : [];
   if (childJobs.length) {

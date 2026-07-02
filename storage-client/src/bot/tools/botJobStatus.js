@@ -10,6 +10,7 @@ export const MAX_JOB_LOG_BYTES = 32 * 1024;
 export const MAX_CHILD_JOB_SUMMARY_LIMIT = 20;
 
 const SENSITIVE_KEY_PATTERN = /(?:key|token|secret|cookie|authorization|password|credential)/i;
+const MAX_AUDIT_TOOL_SUMMARY = 5;
 
 function clampInteger(value, min, max) {
   const numeric = Number(value);
@@ -36,6 +37,67 @@ function redactSensitiveText(value = "") {
     .replace(/sk-[A-Za-z0-9_-]{10,}/g, "sk-***")
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer ***")
     .replace(/((?:api[-_ ]?key|token|secret|cookie|authorization|password)\s*[:=]\s*)[^\s,;]+/gi, "$1***");
+}
+
+function redactAuditText(value = "") {
+  return redactSensitiveText(value)
+    .replace(/[A-Za-z]:[\\/][^\s,;"'{}[\]]+/g, "[local-path]")
+    .replace(/\\\\[^\\/\s,;"'{}[\]]+[\\/][^\s,;"'{}[\]]+/g, "[network-path]");
+}
+
+function compactAuditStringList(items = [], limit = 8, maxLength = 120) {
+  const seen = new Set();
+  const result = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const value = redactAuditText(String(item || "").trim()).slice(0, maxLength);
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    result.push(value);
+    if (result.length >= limit) {
+      break;
+    }
+  }
+  return result;
+}
+
+function summarizeAuditToolCall(toolCall = null) {
+  if (!toolCall || typeof toolCall !== "object") {
+    return null;
+  }
+  const resultSummary = toolCall.resultSummary && typeof toolCall.resultSummary === "object" ? toolCall.resultSummary : {};
+  const errorSummary = toolCall.errorSummary && typeof toolCall.errorSummary === "object" ? toolCall.errorSummary : {};
+  const capability = resultSummary.capability && typeof resultSummary.capability === "object"
+    ? resultSummary.capability
+    : (errorSummary.capability && typeof errorSummary.capability === "object" ? errorSummary.capability : {});
+  return Object.fromEntries(Object.entries({
+    name: redactAuditText(String(toolCall.name || toolCall.tool || "").trim()).slice(0, 120),
+    status: redactAuditText(String(toolCall.status || "").trim()).slice(0, 80),
+    riskLevel: redactAuditText(String(toolCall.riskLevel || capability.riskLevel || "").trim()).slice(0, 80),
+    permissions: compactAuditStringList(toolCall.permissions || capability.permissions, 10, 100),
+    identifiers: compactAuditStringList(toolCall.inputSummary?.identifiers, 8, 160),
+    jobRefs: Array.isArray(resultSummary.jobRefs)
+      ? resultSummary.jobRefs.map((ref) => ({
+          jobId: redactAuditText(String(ref?.jobId || "").trim()).slice(0, 120),
+          botId: redactAuditText(String(ref?.botId || "").trim()).slice(0, 120),
+          status: redactAuditText(String(ref?.status || "").trim()).slice(0, 80)
+        })).filter((ref) => ref.jobId).slice(0, 5)
+      : [],
+    durationMs: Number.isFinite(Number(toolCall.durationMs)) ? Number(toolCall.durationMs) : null,
+    blocked: toolCall.blocked === true || resultSummary.blocked === true
+  }).filter(([, value]) => {
+    if (value === null || value === "" || value === undefined || value === false) {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    if (value && typeof value === "object") {
+      return Object.keys(value).length > 0;
+    }
+    return true;
+  }));
 }
 
 function redactValue(value, depth = 0) {
@@ -93,6 +155,7 @@ function buildJobTracking(jobId = "") {
 
 function summarizeJob(job = {}) {
   const jobId = String(job.jobId || "").trim();
+  const auditToolCalls = Array.isArray(job.audit?.toolCalls) ? job.audit.toolCalls : [];
   return {
     jobId,
     botId: String(job.botId || "").trim(),
@@ -125,9 +188,13 @@ function summarizeJob(job = {}) {
     tracking: buildJobTracking(jobId),
     audit: {
       permissionsUsed: Array.isArray(job.audit?.permissionsUsed)
-        ? job.audit.permissionsUsed.map((item) => String(item || "").trim()).filter(Boolean)
+        ? compactAuditStringList(job.audit.permissionsUsed, 24, 120)
         : [],
-      toolCallCount: Array.isArray(job.audit?.toolCalls) ? job.audit.toolCalls.length : 0
+      toolCallCount: auditToolCalls.length,
+      recentToolCalls: auditToolCalls
+        .slice(-MAX_AUDIT_TOOL_SUMMARY)
+        .map(summarizeAuditToolCall)
+        .filter((item) => item?.name)
     },
     createdAt: String(job.createdAt || "").trim(),
     startedAt: String(job.startedAt || "").trim(),

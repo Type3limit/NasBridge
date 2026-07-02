@@ -42,7 +42,7 @@ function createJob(jobId, overrides = {}) {
       artifacts: overrides.artifacts || []
     },
     error: overrides.error || null,
-    audit: {
+    audit: overrides.audit || {
       permissionsUsed: [],
       toolCalls: []
     },
@@ -57,7 +57,25 @@ test("bot job log bundle includes redacted log, agent trace, and delegated child
   const appDataRoot = await createTempAppDataRoot();
   const store = new BotJobStore({ rootDir: appDataRoot });
   await store.save(createJob("botjob_parent", {
-    parsedArgs: { apiKey: "sk-should-not-leak-1234567890" }
+    parsedArgs: { apiKey: "sk-should-not-leak-1234567890" },
+    audit: {
+      permissionsUsed: ["readLibrary", "storage:metadata:write"],
+      toolCalls: [{
+        name: "update_file_metadata",
+        status: "completed",
+        riskLevel: "medium",
+        permissions: ["storage:metadata:write"],
+        durationMs: 42,
+        inputSummary: {
+          identifiers: ["client:Docs/a.txt"],
+          apiKey: "sk-should-not-leak-1234567890"
+        },
+        resultSummary: {
+          file: { path: "D:\\NAS\\Docs\\a.txt" },
+          token: "should-not-leak"
+        }
+      }]
+    }
   }));
   await store.save(createJob("botjob_child", {
     botId: "video.analyze",
@@ -136,6 +154,13 @@ test("bot job log bundle includes redacted log, agent trace, and delegated child
   assert.equal(bundle.childJobs[0].jobId, "botjob_child");
   assert.equal(bundle.childJobs[0].botId, "video.analyze");
   assert.equal(bundle.childJobs[0].tracking.logCommand, "@ai /log botjob_child");
+  assert.deepEqual(bundle.job.audit.permissionsUsed, ["readLibrary", "storage:metadata:write"]);
+  assert.equal(bundle.job.audit.toolCallCount, 1);
+  assert.equal(bundle.job.audit.recentToolCalls[0].name, "update_file_metadata");
+  assert.equal(bundle.job.audit.recentToolCalls[0].riskLevel, "medium");
+  assert.deepEqual(bundle.job.audit.recentToolCalls[0].identifiers, ["client:Docs/a.txt"]);
+  assert.equal(JSON.stringify(bundle.job.audit).includes("D:\\NAS"), false);
+  assert.equal(JSON.stringify(bundle.job.audit).includes("sk-should-not-leak"), false);
   assert.equal(bundle.agentTrace.events.length, 1);
   assert.equal(bundle.agentTrace.events[0].input.apiKey, "***");
   assert.equal(bundle.agentTrace.events[0].input.fileId, "file_1");
@@ -213,7 +238,25 @@ test("bot job status includes delegated child jobs for an explicit parent job", 
   const store = new BotJobStore({ rootDir: appDataRoot });
   await store.save(createJob("botjob_parent", {
     status: "running",
-    phase: "textTools"
+    phase: "textTools",
+    audit: {
+      permissionsUsed: ["readLibrary", "storage:content:read", "storage:metadata:write"],
+      toolCalls: [{
+        name: "invoke_video_analyze",
+        status: "completed",
+        resultSummary: {
+          capability: {
+            riskLevel: "medium",
+            permissions: ["bot:invoke", "storage:metadata:write"]
+          },
+          jobRefs: [{ jobId: "botjob_child", botId: "video.analyze", status: "running" }]
+        },
+        inputSummary: {
+          identifiers: ["client:Videos/demo.mp4"]
+        },
+        durationMs: 1250
+      }]
+    }
   }));
   await store.save(createJob("botjob_child", {
     botId: "video.analyze",
@@ -248,6 +291,11 @@ test("bot job status includes delegated child jobs for an explicit parent job", 
   assert.equal(status.jobs[0].childJobs[0].botId, "video.analyze");
   assert.equal(status.jobs[0].childJobs[0].progress.label, "Whisper transcribing");
   assert.equal(status.jobs[0].childJobs[0].tracking.logCommand, "@ai /log botjob_child");
+  assert.equal(status.jobs[0].audit.toolCallCount, 1);
+  assert.equal(status.jobs[0].audit.recentToolCalls[0].name, "invoke_video_analyze");
+  assert.equal(status.jobs[0].audit.recentToolCalls[0].riskLevel, "medium");
+  assert.deepEqual(status.jobs[0].audit.recentToolCalls[0].permissions, ["bot:invoke", "storage:metadata:write"]);
+  assert.deepEqual(status.jobs[0].audit.recentToolCalls[0].jobRefs[0], { jobId: "botjob_child", botId: "video.analyze", status: "running" });
 });
 
 test("agent trace result includes delegated child job summaries by default", async () => {

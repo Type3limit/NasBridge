@@ -213,6 +213,17 @@ test("formatBotJobStatusReport summarizes jobs, child jobs, and recovery hints",
         label: "Running",
         percent: 50
       },
+      audit: {
+        permissionsUsed: ["readLibrary", "storage:metadata:write"],
+        toolCallCount: 1,
+        recentToolCalls: [{
+          name: "update_file_metadata",
+          status: "completed",
+          riskLevel: "medium",
+          permissions: ["storage:metadata:write"],
+          identifiers: ["client:Docs/a.txt"]
+        }]
+      },
       childJobCount: 1,
       childJobStatusCounts: { failed: 1 },
       childJobs: [{
@@ -241,6 +252,8 @@ test("formatBotJobStatusReport summarizes jobs, child jobs, and recovery hints",
 
   assert.match(body, /Bot 任务状态：1/);
   assert.match(body, /ai\.chat · botjob_parent · failed/);
+  assert.match(body, /审计：工具调用 1 · 权限 readLibrary、storage:metadata:write/);
+  assert.match(body, /update_file_metadata · completed · risk=medium · ids=client:Docs\/a\.txt · perm=storage:metadata:write/);
   assert.match(body, /子任务：1 · failed 1/);
   assert.match(body, /video\.analyze · botjob_child · failed/);
   assert.match(body, /命令：@ai \/job botjob_child · @ai \/log botjob_child · @ai \/trace botjob_child/);
@@ -258,7 +271,19 @@ test("formatBotJobLogReport summarizes redacted log and child jobs", () => {
       botId: "ai.chat",
       status: "failed",
       phase: "failed",
-      progress: { label: "Failed", percent: 99 }
+      progress: { label: "Failed", percent: 99 },
+      audit: {
+        permissionsUsed: ["readLibrary", "bot:invoke", "storage:content:read"],
+        toolCallCount: 2,
+        recentToolCalls: [{
+          name: "invoke_video_analyze",
+          status: "blocked",
+          riskLevel: "medium",
+          permissions: ["bot:invoke", "storage:content:read"],
+          identifiers: ["client:Videos/demo.mp4"],
+          jobRefs: [{ jobId: "botjob_child", botId: "video.analyze" }]
+        }]
+      }
     },
     log: {
       jobId: "botjob_parent",
@@ -286,6 +311,8 @@ test("formatBotJobLogReport summarizes redacted log and child jobs", () => {
 
   assert.match(body, /Bot 日志：botjob_parent/);
   assert.match(body, /ai\.chat · botjob_parent · failed/);
+  assert.match(body, /审计：工具调用 2 · 权限 readLibrary、bot:invoke、storage:content:read/);
+  assert.match(body, /invoke_video_analyze · blocked · risk=medium · ids=client:Videos\/demo\.mp4 · perm=bot:invoke, storage:content:read · jobs=video\.analyze:botjob_child/);
   assert.match(body, /video\.analyze · botjob_child · failed/);
   assert.match(body, /命令：@ai \/job botjob_child · @ai \/log botjob_child · @ai \/trace botjob_child/);
   assert.match(body, /OPENAI_API_KEY=\*\*\*/);
