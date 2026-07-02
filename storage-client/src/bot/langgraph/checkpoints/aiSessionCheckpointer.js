@@ -390,6 +390,18 @@ function compactFileAccessSuggestedAction(action = null) {
   }));
 }
 
+function buildSuggestedActionDedupeKey(action = null) {
+  if (!action) {
+    return "";
+  }
+  return [
+    action.tool || "",
+    action.contentLayer || "",
+    action.riskLevel || "",
+    JSON.stringify(action.input || {})
+  ].join(":");
+}
+
 function extractFileAccessSuggestedActions(traceEvents = []) {
   const result = [];
   const seen = new Set();
@@ -399,12 +411,16 @@ function extractFileAccessSuggestedActions(traceEvents = []) {
     if (String(event?.kind || "").trim() !== "tool") {
       continue;
     }
-    const actions = Array.isArray(event?.resultSummary?.fileAccess?.actionPlan)
+    const fallbackActions = Array.isArray(event?.resultSummary?.fallbackActions)
+      ? event.resultSummary.fallbackActions
+      : [];
+    const fileAccessActions = Array.isArray(event?.resultSummary?.fileAccess?.actionPlan)
       ? event.resultSummary.fileAccess.actionPlan
       : [];
+    const actions = [...fallbackActions, ...fileAccessActions];
     for (const action of actions) {
       const compact = compactFileAccessSuggestedAction(action);
-      const key = compact ? `${compact.tool}:${compact.contentLayer || ""}:${compact.riskLevel || ""}` : "";
+      const key = buildSuggestedActionDedupeKey(compact);
       if (!compact || seen.has(key)) {
         continue;
       }

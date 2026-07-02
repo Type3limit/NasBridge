@@ -215,6 +215,98 @@ async function writeFileAccessSuggestedActionCheckpoint(appDataRoot, sessionId =
   })}\n`, "utf8");
 }
 
+async function writeBlockedFallbackActionCheckpoint(appDataRoot, sessionId = 1) {
+  const graphRoot = path.join(appDataRoot, "ai-chat-graph");
+  const jobId = "botjob_blocked_fallback_suggestion";
+  await fs.mkdir(path.join(graphRoot, "sessions"), { recursive: true });
+  await fs.mkdir(path.join(graphRoot, "executions"), { recursive: true });
+  await fs.mkdir(path.join(graphRoot, "traces"), { recursive: true });
+  await fs.writeFile(path.join(graphRoot, "sessions", `${sessionId}.json`), `${JSON.stringify({
+    savedAt: "2026-07-02T00:00:00.000Z",
+    sessionId,
+    latestExecution: {
+      jobId,
+      status: "failed",
+      route: "text",
+      traceCount: 3,
+      lastNode: "textTools",
+      historyPath: "",
+      replyPreview: "视频分析依赖未就绪。",
+      snapshotPath: path.join(graphRoot, "executions", `${jobId}.json`),
+      tracePath: path.join(graphRoot, "traces", `${jobId}.jsonl`)
+    }
+  }, null, 2)}\n`, "utf8");
+  await fs.writeFile(path.join(graphRoot, "executions", `${jobId}.json`), `${JSON.stringify({
+    savedAt: "2026-07-02T00:00:00.000Z",
+    jobId,
+    botId: "ai.chat",
+    sessionId,
+    status: "failed",
+    route: "text",
+    traceSummary: {
+      count: 3,
+      kinds: ["node", "tool"],
+      nodes: ["prepareInput", "prepareContext", "textTools"],
+      lastNode: "textTools",
+      lastStatus: "blocked",
+      lastAt: "2026-07-02T00:00:00.000Z"
+    },
+    result: {
+      reply: {
+        textPreview: "Whisper 未就绪，已阻止启动视频分析。"
+      }
+    },
+    recoveryState: {
+      toolRound: 1,
+      pendingToolNames: [],
+      planningMessages: [],
+      pendingToolCalls: []
+    }
+  }, null, 2)}\n`, "utf8");
+  await fs.writeFile(path.join(graphRoot, "traces", `${jobId}.jsonl`), `${JSON.stringify({
+    sequence: 2,
+    at: "2026-07-02T00:00:00.000Z",
+    jobId,
+    kind: "tool",
+    tool: "invoke_video_analyze",
+    round: 0,
+    status: "blocked",
+    resultSummary: {
+      status: "blocked",
+      botId: "video.analyze",
+      blocker: {
+        id: "whisper",
+        label: "Whisper",
+        status: "warn"
+      },
+      fallbackActions: [
+        {
+          tool: "read_media_summary",
+          input: {
+            fileId: "client:Videos/demo.mp4",
+            includeSummary: true,
+            includeProbe: true,
+            includeTranscriptExcerpt: true,
+            maxChars: 4000
+          },
+          contentLayer: "derived-media",
+          riskLevel: "low",
+          reason: "先复用已有摘要、字幕和媒体派生信息。"
+        },
+        {
+          tool: "diagnose_file_access",
+          input: {
+            fileId: "client:Videos/demo.mp4"
+          },
+          contentLayer: "metadata",
+          riskLevel: "low",
+          reason: "确认该 NAS 文件当前可读层级。"
+        }
+      ]
+    }
+  })}\n`, "utf8");
+}
+
 test("session checkpoint exposes pending confirmation from tool trace", async () => {
   await withTempDir(async (appDataRoot) => {
     await writePendingConfirmationCheckpoint(appDataRoot, 1);
@@ -293,6 +385,35 @@ test("session recovery guidance includes file access suggested actions from trac
       includeProbe: true
     });
     assert.equal(recovered.recoveredPlanningMessages.at(-1).tool_calls[0].function.name, "read_media_summary");
+  });
+});
+
+test("session recovery guidance includes blocked tool fallback actions from trace", async () => {
+  await withTempDir(async (appDataRoot) => {
+    await writeBlockedFallbackActionCheckpoint(appDataRoot, 1);
+    const checkpoint = await readAiSessionCheckpoint(appDataRoot, 1);
+
+    assert.deepEqual(checkpoint.fileAccessSuggestedActions.map((action) => action.tool), ["read_media_summary", "diagnose_file_access"]);
+    assert.deepEqual(checkpoint.fileAccessSuggestedActions[0].input, {
+      fileId: "client:Videos/demo.mp4",
+      includeSummary: true,
+      includeProbe: true,
+      includeTranscriptExcerpt: true,
+      maxChars: 4000
+    });
+
+    const guidance = buildSessionRecoveryGuidance(checkpoint);
+    assert.equal(guidance.recoveryAction.mode, "text-replan");
+    assert.deepEqual(guidance.recoveryAction.fileAccessSuggestedActions.map((action) => action.tool), ["read_media_summary", "diagnose_file_access"]);
+    assert.match(guidance.recoveryAction.suggestedNextStep, /read_media_summary、diagnose_file_access/);
+    assert.match(guidance.strategy, /文件访问诊断建议/);
+
+    const recovered = buildFileAccessSuggestedToolRecoveryState(checkpoint.fileAccessSuggestedActions, "继续");
+    assert.equal(recovered.mode, "file-access-retry-tools");
+    assert.deepEqual(recovered.recoveredPendingToolCalls.map((item) => item.name), ["read_media_summary", "diagnose_file_access"]);
+    assert.deepEqual(recovered.recoveredPendingToolCalls[1].input, {
+      fileId: "client:Videos/demo.mp4"
+    });
   });
 });
 
