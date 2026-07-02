@@ -13,6 +13,7 @@
     "dev:web": "npm run dev -w web",
     "dev:client": "npm run dev -w storage-client",
     "build": "npm run build -w web",
+    "test:agent": "npm run test:agent -w storage-client",
     "start": "npm run start -w server",
     "deploy:start": "powershell -ExecutionPolicy Bypass -File scripts/deploy-and-start.ps1",
     "deploy:start:linux": "bash ./scripts/deploy-and-start.sh",
