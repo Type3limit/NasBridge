@@ -36,6 +36,57 @@ async function withEnv(vars, fn) {
   }
 }
 
+async function writeRecoverableAgentTraceFixture(appDataRoot, {
+  jobId = "botjob_recover",
+  sessionId = 7,
+  toolName = "read_media_summary"
+} = {}) {
+  const graphRoot = path.join(appDataRoot, "ai-chat-graph");
+  await fs.mkdir(path.join(graphRoot, "executions"), { recursive: true });
+  await fs.mkdir(path.join(graphRoot, "traces"), { recursive: true });
+  await fs.writeFile(path.join(graphRoot, "executions", `${jobId}.json`), JSON.stringify({
+    jobId,
+    botId: "ai.chat",
+    sessionId,
+    status: "failed",
+    route: "textTools",
+    savedAt: "2026-07-02T08:30:00.000Z",
+    traceSummary: {
+      count: 2,
+      lastNode: "textTools",
+      lastStatus: "failed"
+    },
+    result: {},
+    recoveryState: {
+      toolRound: 2,
+      pendingToolNames: [toolName],
+      pendingToolCalls: [{
+        id: "call_retry_tool",
+        name: toolName,
+        input: {
+          fileId: "client:movie.mp4",
+          includeSummary: true
+        }
+      }],
+      planningMessages: [{
+        role: "user",
+        content: "总结这个视频"
+      }]
+    }
+  }), "utf8");
+  await fs.writeFile(path.join(graphRoot, "traces", `${jobId}.jsonl`), `${JSON.stringify({
+    kind: "agent",
+    phase: "plan_next_step",
+    round: 1,
+    status: "tool-requested",
+    detail: {
+      model: "openai::deepseek-v4-pro",
+      pendingTools: [{ id: "call_retry_tool", name: toolName, reason: "读取已有媒体摘要" }]
+    },
+    outputPreview: `call ${toolName}`
+  })}\n`, "utf8");
+}
+
 test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs", () => {
   const body = formatAgentTraceReport({
     jobId: "botjob_parent",
@@ -904,6 +955,101 @@ test("trace command route offers direct retry for recoverable file access tools"
     ]);
     assert.equal(result.result.artifacts[0].recoveryHint.mode, "text-retry-tools");
     assert.equal(result.result.artifacts[0].recoveryHint.canContinueDirectly, true);
+  } finally {
+    await fs.rm(appDataRoot, { recursive: true, force: true });
+  }
+});
+
+test("job and log command cards expose recoverable agent retry action", async () => {
+  const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-recovery-card-actions-"));
+  const jobId = "botjob_recovery_card";
+  try {
+    const store = new BotJobStore({ rootDir: appDataRoot });
+    await store.save({
+      jobId,
+      botId: "ai.chat",
+      status: "failed",
+      phase: "textTools",
+      progress: { label: "Tool failed", percent: 80, details: null },
+      input: {},
+      options: {},
+      result: {},
+      audit: {},
+      createdAt: "2026-07-02T00:00:00.000Z",
+      updatedAt: "2026-07-02T00:00:01.000Z"
+    });
+    await store.appendLog(jobId, "read_media_summary failed once");
+    await store.waitForPendingWrite(jobId);
+    await store.waitForPendingLog(jobId);
+    await writeRecoverableAgentTraceFixture(appDataRoot, {
+      jobId,
+      sessionId: 13
+    });
+
+    const replies = [];
+    const api = {
+      appDataRoot,
+      signal: null,
+      throwIfCancelled() {},
+      getJob: (targetJobId) => store.get(targetJobId),
+      async publishChatReply(payload) {
+        replies.push(payload);
+        return {
+          id: `reply_${replies.length}`,
+          text: payload.text,
+          card: payload.card
+        };
+      }
+    };
+
+    const jobResult = await handleAiChatCommandRoute({
+      prepared: {
+        api,
+        modelDirective: {
+          command: {
+            type: "jobs",
+            jobId,
+            limit: 1
+          }
+        },
+        modelSettings: {}
+      }
+    });
+
+    const expectedActions = [
+      {
+        type: "invoke-bot",
+        label: "重试失败步骤",
+        botId: "ai.chat",
+        rawText: "#13 继续",
+        parsedArgs: {
+          __chatReplyMode: "replace-chat-message"
+        }
+      },
+      { type: "open-bot-log", label: "查看日志", jobId },
+      { type: "invoke-bot", label: "查看 Trace", botId: "ai.chat", rawText: `/trace ${jobId}` },
+      { type: "retry-bot-job", label: "重新生成", jobId }
+    ];
+    assert.deepEqual(replies[0].card.actions, expectedActions);
+    assert.match(jobResult.result.chatReply.text, /可继续：@ai #13 继续/);
+    assert.equal(jobResult.result.artifacts[0].jobs[0].agentTrace.recoveryHint.mode, "text-retry-tools");
+
+    const logResult = await handleAiChatCommandRoute({
+      prepared: {
+        api,
+        modelDirective: {
+          command: {
+            type: "log",
+            jobId
+          }
+        },
+        modelSettings: {}
+      }
+    });
+
+    assert.deepEqual(replies[1].card.actions, expectedActions);
+    assert.match(logResult.result.chatReply.text, /可继续：@ai #13 继续/);
+    assert.equal(logResult.result.artifacts[0].agentTrace.recoveryHint.mode, "text-retry-tools");
   } finally {
     await fs.rm(appDataRoot, { recursive: true, force: true });
   }

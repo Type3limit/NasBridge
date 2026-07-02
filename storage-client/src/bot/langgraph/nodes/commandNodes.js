@@ -454,6 +454,27 @@ function buildAgentTraceCardActions(trace = {}, activeSession = null) {
   return recoveryAction ? [recoveryAction, ...baseActions] : baseActions;
 }
 
+function prependTraceRecoveryAction(actions = [], trace = null, activeSession = null) {
+  const recoveryAction = buildAgentTraceRecoveryAction(trace, activeSession);
+  if (!recoveryAction) {
+    return actions;
+  }
+  const exists = (Array.isArray(actions) ? actions : []).some((action) => (
+    String(action?.type || "") === recoveryAction.type
+    && String(action?.botId || "") === recoveryAction.botId
+    && String(action?.rawText || "") === recoveryAction.rawText
+  ));
+  return exists ? actions : [recoveryAction, ...actions];
+}
+
+function buildBotJobCardActionsWithRecovery(job = {}, fallbackJobId = "", activeSession = null, options = {}) {
+  const actions = buildBotJobCardActions(job, fallbackJobId, options);
+  const trace = options.agentTrace && typeof options.agentTrace === "object"
+    ? options.agentTrace
+    : (job?.agentTrace && typeof job.agentTrace === "object" ? job.agentTrace : null);
+  return prependTraceRecoveryAction(actions, trace, activeSession);
+}
+
 function buildBotJobCardActions(job = {}, fallbackJobId = "", options = {}) {
   const jobId = String(job?.jobId || fallbackJobId || "").trim();
   if (!jobId) {
@@ -908,7 +929,7 @@ export async function handleAiChatCommandRoute(state = {}) {
               title: jobId ? "Bot 任务状态" : "最近 Bot 任务",
               subtitle: withSessionSubtitle(jobId || `共 ${status.count || 0} 个任务`, activeSession),
               body,
-              actions: jobId ? buildBotJobCardActions(status.jobs?.[0] || {}, jobId) : []
+              actions: jobId ? buildBotJobCardActionsWithRecovery(status.jobs?.[0] || {}, jobId, activeSession) : []
             }
           }),
           importedFiles: [],
@@ -943,7 +964,9 @@ export async function handleAiChatCommandRoute(state = {}) {
               title: "Bot 任务日志",
               subtitle: withSessionSubtitle(jobId || "unknown", activeSession),
               body,
-              actions: buildBotJobCardActions(bundle.job || {}, bundle.jobId || jobId)
+              actions: buildBotJobCardActionsWithRecovery(bundle.job || {}, bundle.jobId || jobId, activeSession, {
+                agentTrace: bundle.agentTrace || null
+              })
             }
           }),
           importedFiles: [],
