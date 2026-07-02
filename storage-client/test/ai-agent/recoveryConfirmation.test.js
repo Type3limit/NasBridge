@@ -279,6 +279,7 @@ async function writeBlockedFallbackActionCheckpoint(appDataRoot, sessionId = 1) 
         label: "Whisper",
         status: "warn"
       },
+      repairCommands: ["@ai /health", "@ai /tools"],
       fallbackActions: [
         {
           tool: "read_media_summary",
@@ -401,12 +402,23 @@ test("session recovery guidance includes blocked tool fallback actions from trac
       includeTranscriptExcerpt: true,
       maxChars: 4000
     });
+    assert.deepEqual(checkpoint.repairCommands, ["@ai /health", "@ai /tools"]);
+    assert.deepEqual(checkpoint.latestSnapshot.repairCommands, ["@ai /health", "@ai /tools"]);
 
     const guidance = buildSessionRecoveryGuidance(checkpoint);
     assert.equal(guidance.recoveryAction.mode, "text-replan");
     assert.deepEqual(guidance.recoveryAction.fileAccessSuggestedActions.map((action) => action.tool), ["read_media_summary", "diagnose_file_access"]);
+    assert.deepEqual(guidance.recoveryAction.repairCommands, ["@ai /health", "@ai /tools"]);
     assert.match(guidance.recoveryAction.suggestedNextStep, /read_media_summary、diagnose_file_access/);
+    assert.match(guidance.recoveryAction.repairCommandStep, /@ai \/health、@ai \/tools/);
     assert.match(guidance.strategy, /文件访问诊断建议/);
+    assert.match(guidance.strategy, /修复命令：@ai \/health、@ai \/tools/);
+
+    const reply = createRecoveryReplyText(guidance);
+    assert.match(reply, /修复命令：@ai \/health、@ai \/tools/);
+
+    const artifact = createRecoveryArtifact(guidance, { id: 1 });
+    assert.deepEqual(artifact.repairCommands, ["@ai /health", "@ai /tools"]);
 
     const recovered = buildFileAccessSuggestedToolRecoveryState(checkpoint.fileAccessSuggestedActions, "继续");
     assert.equal(recovered.mode, "file-access-retry-tools");

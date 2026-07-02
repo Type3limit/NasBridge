@@ -402,6 +402,17 @@ function buildSuggestedActionDedupeKey(action = null) {
   ].join(":");
 }
 
+function compactRepairCommand(value = "") {
+  const command = String(value || "").trim().slice(0, 120);
+  if (!command || !/^@ai(?:\s|$)/i.test(command)) {
+    return "";
+  }
+  if (isUnsafeLocalPath(command) || /sk-[A-Za-z0-9_-]{8,}/i.test(command)) {
+    return "";
+  }
+  return command;
+}
+
 function extractFileAccessSuggestedActions(traceEvents = []) {
   const result = [];
   const seen = new Set();
@@ -434,6 +445,34 @@ function extractFileAccessSuggestedActions(traceEvents = []) {
   return result;
 }
 
+function extractRepairCommands(traceEvents = []) {
+  const result = [];
+  const seen = new Set();
+  const events = Array.isArray(traceEvents) ? traceEvents : [];
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (String(event?.kind || "").trim() !== "tool") {
+      continue;
+    }
+    const commands = Array.isArray(event?.resultSummary?.repairCommands)
+      ? event.resultSummary.repairCommands
+      : [];
+    for (const item of commands) {
+      const command = compactRepairCommand(item);
+      const key = command.toLowerCase();
+      if (!command || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      result.push(command);
+      if (result.length >= 5) {
+        return result;
+      }
+    }
+  }
+  return result;
+}
+
 export async function readExecutionPendingConfirmation(appDataRoot = "", jobId = "") {
   const traceEvents = await readExecutionTraceEvents(appDataRoot, jobId);
   return extractPendingConfirmation(traceEvents);
@@ -448,17 +487,20 @@ export async function readAiSessionCheckpoint(appDataRoot = "", sessionId = 0) {
   const traceEvents = await readExecutionTraceEvents(appDataRoot, checkpoint.latestExecution.jobId);
   const pendingConfirmation = extractPendingConfirmation(traceEvents);
   const fileAccessSuggestedActions = extractFileAccessSuggestedActions(traceEvents);
+  const repairCommands = extractRepairCommands(traceEvents);
   return {
     ...checkpoint,
     latestSnapshot: latestSnapshot
       ? {
           ...latestSnapshot,
           pendingConfirmation,
-          fileAccessSuggestedActions
+          fileAccessSuggestedActions,
+          repairCommands
         }
       : latestSnapshot,
     pendingConfirmation,
-    fileAccessSuggestedActions
+    fileAccessSuggestedActions,
+    repairCommands
   };
 }
 
