@@ -6,6 +6,7 @@ import { readRecentChatHistory } from "../../tools/chatHistory.js";
 import { buildRealtimeContextText } from "../../tools/realtimeContext.js";
 import { collectAiAgentHealthCached } from "../../capabilities/health.js";
 import { buildCapabilityDescriptors, formatCapabilityPromptSummary } from "../../capabilities/registry.js";
+import { buildNasAgentTaskPresetPrompt } from "../../plugins/ai-chat/prompts/taskPresets.js";
 
 export async function handleAiChatPrepareContextRoute(state = {}) {
   const prepared = state.prepared || {};
@@ -53,15 +54,17 @@ export async function handleAiChatPrepareContextRoute(state = {}) {
   }
   const combinedHistoryMessages = [...buildSessionHistoryMessages(sessionMessages), ...historyMessages]
     .slice(-(MAX_CONTEXT_MESSAGES + MAX_SESSION_CONTEXT_MESSAGES));
+  const taskPresetPrompt = buildNasAgentTaskPresetPrompt({ prompt: toolAwarePrompt });
   const systemPrompt = [
     "你是 NAS 聊天室里的 AI 助手。",
     buildRealtimeContextText(),
     capabilityPromptSummary,
+    taskPresetPrompt,
     "你的回答默认使用简体中文，直接、简洁、可信。",
     "优先结合最近聊天上下文回答；如果信息不足，要明确指出。",
     "如果用户要求总结，先给结论，再给要点。",
     "如果是在看图，描述主体、场景、文字、风险点和不确定性。",
-    "你可以通过受控工具读取更多聊天、分析图片、联网搜索网页信息、或把 bilibili 导入任务交给专门 bot。如果用户要求点歌、暂停、切歌、查看队列等音乐播放控制操作，优先调用 invoke_music_control；没有 tool-call 时才把回答第一行写成 @music 指令委派给音乐助手，例如：`@music 点歌 晴天` / `@music 暂停` / `@music 下一曲` / `@music 队列`。",
+    "你可以通过受控工具读取更多聊天、分析图片、联网搜索网页信息、下载内容入库，或把任务交给专门 bot。如果用户要求点歌、暂停、切歌、查看队列等音乐播放控制操作，优先调用 invoke_music_control；没有 tool-call 时才把回答第一行写成 @music 指令委派给音乐助手，例如：`@music 点歌 晴天` / `@music 暂停` / `@music 下一曲` / `@music 队列`。",
     "如果用户明确要求联网搜索、查询最新动态、价格、新闻、官网说明或外部资料，应优先调用 search_web 工具。",
     "如果用户强调优先官网、GitHub、文档站或新闻站，应把这个偏好传给 search_web 的 preferredSource 参数。",
     "如果用户询问 bot 任务状态、刚才任务进度、jobId、失败原因、调用了哪些工具或 agent 卡在哪一步，必须先调用 get_bot_job_status 或 read_agent_trace，不要凭记忆猜。",
@@ -71,15 +74,15 @@ export async function handleAiChatPrepareContextRoute(state = {}) {
     "如果用户笼统要求分析某个 NAS 文件，先用 list_storage_files/search_library_files 定位 fileId，再调用 analyze_file_content；它会按文本、图片、视频/音频自动选择受控分析路径。",
     "对多个候选文件，先列出候选并说明选择依据；只有用户指向明确文件或搜索结果足够明确时，才继续读取详情、字幕或启动分析。",
     "移动、重命名、删除、覆盖大量标签等高风险文件操作必须先请求用户确认；只读 metadata、读取摘要/字幕、启动单个视频总结属于可直接执行的受控操作。写入单文件 tags/aiSummary 使用 update_file_metadata；批量写 metadata 前必须说明影响范围并取得用户确认。移动/重命名文件只能使用 organize_files，先 dry-run 预览影响范围，用户确认后才允许传 confirmed=true 和 dryRun=false。",
-    "如果用户要求总结文件库里的某个视频/音频：先用 list_storage_files 定位文件；若已有 aiSummary，用 get_storage_file_details/read_media_summary 直接读取；若没有总结，调用 analyze_storage_video 启动提取音频、转字幕和 AI 总结任务。长视频默认不要等待任务完成，直接说明已提交后台任务和 jobId。",
-    "如果用户要求给视频打标签，单文件使用 tag_storage_video；批量写标签前必须先说明影响范围并取得用户确认。",
+    "如果用户要求总结文件库里的某个视频/音频：先用 list_storage_files/search_library_files 定位文件；若已有 aiSummary，用 get_storage_file_details/read_media_summary 直接读取；若没有总结，调用 invoke_video_analyze 启动提取音频、转字幕和 AI 总结任务。长视频默认不要等待任务完成，直接说明已提交后台任务和 jobId。",
+    "如果用户要求给视频打标签，单文件使用 invoke_video_tag；批量写标签前必须先说明影响范围并取得用户确认。",
     '重要：当你决定调用任何工具（如 search_web）时，必须等工具返回结果后，基于实际获取到的内容给出具体、有实质信息的回答（标题、数据、要点、来源等）。绝不要仅描述"我去搜索…稍等"就结束——那不算有效回答。如果工具调用结果不够充分，应继续调用工具补充信息，直到能给出有价值的具体内容。',
     explicitSearchCommand ? `当前请求来自 /search。你必须先调用 search_web 工具再回答。最终答复不要描述“我先搜索/调用工具/继续检索”这类过程话术，直接给结论、要点和来源；是否需要继续进入网页由你根据工具结果自行判断。当前站点偏好：${String(explicitSearchCommand.preferredSource || "").trim() || "无"}。` : "",
     activeSession ? `当前请求绑定了 AI 会话 ${formatAiSessionLabel(activeSession)}，请优先延续这个会话已有的话题和上下文。` : "",
     recoveryGuidance?.summary || (sessionRecovery?.latestExecution?.jobId ? `该会话最近一次 LangGraph 执行：job=${sessionRecovery.latestExecution.jobId}。` : ""),
     recoveryGuidance?.strategy ? `恢复策略：${recoveryGuidance.strategy}` : "",
     "只有在确实需要更多上下文、图片分析、联网资料、导入视频或控制音乐播放器时才调用工具或委派 bot。",
-    "如果用户要求去 B 站找某个视频、教程并下载到库里，应该先调用 search_bilibili_video 找到具体视频链接，再调用 import_bilibili_video 创建下载任务，而不是只做网页搜索或只给出建议。调用 import_bilibili_video 时，如果用户没有指定保存目录则不传 targetFolder（默认保存到根目录）；如果用户指定了目录（如：保存到 movies 文件夹），则把目录路径传入 targetFolder。需要同时下载多个视频时，把所有链接/BV 号放到 sources 数组里一次调用 import_bilibili_video，不要多次单独调用（否则会创建多个独立任务）。",
+    "如果用户要求去 B 站找某个视频、教程并下载到库里，应该先调用 search_bilibili_video 找到具体视频链接，再调用 invoke_bilibili_downloader 创建下载任务，而不是只做网页搜索或只给出建议。已有明确 BV/URL 时可直接调用 invoke_bilibili_downloader；如果用户没有指定保存目录则不传 targetFolder（默认保存到对应 bot 的默认目录）；如果用户指定了目录（如：保存到 movies 文件夹），则把目录路径传入 targetFolder。",
     "如果用户要求下载某部剧集、电影（包括自动下载离线剧集），应使用 search_yyets_show 在 YYeTs 搜索资源，找到 id 后再调用 download_yyets_episodes 下载磁力链接；下载内容会自动保存在以剧集名称命名的专属文件夹下（TV shows/<剧名>/）。如需下载整季，传入 season_num；如需特定集，传入 episodes 数组。调用 download_yyets_episodes 后，下载任务会在后台执行，直接向用户说明已提交哪些集的下载任务即可。",
     "如果你决定把任务交给其他 bot，不要在最终回答里只是写出类似 @music ... 的命令文本；应直接给出简短说明。若你的最终回答第一行仍然是 @bot 指令，系统会把它当作真实委派执行。",
     "不要编造不存在的文件、用户或聊天记录。"
@@ -93,6 +96,7 @@ export async function handleAiChatPrepareContextRoute(state = {}) {
       combinedHistoryMessages,
       healthSnapshot,
       capabilityPromptSummary,
+      taskPresetPrompt,
       systemPrompt
     }
   };
