@@ -356,6 +356,16 @@ const TOOL_OUTPUT_SCHEMAS = {
       childJobs: { type: "array" }
     },
     additionalProperties: true
+  },
+  describe_image: {
+    type: "object",
+    required: ["imageCount", "analysis"],
+    properties: {
+      imageCount: { type: "integer" },
+      model: { type: "string" },
+      analysis: { type: "string" }
+    },
+    additionalProperties: true
   }
 };
 
@@ -482,6 +492,7 @@ const CAPABILITY_EXAMPLES = {
   read_text_excerpt: ["读取这个 PDF 的前 2000 字"],
   analyze_file_content: ["分析这个 NAS 文件", "总结这个 PDF 文档"],
   explain_file_access: ["我能访问哪些 NAS 文件", "说明你的文件访问边界"],
+  describe_image: ["看看这张图片有什么", "分析最近上传的截图"],
   invoke_video_analyze: ["总结这个视频并保存摘要"],
   analyze_storage_video: ["总结这个视频"],
   invoke_video_tag: ["给这个视频生成标签"],
@@ -509,6 +520,7 @@ const PROMPT_CORE_CAPABILITY_IDS = [
   "diagnose_file_access",
   "explain_file_access",
   "analyze_file_content",
+  "describe_image",
   "invoke_video_analyze",
   "analyze_storage_video",
   "invoke_video_tag",
@@ -541,6 +553,12 @@ const CAPABILITY_WORKFLOWS = [
     title: "Read or summarize documents",
     tools: ["search_library_files", "diagnose_file_access", "read_text_excerpt", "analyze_file_content"],
     guidance: "先诊断可读层级，再分页读取文本/PDF/Office 片段；需要综合分析时调用 analyze_file_content。"
+  },
+  {
+    id: "image-analysis",
+    title: "Analyze chat or NAS images",
+    tools: ["describe_image", "search_library_files", "diagnose_file_access", "analyze_file_content"],
+    guidance: "当前消息或最近聊天图片直接用 describe_image；NAS 图片先 search_library_files kind=image 定位 fileId，再 diagnose_file_access，最后 analyze_file_content mode=image；不要把本机绝对路径暴露给模型。"
   },
   {
     id: "file-access-diagnostic",
@@ -712,7 +730,7 @@ function summarizeStorageAccessForPrompt(checks = []) {
   return `NAS file access snapshot: ${parts.join(", ")}; policy ${policyBits.join(", ")}.`;
 }
 
-function selectCapabilityWorkflows(descriptors = [], maxWorkflows = 7) {
+function selectCapabilityWorkflows(descriptors = [], maxWorkflows = 8) {
   const byId = new Map((Array.isArray(descriptors) ? descriptors : []).map((item) => [item.id, item]));
   return CAPABILITY_WORKFLOWS
     .filter((workflow) => workflow.tools.some((toolId) => byId.has(toolId)))
@@ -917,7 +935,7 @@ function buildCapabilityWorkflowArtifact(workflow = {}, descriptors = [], health
 }
 
 export function buildCapabilityArtifactSummary(descriptors = [], health = {}, options = {}) {
-  const maxWorkflows = Math.max(0, Math.min(12, Number(options.maxWorkflows || 7) || 7));
+  const maxWorkflows = Math.max(0, Math.min(12, Number(options.maxWorkflows || 8) || 8));
   const capabilities = (Array.isArray(descriptors) ? descriptors : []).map((item) => buildCapabilityArtifactItem(item, health));
   return {
     count: capabilities.length,
@@ -976,7 +994,7 @@ export function formatCapabilityReport(descriptors = [], health = {}) {
       }
     }
   }
-  const workflows = selectCapabilityWorkflows(descriptors, 7);
+  const workflows = selectCapabilityWorkflows(descriptors, 8);
   if (workflows.length) {
     lines.push("", "常用工作流:");
     for (const workflow of workflows) {
@@ -994,7 +1012,7 @@ export function formatCapabilityReport(descriptors = [], health = {}) {
 
 export function formatCapabilityPromptSummary(descriptors = [], health = {}, options = {}) {
   const maxItems = Math.max(4, Math.min(28, Number(options.maxItems || PROMPT_CORE_CAPABILITY_IDS.length) || PROMPT_CORE_CAPABILITY_IDS.length));
-  const maxWorkflows = Math.max(0, Math.min(8, Number(options.maxWorkflows || 7) || 7));
+  const maxWorkflows = Math.max(0, Math.min(12, Number(options.maxWorkflows || 8) || 8));
   const checks = Array.isArray(health.checks) ? health.checks : [];
   const nonOkChecks = checks.filter((check) => check.status && check.status !== "ok");
   const byId = new Map((Array.isArray(descriptors) ? descriptors : []).map((item) => [item.id, item]));

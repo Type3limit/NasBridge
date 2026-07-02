@@ -64,6 +64,30 @@ test("music prompts focus on invoke_music_control and QQ cookie degradation", ()
   assert.match(prompt, /QQ cookie degraded/);
 });
 
+test("image prompts route chat attachments and NAS images through vision tools", () => {
+  const prompt = buildNasAgentTaskPresetPrompt({
+    prompt: "看看这张截图，再分析 NAS 里最近的图片",
+    descriptors: [
+      {
+        id: "describe_image",
+        examples: ["看看这张图片有什么"]
+      },
+      {
+        id: "analyze_file_content",
+        examples: ["分析这个 NAS 图片文件"]
+      }
+    ]
+  });
+
+  assert.match(prompt, /Analyze a NAS file/);
+  assert.match(prompt, /describe_image/);
+  assert.match(prompt, /search_library_files kind=image/);
+  assert.match(prompt, /analyze_file_content mode=image/);
+  assert.match(prompt, /Capability examples matched to this task/);
+  assert.match(prompt, /describe_image: 看看这张图片有什么/);
+  assert.match(prompt, /analyze_file_content: 分析这个 NAS 图片文件/);
+});
+
 test("download prompts include concrete downloader adapters", () => {
   const prompt = buildNasAgentTaskPresetPrompt({
     prompt: "去 B 站找一个教程下载到库里，也可能给你一个 magnet"

@@ -441,6 +441,7 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.equal(byId.get("search_library_files").riskLevel, "low");
   assert.equal(byId.get("diagnose_file_access").riskLevel, "low");
   assert.equal(byId.get("read_bot_job_log").riskLevel, "low");
+  assert.equal(byId.get("describe_image").riskLevel, "low");
   assert.equal(byId.get("analyze_file_content").riskLevel, "medium");
   assert.equal(byId.get("organize_files").riskLevel, "high");
   assert.equal(byId.get("organize_files").requiresConfirmation, true);
@@ -453,6 +454,7 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.deepEqual(byId.get("read_bot_job_log").healthChecks, ["storage-root"]);
   assert.ok(byId.get("invoke_video_analyze").healthChecks.includes("bot-queue"));
   assert.ok(byId.get("analyze_file_content").healthChecks.includes("document-text"));
+  assert.deepEqual(byId.get("describe_image").healthChecks, ["ai-model", "storage-root"]);
   assert.deepEqual(byId.get("invoke_music_control").healthChecks, ["music-bridge", "qq-music-cookie"]);
   assert.ok(byId.get("invoke_bilibili_downloader").healthChecks.includes("bilibili-auth"));
   assert.ok(byId.get("video.analyze").permissions.includes("storage:metadata:write"));
@@ -478,6 +480,8 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.deepEqual(byId.get("invoke_music_control").outputSchema.required, ["status", "botId", "jobId"]);
   assert.ok(byId.get("invoke_music_control").outputSchema.properties.tracking);
   assert.ok(byId.get("invoke_music_control").outputSchema.properties.prompt);
+  assert.deepEqual(byId.get("describe_image").outputSchema.required, ["imageCount", "analysis"]);
+  assert.equal(byId.get("describe_image").outputSchema.properties.analysis.type, "string");
   assert.deepEqual(byId.get("invoke_bilibili_downloader").outputSchema.required, ["status", "botId", "jobId"]);
   assert.ok(byId.get("invoke_bilibili_downloader").outputSchema.properties.tracking);
   assert.ok(byId.get("video.analyze").outputSchema.properties.jobId);
@@ -559,6 +563,7 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(summary, /read_text_excerpt/);
   assert.match(summary, /diagnose_file_access/);
   assert.match(summary, /explain_file_access/);
+  assert.match(summary, /describe_image/);
   assert.match(summary, /read_bot_job_log/);
   assert.match(summary, /organize_files/);
   assert.match(summary, /trash_files/);
@@ -571,6 +576,7 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(summary, /perms=storage:file:move\/storage:file:trash/);
   assert.match(summary, /perms=bot:invoke\/network:download\/storage:file:write/);
   assert.match(summary, /returns=total\/files/);
+  assert.match(summary, /returns=imageCount\/analysis/);
   assert.match(summary, /returns=operation\/actions/);
   assert.match(summary, /returns=status\/botId\/jobId/);
   assert.match(summary, /Recommended task workflows/);
@@ -579,6 +585,8 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(summary, /hasSubtitle=false/);
   assert.match(summary, /waitUntilPhase=transcribe\/running/);
   assert.match(summary, /document-read: search_library_files -> diagnose_file_access -> read_text_excerpt -> analyze_file_content/);
+  assert.match(summary, /image-analysis: describe_image -> search_library_files -> diagnose_file_access -> analyze_file_content/);
+  assert.match(summary, /kind=image/);
   assert.match(summary, /file-access-diagnostic: explain_file_access -> search_library_files -> diagnose_file_access/);
   assert.match(summary, /organize-files: search_library_files -> read_file_metadata -> organize_files -> trash_files/);
   assert.match(summary, /隐藏回收站/);
@@ -606,6 +614,7 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.equal(mediaWorkflow.blocked, true);
   assert.equal(mediaWorkflow.steps.find((step) => step.id === "invoke_video_analyze").status, "blocked");
   assert.equal(mediaWorkflow.steps.find((step) => step.id === "invoke_video_analyze").blockerId, "whisper");
+  assert.ok(artifact.workflows.some((item) => item.id === "image-analysis"));
   assert.match(report, /video\.analyze/);
   assert.match(report, /\[blocked\] video\.analyze/);
   assert.match(report, /invoke_video_analyze · .*ready=no · blockedBy=whisper/);
@@ -621,6 +630,7 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(report, /状态: .*invoke_video_analyze:blocked\(whisper\)/);
   assert.match(report, /hasAiSummary=false/);
   assert.match(report, /waitUntilPhase=transcribe\/running/);
+  assert.match(report, /image-analysis · Analyze chat or NAS images: describe_image -> search_library_files -> diagnose_file_access -> analyze_file_content/);
   assert.match(report, /download-into-library · Download into NAS library: search_bilibili_video -> invoke_bilibili_downloader -> invoke_ytdlp_downloader -> invoke_torrent_downloader -> invoke_aria2_downloader -> search_yyets_show -> download_yyets_episodes/);
   assert.match(report, /failure-diagnostic · Diagnose bot or agent failure: get_bot_job_status -> read_agent_trace -> read_bot_job_log/);
   assert.match(report, /建议\(Whisper\): 配置 WHISPER_CPP_PATH 和 WHISPER_MODEL_PATH/);

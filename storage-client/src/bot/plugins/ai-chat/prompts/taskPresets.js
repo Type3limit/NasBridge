@@ -87,8 +87,9 @@ const TASK_PRESETS = [
   {
     id: "content-analysis",
     title: "Analyze a NAS file",
-    triggers: [/分析|阅读|读取|文档|图片|pdf|markdown|内容|analy[sz]e|read|document|image/i],
+    triggers: [/分析|阅读|读取|文档|图片|截图|看图|视觉|pdf|markdown|内容|analy[sz]e|read|document|image|vision/i],
     lines: [
+      "当前消息附件或最近聊天图片需要看图时，优先调用 describe_image；NAS 图片文件则先 search_library_files kind=image 定位 fileId，再调用 analyze_file_content mode=image。",
       "目标文件明确后优先调用 analyze_file_content；它会按文本、PDF/Office 文档、图片、媒体类型选择受控分析路径。",
       "如果文件类型、字幕/摘要状态或所需依赖不确定，先调用 diagnose_file_access，再决定读片段、复用摘要或启动 video.analyze。",
       "大文本和文档只读取抽取片段，必要时分页/抽样；图片走视觉模型；视频/音频优先复用字幕/摘要。"
