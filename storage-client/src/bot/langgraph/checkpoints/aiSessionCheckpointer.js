@@ -97,7 +97,9 @@ function normalizePendingToolCall(item = {}) {
   return {
     id: String(item?.id || "").trim(),
     name: String(item?.name || item?.function?.name || "").trim(),
-    input: item?.input && typeof item.input === "object" ? item.input : {}
+    input: item?.input && typeof item.input === "object" ? item.input : {},
+    fallbackJsonPlan: item?.fallbackJsonPlan === true,
+    reason: String(item?.reason || "").trim()
   };
 }
 
@@ -223,6 +225,7 @@ function buildTraceSummary(trace = []) {
   const last = items.length ? items[items.length - 1] : null;
   return {
     count: items.length,
+    kinds: [...new Set(items.map((item) => String(item?.kind || "").trim()).filter(Boolean))],
     nodes: [...new Set(items.map((item) => String(item?.node || "").trim()).filter(Boolean))],
     lastNode: String(last?.node || "").trim(),
     lastStatus: String(last?.status || "").trim(),
@@ -296,6 +299,17 @@ export function createAiSessionCheckpointer({ appDataRoot = "", jobId = "", botI
         status: String(status || "").trim(),
         input,
         outputPreview: String(outputPreview || "").slice(0, 320)
+      });
+    },
+    async recordAgentEvent({ phase = "", round = 0, status = "", detail = {}, outputPreview = "" } = {}) {
+      await appendJsonLine(getExecutionTracePath(appDataRoot, normalizedJobId), {
+        ...createBaseEvent(),
+        kind: "agent",
+        phase: String(phase || "").trim(),
+        round: Number.isFinite(round) ? Number(round) : 0,
+        status: String(status || "").trim(),
+        detail: detail && typeof detail === "object" ? detail : {},
+        outputPreview: String(outputPreview || "").slice(0, 500)
       });
     },
     async saveExecution({ status = "unknown", route = "", trace = [], result = null, error = null, recoveryState = null } = {}) {

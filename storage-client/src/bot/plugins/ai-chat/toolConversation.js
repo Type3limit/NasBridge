@@ -192,6 +192,60 @@ function createJsonFallbackAssistantMessage(result = {}, planText = "") {
   };
 }
 
+function previewText(value = "", maxLength = 500) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
+function summarizePendingToolCalls(toolCalls = []) {
+  return (Array.isArray(toolCalls) ? toolCalls : []).map((call) => ({
+    id: String(call?.id || "").trim(),
+    name: String(call?.name || "").trim(),
+    fallbackJsonPlan: call?.fallbackJsonPlan === true,
+    reason: String(call?.reason || "").trim()
+  })).filter((call) => call.name);
+}
+
+async function recordAgentPlanningEvent(api = {}, {
+  round = 0,
+  status = "completed",
+  model = "",
+  fallback = "",
+  finishReason = "",
+  pendingToolCalls = [],
+  text = "",
+  parseError = "",
+  retryReason = ""
+} = {}) {
+  await api?.traceHooks?.recordAgentEvent?.({
+    phase: "plan_next_step",
+    round,
+    status,
+    detail: {
+      model: String(model || "").trim(),
+      fallback: String(fallback || "").trim(),
+      finishReason: String(finishReason || "").trim(),
+      pendingTools: summarizePendingToolCalls(pendingToolCalls),
+      parseError: String(parseError || "").trim(),
+      retryReason: String(retryReason || "").trim()
+    },
+    outputPreview: previewText(text)
+  });
+}
+
+async function recordAgentObservationEvent(api = {}, { round = 0, toolName = "", fallback = "", status = "", observation = "" } = {}) {
+  await api?.traceHooks?.recordAgentEvent?.({
+    phase: "observe_result",
+    round,
+    status,
+    detail: {
+      tool: String(toolName || "").trim(),
+      fallback: String(fallback || "").trim(),
+      observationLength: String(observation || "").length
+    },
+    outputPreview: previewText(observation)
+  });
+}
+
 export function getAiToolProgress(toolName = "", round = 0) {
   const safeRound = Math.max(0, Number(round) || 0);
   const offset = Math.min(MAX_TOOL_ROUND_OFFSET, safeRound * 5);
@@ -414,6 +468,16 @@ async function invokeJsonFallbackPlanningRound({
 
   const nextPlanningMessages = [...planningMessages, createJsonFallbackAssistantMessage(result)];
   if (parsed.ok && parsed.action === "call_tool" && parsed.toolCall) {
+    await recordAgentPlanningEvent(api, {
+      round,
+      status: "tool-requested",
+      model: result.model || model,
+      fallback: "json-plan",
+      finishReason: result.finishReason || "",
+      pendingToolCalls: [parsed.toolCall],
+      text: result.text || "",
+      retryReason
+    });
     return {
       planningMessages: nextPlanningMessages,
       pendingToolCalls: [parsed.toolCall],
@@ -424,6 +488,18 @@ async function invokeJsonFallbackPlanningRound({
       }
     };
   }
+
+  await recordAgentPlanningEvent(api, {
+    round,
+    status: parsed.ok ? "final-answer" : "parse-failed",
+    model: result.model || model,
+    fallback: "json-plan",
+    finishReason: result.finishReason || "",
+    pendingToolCalls: [],
+    text: parsed.finalAnswer || result.text || "",
+    parseError: parsed.ok ? "" : parsed.error,
+    retryReason
+  });
 
   return {
     planningMessages: parsed.ok && parsed.action === "final_answer" && parsed.finalAnswer
@@ -498,6 +574,15 @@ export async function invokeToolAwarePlanningRound({ messages, recentMessages, c
   if (pendingToolCalls.length) {
     planningMessages.push(createToolCallAssistantMessage(result));
   }
+  await recordAgentPlanningEvent(api, {
+    round,
+    status: pendingToolCalls.length ? "tool-requested" : "final-answer",
+    model: result.model || model,
+    fallback: "",
+    finishReason: result.finishReason || "",
+    pendingToolCalls,
+    text: result.text || ""
+  });
   return {
     planningMessages,
     pendingToolCalls,
@@ -536,20 +621,35 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
       throw error;
     }
     if (fallbackMode) {
+      const observationContent = [
+        `工具 ${toolCall.name} 已执行。`,
+        toolCall.reason ? `调用原因：${toolCall.reason}` : "",
+        "工具返回 JSON：",
+        toolResult
+      ].filter(Boolean).join("\n");
       nextMessages.push({
         role: "user",
-        content: [
-          `工具 ${toolCall.name} 已执行。`,
-          toolCall.reason ? `调用原因：${toolCall.reason}` : "",
-          "工具返回 JSON：",
-          toolResult
-        ].filter(Boolean).join("\n")
+        content: observationContent
+      });
+      await recordAgentObservationEvent(api, {
+        round,
+        toolName: toolCall.name,
+        fallback: fallbackMode,
+        status: "observed",
+        observation: observationContent
       });
     } else {
       nextMessages.push({
         role: "tool",
         tool_call_id: toolCall.id,
         content: toolResult
+      });
+      await recordAgentObservationEvent(api, {
+        round,
+        toolName: toolCall.name,
+        fallback: "",
+        status: "observed",
+        observation: toolResult
       });
     }
   }
