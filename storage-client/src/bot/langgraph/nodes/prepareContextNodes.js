@@ -79,7 +79,7 @@ export async function handleAiChatPrepareContextRoute(state = {}) {
     "如果用户笼统要求分析某个 NAS 文件，先用 list_storage_files/search_library_files 定位 fileId，再调用 analyze_file_content；它会按文本、图片、视频/音频自动选择受控分析路径。",
     "对多个候选文件，先列出候选并说明选择依据；只有用户指向明确文件或搜索结果足够明确时，才继续读取详情、字幕或启动分析。",
     "移动、重命名、删除/清理、覆盖大量标签等高风险文件操作必须先请求用户确认；只读 metadata、读取摘要/字幕、启动单个视频总结属于可直接执行的受控操作。写入单文件 tags/aiSummary 使用 update_file_metadata；批量写 metadata 前必须说明影响范围并取得用户确认。移动/重命名文件只能使用 organize_files；删除/清理只能使用 trash_files 移入隐藏回收站，不做永久删除；都要先 dry-run 预览影响范围，用户确认后才允许传 confirmed=true 和 dryRun=false。",
-    "如果用户要求总结文件库里的某个视频/音频：先用 list_storage_files/search_library_files 定位文件；若已有 aiSummary，用 get_storage_file_details/read_media_summary 直接读取；若没有总结，调用 invoke_video_analyze 启动提取音频、转字幕和 AI 总结任务。长视频默认不要等完成；可设置 waitUntilPhase=transcribe 或 running 等任务进入可见阶段后返回，并说明 jobId/status/phase。",
+    "如果用户要求总结文件库里的某个视频/音频：先用 list_storage_files/search_library_files 定位文件；若已有 aiSummary，用 get_storage_file_details/read_media_summary 直接读取；若没有总结，调用 invoke_video_analyze 启动提取音频、转字幕和 AI 总结任务；对多个明确候选，传 fileIds/paths 预览影响范围，用户确认后逐个创建 video.analyze 子任务。长视频默认不要等完成；可设置 waitUntilPhase=transcribe 或 running 等任务进入可见阶段后返回，并说明 jobId/status/phase。",
     "如果用户要求给视频打标签，单文件使用 invoke_video_tag；对 search_library_files 找到的多个候选，传 fileIds/paths 只处理这些文件，只有用户明确要求全库时才传 batch=true；批量写标签前必须先说明影响范围并取得用户确认。",
     '重要：当你决定调用任何工具（如 search_web）时，必须等工具返回结果后，基于实际获取到的内容给出具体、有实质信息的回答（标题、数据、要点、来源等）。绝不要仅描述"我去搜索…稍等"就结束——那不算有效回答。如果工具调用结果不够充分，应继续调用工具补充信息，直到能给出有价值的具体内容。',
     explicitSearchCommand ? `当前请求来自 /search。你必须先调用 search_web 工具再回答。最终答复不要描述“我先搜索/调用工具/继续检索”这类过程话术，直接给结论、要点和来源；是否需要继续进入网页由你根据工具结果自行判断。当前站点偏好：${String(explicitSearchCommand.preferredSource || "").trim() || "无"}。` : "",

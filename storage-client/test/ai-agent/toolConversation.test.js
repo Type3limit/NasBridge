@@ -946,6 +946,56 @@ test("tool execution blocks model-supplied confirmed=true without user confirmat
   assert.deepEqual(api.toolEvents[0].resultSummary.confirmation.impact.changedFields, ["tags"]);
 });
 
+test("tool execution blocks model-supplied video analyze confirmation", async () => {
+  const api = createFakeApi();
+  let invoked = false;
+  api.invokeBot = async () => {
+    invoked = true;
+    throw new Error("confirmed video analysis should be blocked before delegation");
+  };
+
+  const observedMessages = await executePendingToolCallsRound({
+    pendingToolCalls: [
+      {
+        id: "call_analyze_confirmed_without_user",
+        name: "invoke_video_analyze",
+        input: { fileIds: ["client:a.mp4", "client:b.mp4"], confirmed: true }
+      }
+    ],
+    planningMessages: [
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call_analyze_confirmed_without_user",
+            type: "function",
+            function: {
+              name: "invoke_video_analyze",
+              arguments: JSON.stringify({ fileIds: ["client:a.mp4", "client:b.mp4"], confirmed: true })
+            }
+          }
+        ]
+      }
+    ],
+    recentMessages: [],
+    context: { chat: {}, attachments: [] },
+    api,
+    round: 0
+  });
+
+  assert.equal(invoked, false);
+  const observation = observedMessages.at(-1);
+  assert.equal(observation.role, "tool");
+  assert.match(observation.content, /confirmation_required/);
+  assert.equal(api.toolEvents[0].status, "blocked");
+  assert.equal(api.toolEvents[0].resultSummary.capability.id, "invoke_video_analyze");
+  assert.equal(api.toolEvents[0].resultSummary.requiresConfirmation, true);
+  assert.equal(api.toolEvents[0].resultSummary.confirmation.operation, "invoke_video_analyze");
+  assert.deepEqual(api.toolEvents[0].resultSummary.confirmation.impact.changedFields, ["aiSummary", "subtitle"]);
+  assert.equal(api.toolEvents[0].resultSummary.confirmation.impact.targetFileCount, 2);
+});
+
 test("tool execution blocks model-supplied trash confirmation", async () => {
   const api = createFakeApi();
 

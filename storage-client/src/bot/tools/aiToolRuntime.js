@@ -428,6 +428,75 @@ function buildBatchVideoTagConfirmation(files = [], input = {}) {
   };
 }
 
+function buildBatchVideoAnalyzeConfirmation(files = [], input = {}) {
+  const targetFiles = (Array.isArray(files) ? files : []).filter(isVideoOrAudioStorageFile);
+  const selectedFileIds = targetFiles
+    .map((file) => String(file.id || "").trim())
+    .filter(Boolean)
+    .slice(0, MAX_METADATA_UPDATE_FILES);
+  const confirmWith = {
+    confirmed: true,
+    fileIds: selectedFileIds
+  };
+  if (input.force === true) {
+    confirmWith.force = true;
+  }
+  return {
+    required: true,
+    operation: "invoke_video_analyze",
+    riskLevel: "medium",
+    reason: "批量视频/音频分析会启动多个转录与 AI 总结任务，并写入字幕与 metadata aiSummary。",
+    impact: {
+      targetFileCount: targetFiles.length,
+      changedFields: ["aiSummary", "subtitle"],
+      force: input.force === true,
+      files: targetFiles.slice(0, 10).map(compactStorageFileForTool)
+    },
+    recoverability: "生成的 aiSummary 可用 update_file_metadata 调整；字幕 sidecar 可由后续重新分析覆盖。",
+    estimatedDuration: targetFiles.length <= 2 ? "数分钟" : "数分钟到数小时，取决于视频数量、时长和 Whisper 速度",
+    confirmWith
+  };
+}
+
+function collectMediaFileIdentifiers(input = {}) {
+  return [
+    ...(Array.isArray(input.fileIds) ? input.fileIds : []),
+    ...(Array.isArray(input.paths) ? input.paths : []),
+    input.fileId,
+    input.path,
+    input.filePath
+  ]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .filter((item, index, array) => array.indexOf(item) === index)
+    .slice(0, MAX_METADATA_UPDATE_FILES);
+}
+
+function resolveMediaTargetFiles(files = [], identifiers = [], options = {}) {
+  const targetFiles = [];
+  const missing = [];
+  const unsupported = [];
+  const seenTargets = new Set();
+  for (const identifier of identifiers) {
+    const file = resolveLibraryFile(files, identifier, { storageRoot: options.storageRoot || "" });
+    if (!file) {
+      missing.push(identifier);
+      continue;
+    }
+    const key = String(file.id || file.relativePath || identifier || "").trim();
+    if (!key || seenTargets.has(key)) {
+      continue;
+    }
+    seenTargets.add(key);
+    if (!isVideoOrAudioStorageFile(file)) {
+      unsupported.push(file);
+      continue;
+    }
+    targetFiles.push(file);
+  }
+  return { targetFiles, missing, unsupported };
+}
+
 function collectVideoTagIdentifiers(input = {}) {
   return [
     ...(Array.isArray(input.fileIds) ? input.fileIds : []),
@@ -1324,10 +1393,13 @@ export function getAiToolDefinitions() {
         type: "object",
         properties: {
           fileId: { type: "string", description: "文件 ID，优先使用 search_library_files 返回的 fileId" },
+          fileIds: { type: "array", items: { type: "string" }, maxItems: MAX_METADATA_UPDATE_FILES, description: "多个 search_library_files 返回的文件 ID；逐个提交 video.analyze 子任务" },
           path: { type: "string", description: "相对路径（与 fileId 二选一）" },
+          paths: { type: "array", items: { type: "string" }, maxItems: MAX_METADATA_UPDATE_FILES, description: "多个相对路径；逐个提交 video.analyze 子任务" },
           filePath: { type: "string", description: "相对路径别名" },
           source: { type: "string", description: "Bilibili 链接或 BV 号；用户直接给 B 站视频并要求总结/分析时使用" },
           url: { type: "string", description: "source 的别名" },
+          confirmed: { type: "boolean", description: "多个文件分析会写入 metadata/字幕，必须由用户确认" },
           force: { type: "boolean", description: "已有总结时是否重新跑总结，默认 false" },
           includeSubtitle: { type: "boolean", description: "已有总结时是否同时返回字幕文本，默认 false" },
           waitForCompletion: { type: "boolean", description: "是否等待任务完成再返回。长视频建议 false，默认 false" },
@@ -1343,8 +1415,11 @@ export function getAiToolDefinitions() {
         type: "object",
         properties: {
           fileId: { type: "string", description: "文件 ID，优先使用 list_storage_files 返回的 fileId" },
+          fileIds: { type: "array", items: { type: "string" }, maxItems: MAX_METADATA_UPDATE_FILES, description: "多个 search_library_files 返回的文件 ID；逐个提交 video.analyze 子任务" },
           path: { type: "string", description: "相对路径（与 fileId 二选一）" },
+          paths: { type: "array", items: { type: "string" }, maxItems: MAX_METADATA_UPDATE_FILES, description: "多个相对路径；逐个提交 video.analyze 子任务" },
           filePath: { type: "string", description: "相对路径别名" },
+          confirmed: { type: "boolean", description: "多个文件分析会写入 metadata/字幕，必须由用户确认" },
           force: { type: "boolean", description: "已有总结时是否重新跑总结，默认 false" },
           includeSubtitle: { type: "boolean", description: "已有总结时是否同时返回字幕文本，默认 false" },
           waitForCompletion: { type: "boolean", description: "是否等待任务完成再返回。长视频建议 false，默认 false" },
@@ -1632,8 +1707,179 @@ export async function executeAiToolCall(toolCall, context, api, helpers = {}) {
 
   if (name === "analyze_storage_video" || name === "invoke_video_analyze") {
     await api.emitProgress({ phase: "tool-analyze-storage-video", label: "定位待分析文件", percent: 46 });
-    const identifier = String(input.fileId || input.path || input.filePath || "").trim();
+    const selectedIdentifiers = collectMediaFileIdentifiers(input);
     const source = String(input.source || input.url || "").trim();
+    const selectedBatchInput = Array.isArray(input.fileIds) || Array.isArray(input.paths);
+    if (selectedIdentifiers.length > 1 || (selectedBatchInput && input.confirmed === true)) {
+      const snapshot = await loadLibrarySnapshot(api);
+      const { targetFiles, missing, unsupported } = resolveMediaTargetFiles(snapshot.files, selectedIdentifiers, {
+        storageRoot: api.storageRoot
+      });
+      if (missing.length) {
+        throw new Error(`文件未找到: ${missing.join(", ")}`);
+      }
+      if (unsupported.length) {
+        throw new Error(`video analyze 仅支持视频/音频文件: ${unsupported.map((file) => file.relativePath || file.path || file.id).join(", ")}`);
+      }
+      if (!targetFiles.length) {
+        throw new Error("fileIds or paths did not match any video/audio files");
+      }
+
+      const skippedSummarized = input.force === true
+        ? []
+        : targetFiles.filter((file) => String(file.aiSummary || "").trim());
+      const analyzeFiles = input.force === true
+        ? targetFiles
+        : targetFiles.filter((file) => !String(file.aiSummary || "").trim());
+
+      if (!analyzeFiles.length) {
+        return safeJson({
+          status: "already_summarized",
+          delegated: false,
+          botId: "video.analyze",
+          batch: true,
+          selected: true,
+          count: targetFiles.length,
+          skipped: skippedSummarized.map((file) => ({
+            reason: "already_summarized",
+            file: compactStorageFileForTool(file)
+          })),
+          files: targetFiles.slice(0, 10).map(compactStorageFileForTool),
+          nextAction: "这些文件已有 AI 摘要；可调用 read_media_summary 读取，或设置 force=true 重新分析。"
+        });
+      }
+
+      if (input.confirmed !== true) {
+        return safeJson({
+          status: "confirmation_required",
+          delegated: false,
+          botId: "video.analyze",
+          batch: true,
+          selected: true,
+          confirmed: false,
+          count: analyzeFiles.length,
+          skippedCount: skippedSummarized.length,
+          files: analyzeFiles.slice(0, 10).map(compactStorageFileForTool),
+          skipped: skippedSummarized.slice(0, 10).map((file) => ({
+            reason: "already_summarized",
+            file: compactStorageFileForTool(file)
+          })),
+          requiresConfirmation: true,
+          blocked: true,
+          blockedReason: "批量视频/音频分析会启动多个转录与 AI 总结任务并写入 metadata；本次只返回影响范围预览，未创建子任务。",
+          confirmation: buildBatchVideoAnalyzeConfirmation(analyzeFiles, input),
+          nextAction: "向用户确认这些候选文件后，以 confirmed=true 再次调用；确认输入会固定为需要分析的 fileIds。"
+        });
+      }
+
+      const jobs = [];
+      for (let index = 0; index < analyzeFiles.length; index += 1) {
+        const file = analyzeFiles[index];
+        await api.emitProgress({
+          phase: "tool-analyze-storage-video",
+          label: formatStepLabel("创建视频总结任务：", index + 1, analyzeFiles.length, ""),
+          percent: Math.round(48 + ((index + 1) / analyzeFiles.length) * 10)
+        });
+        const delegatedJob = await api.invokeBot({
+          botId: "video.analyze",
+          trigger: {
+            type: "tool-call",
+            rawText: file.relativePath,
+            parsedArgs: {
+              fileId: file.id,
+              filePath: file.relativePath
+            }
+          },
+          options: {
+            delegatedBy: api.botId,
+            parentJobId: api.jobId,
+            toolName: name
+          }
+        });
+        const phaseWait = await waitForDelegatedPhaseIfRequested(api, delegatedJob, input, {
+          progressPhase: "tool-analyze-storage-video",
+          labelPrefix: `等待视频总结任务 ${index + 1}/${analyzeFiles.length} 进入`
+        });
+        jobs.push({
+          ...buildDelegatedJobFields("video.analyze", phaseWait?.job || delegatedJob, {
+            waitForCompletion: false,
+            waitUntilPhase: input.waitUntilPhase
+          }),
+          ...buildWaitUntilPhaseFields(phaseWait),
+          file: compactStorageFileForTool(file)
+        });
+      }
+
+      if (input.waitForCompletion === true) {
+        const completedJobs = [];
+        for (let index = 0; index < jobs.length; index += 1) {
+          const job = jobs[index];
+          await api.emitProgress({
+            phase: "tool-analyze-storage-video",
+            label: formatStepLabel("等待视频总结任务完成：", index + 1, jobs.length, ""),
+            percent: Math.round(60 + ((index + 1) / jobs.length) * 30)
+          });
+          const completedJob = await waitForDelegatedBotJob(api, job.jobId, {
+            timeoutSeconds: input.timeoutSeconds || 600
+          });
+          completedJobs.push({
+            ...buildDelegatedJobFields("video.analyze", completedJob, {
+              waitForCompletion: true
+            }),
+            file: job.file,
+            result: completedJob.result || {},
+            error: completedJob.error || null
+          });
+        }
+        const firstJob = completedJobs[0] || {};
+        return safeJson({
+          delegated: true,
+          status: completedJobs.every((job) => job.status === "succeeded") ? "succeeded" : "completed",
+          botId: "video.analyze",
+          jobId: firstJob.jobId || "",
+          batch: true,
+          selected: true,
+          total: analyzeFiles.length,
+          skippedCount: skippedSummarized.length,
+          jobs: completedJobs,
+          files: analyzeFiles.slice(0, 10).map(compactStorageFileForTool),
+          skipped: skippedSummarized.slice(0, 10).map((file) => ({
+            reason: "already_summarized",
+            file: compactStorageFileForTool(file)
+          })),
+          message: "所选视频/音频分析任务已结束；完成的任务会写入字幕和文件元数据。"
+        });
+      }
+
+      const firstJob = jobs[0] || {};
+      return safeJson({
+        delegated: true,
+        status: jobs.some((job) => job.status === "running") ? "running" : "queued",
+        botId: "video.analyze",
+        jobId: firstJob.jobId || "",
+        phase: firstJob.phase || "",
+        batch: true,
+        selected: true,
+        total: analyzeFiles.length,
+        skippedCount: skippedSummarized.length,
+        jobs,
+        files: analyzeFiles.slice(0, 10).map(compactStorageFileForTool),
+        skipped: skippedSummarized.slice(0, 10).map((file) => ({
+          reason: "already_summarized",
+          file: compactStorageFileForTool(file)
+        })),
+        tracking: {
+          jobsCommand: "@ai /jobs",
+          statusCommand: firstJob.tracking?.statusCommand || (firstJob.jobId ? `@ai /job ${firstJob.jobId}` : ""),
+          logCommand: firstJob.tracking?.logCommand || (firstJob.jobId ? `@ai /log ${firstJob.jobId}` : ""),
+          traceCommand: firstJob.tracking?.traceCommand || (firstJob.jobId ? `@ai /trace ${firstJob.jobId}` : ""),
+          statusCommands: jobs.map((job) => job.tracking?.statusCommand || `@ai /job ${job.jobId}`).filter(Boolean).slice(0, 10)
+        },
+        logHint: `已创建 ${jobs.length} 个 video.analyze 子任务。可用 @ai /jobs 查看队列，或用 ${firstJob.tracking?.statusCommand || `@ai /job ${firstJob.jobId || ""}`} 查看首个任务。`,
+        message: "已为所选视频/音频提交转录与 AI 总结任务，完成后会写入字幕和文件元数据。"
+      });
+    }
+    const identifier = selectedIdentifiers[0] || String(input.fileId || input.path || input.filePath || "").trim();
     if (!identifier) {
       if (!source) {
         throw new Error("fileId, path, or source is required");

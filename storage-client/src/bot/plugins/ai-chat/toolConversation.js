@@ -937,6 +937,9 @@ function inferConfirmationChangedFields(toolName = "", input = {}) {
   if (toolName === "invoke_video_tag" || toolName === "tag_storage_video") {
     return ["tags"];
   }
+  if (toolName === "invoke_video_analyze" || toolName === "analyze_storage_video") {
+    return ["aiSummary", "subtitle"];
+  }
   return [];
 }
 
