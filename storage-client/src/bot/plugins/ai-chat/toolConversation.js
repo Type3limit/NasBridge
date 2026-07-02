@@ -486,6 +486,30 @@ function summarizeAccessBlockerForTrace(blocker = null) {
   }));
 }
 
+function summarizeAccessActionForTrace(action = null) {
+  if (!action || typeof action !== "object") {
+    return null;
+  }
+  return Object.fromEntries(Object.entries({
+    id: String(action.id || "").trim(),
+    tool: String(action.tool || "").trim(),
+    contentLayer: String(action.contentLayer || "").trim(),
+    riskLevel: String(action.riskLevel || "").trim(),
+    requiresConfirmation: action.requiresConfirmation === true,
+    blocked: action.blocked === true,
+    blockerIds: Array.isArray(action.blockerIds) ? action.blockerIds.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 6) : [],
+    reason: String(action.reason || "").trim().slice(0, 180)
+  }).filter(([, value]) => {
+    if (value === "" || value === null || value === undefined) {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    return true;
+  }));
+}
+
 function summarizeFileAccessForTrace(parsed = {}) {
   const hasFileAccessShape = Object.prototype.hasOwnProperty.call(parsed, "found")
     || parsed.policy
@@ -543,6 +567,7 @@ function summarizeFileAccessForTrace(parsed = {}) {
     })),
     layers: Array.isArray(parsed.layers) ? parsed.layers.map(summarizeAccessLayerForTrace).filter(Boolean).slice(0, 8) : [],
     blockers: Array.isArray(parsed.blockers) ? parsed.blockers.map(summarizeAccessBlockerForTrace).filter(Boolean).slice(0, 8) : [],
+    actionPlan: Array.isArray(parsed.actionPlan) ? parsed.actionPlan.map(summarizeAccessActionForTrace).filter(Boolean).slice(0, 8) : [],
     readableLayers: Array.isArray(parsed.readableLayers) ? parsed.readableLayers.map((item) => truncateTraceText(item, 160)).filter(Boolean).slice(0, 8) : [],
     blockedLayers: Array.isArray(parsed.blockedLayers) ? parsed.blockedLayers.map((item) => truncateTraceText(item, 160)).filter(Boolean).slice(0, 8) : [],
     recommendedTools: Array.isArray(parsed.recommendedTools) ? parsed.recommendedTools.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 8) : [],

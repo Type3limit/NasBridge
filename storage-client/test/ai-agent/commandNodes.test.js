@@ -118,6 +118,10 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
           blockers: [
             { id: "dependency-whisper", message: "Whisper 未配置" }
           ],
+          actionPlan: [
+            { tool: "read_file_metadata" },
+            { tool: "invoke_video_analyze" }
+          ],
           nextActions: ["配置 WHISPER_MODEL_PATH 后重试"]
         },
         log: {
@@ -143,7 +147,7 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
   assert.match(body, /invoke_video_analyze: 1 次/);
   assert.match(body, /video\.analyze:botjob_child/);
   assert.match(body, /最近步骤/);
-  assert.match(body, /access: found=true · mode=media · layers=metadata · blockers=dependency-whisper/);
+  assert.match(body, /access: found=true · mode=media · layers=metadata · blockers=dependency-whisper · actions=read_file_metadata,invoke_video_analyze/);
   assert.match(body, /log: job=botjob_parent · chars=2048 · truncated/);
   assert.match(body, /trace: events=4 · childJobs=1/);
   assert.match(body, /next: 查看 @ai \/log botjob_parent/);

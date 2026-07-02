@@ -127,6 +127,12 @@ function summarizeTraceResultAccess(fileAccess = null) {
   if (blockers.length) {
     parts.push(`blockers=${blockers.slice(0, 4).join(",")}`);
   }
+  const actionTools = Array.isArray(fileAccess.actionPlan)
+    ? fileAccess.actionPlan.map((action) => action?.tool || action?.id).filter(Boolean)
+    : [];
+  if (actionTools.length) {
+    parts.push(`actions=${actionTools.slice(0, 5).join(",")}`);
+  }
   const nextActions = Array.isArray(fileAccess.nextActions) ? fileAccess.nextActions.filter(Boolean) : [];
   if (nextActions.length) {
     parts.push(`next=${nextActions[0]}`);

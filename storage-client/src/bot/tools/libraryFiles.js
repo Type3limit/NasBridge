@@ -673,6 +673,102 @@ function buildDependencyStatus(required = [], api = {}, options = {}) {
   };
 }
 
+function compactAccessActionInput(input = {}) {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => {
+    if (value === null || value === undefined || value === "") {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    return true;
+  }));
+}
+
+function buildAccessAction({
+  id = "",
+  tool = "",
+  input = {},
+  reason = "",
+  riskLevel = "low",
+  requiresConfirmation = false,
+  blocked = false,
+  blockerIds = [],
+  contentLayer = ""
+} = {}) {
+  return Object.fromEntries(Object.entries({
+    id,
+    tool,
+    input: compactAccessActionInput(input),
+    reason: String(reason || "").trim(),
+    riskLevel,
+    requiresConfirmation: requiresConfirmation === true,
+    blocked: blocked === true,
+    blockerIds: uniqueToolList(blockerIds),
+    contentLayer: String(contentLayer || "").trim()
+  }).filter(([, value]) => {
+    if (value === "" || value === null || value === undefined) {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    if (value && typeof value === "object") {
+      return Object.keys(value).length > 0;
+    }
+    return true;
+  }));
+}
+
+function buildGenericFileAccessActionPlan() {
+  return [
+    buildAccessAction({
+      id: "search-index",
+      tool: "search_library_files",
+      input: { limit: 10 },
+      reason: "先通过索引定位候选文件，避免凭聊天上下文猜路径。",
+      contentLayer: "index"
+    }),
+    buildAccessAction({
+      id: "diagnose-target",
+      tool: "diagnose_file_access",
+      reason: "目标文件明确后判断可读取层级、依赖状态和下一步工具。",
+      contentLayer: "metadata"
+    }),
+    buildAccessAction({
+      id: "read-controlled-content",
+      tool: "read_text_excerpt",
+      input: { maxChars: 8000 },
+      reason: "文本、字幕、PDF/Office 抽取文本只读取受控长度片段。",
+      contentLayer: "excerpt"
+    }),
+    buildAccessAction({
+      id: "read-derived-media",
+      tool: "read_media_summary",
+      input: { includeSummary: true, includeProbe: true },
+      reason: "视频/音频/图片优先读取摘要、字幕状态和媒体派生信息。",
+      contentLayer: "derived-media"
+    }),
+    buildAccessAction({
+      id: "write-metadata",
+      tool: "update_file_metadata",
+      reason: "写入 tags/aiSummary 必须走 metadata 工具并记录审计。",
+      riskLevel: "medium",
+      requiresConfirmation: true,
+      contentLayer: "write-metadata"
+    }),
+    buildAccessAction({
+      id: "organize-files",
+      tool: "organize_files",
+      input: { dryRun: true },
+      reason: "移动/重命名/批量整理先 dry-run 预览，确认后才执行。",
+      riskLevel: "high",
+      requiresConfirmation: true,
+      contentLayer: "file-mutation"
+    })
+  ];
+}
+
 function inferAnalyzeAccessMode(file = {}, hints = {}) {
   if (hints.image) {
     return "image";
@@ -700,6 +796,14 @@ function getAnalysisDependencyRequirements(analyzeMode = "metadata", hints = {})
     return ["ai-model", "storage-root"];
   }
   return ["storage-root"];
+}
+
+function buildFileIdentifierInput(file = {}, extra = {}) {
+  const fileId = String(file.id || "").trim();
+  return {
+    ...(fileId ? { fileId } : { path: file.relativePath }),
+    ...extra
+  };
 }
 
 function buildAccessNextActions(file = {}, hints = {}, pathSafe = true, hiddenDirectory = false, analysisDependencies = null) {
@@ -731,6 +835,125 @@ function buildAccessNextActions(file = {}, hints = {}, pathSafe = true, hiddenDi
     return ["调用 invoke_video_analyze 或 analyze_file_content(startAnalysis=true) 生成字幕和 AI 摘要。"];
   }
   return ["只能读取 metadata；二进制原文不会直接进入模型上下文。"];
+}
+
+function buildConcreteFileAccessActionPlan(file = {}, hints = {}, pathSafe = true, hiddenDirectory = false, analysisDependencies = null) {
+  if (!pathSafe) {
+    return [
+      buildAccessAction({
+        id: "repair-index",
+        tool: "search_library_files",
+        input: { query: file.name || file.relativePath || "", limit: 10 },
+        reason: "索引路径未通过 storage root 安全校验，先重新定位文件或刷新索引。",
+        blocked: true,
+        blockerIds: ["unsafe-relative-path"],
+        contentLayer: "index"
+      })
+    ];
+  }
+  if (hiddenDirectory) {
+    return [
+      buildAccessAction({
+        id: "read-metadata-only",
+        tool: "read_file_metadata",
+        input: buildFileIdentifierInput(file),
+        reason: "文件位于隐藏/系统目录，默认只读取 metadata，不进入内容层。",
+        blocked: true,
+        blockerIds: ["hidden-directory"],
+        contentLayer: "metadata"
+      })
+    ];
+  }
+
+  const dependencyBlockers = Array.isArray(analysisDependencies?.blockers) ? analysisDependencies.blockers : [];
+  if (dependencyBlockers.length) {
+    return [
+      buildAccessAction({
+        id: "repair-analysis-dependencies",
+        tool: "diagnose_file_access",
+        input: buildFileIdentifierInput(file),
+        reason: analysisDependencies.nextAction || "内容分析依赖未就绪，修复后重新诊断。",
+        blocked: true,
+        blockerIds: dependencyBlockers.map((item) => `dependency-${item.id}`),
+        contentLayer: "analysis"
+      })
+    ];
+  }
+
+  const actions = [
+    buildAccessAction({
+      id: "read-metadata",
+      tool: "read_file_metadata",
+      input: buildFileIdentifierInput(file),
+      reason: "先读取 metadata 和可访问层级，确认不会误读二进制原文。",
+      contentLayer: "metadata"
+    })
+  ];
+
+  if (hints.aiSummaryAvailable || hints.media) {
+    actions.push(buildAccessAction({
+      id: "read-media-summary",
+      tool: "read_media_summary",
+      input: buildFileIdentifierInput(file, { includeSummary: true, includeProbe: true }),
+      reason: hints.aiSummaryAvailable ? "已有 AI 摘要，优先复用派生内容。" : "媒体文件读取摘要状态、字幕状态和 probe 信息。",
+      contentLayer: "derived-media"
+    }));
+  }
+  if (hints.subtitleAvailable) {
+    actions.push(buildAccessAction({
+      id: "read-subtitle-excerpt",
+      tool: "read_text_excerpt",
+      input: buildFileIdentifierInput(file, { source: "subtitle", maxChars: 8000 }),
+      reason: "已有字幕 sidecar，可读取受控字幕片段用于总结或问答。",
+      contentLayer: "excerpt"
+    }));
+  } else if (hints.textReadable) {
+    actions.push(buildAccessAction({
+      id: "read-text-excerpt",
+      tool: "read_text_excerpt",
+      input: buildFileIdentifierInput(file, { maxChars: 8000 }),
+      reason: "文本/文档类文件可分页读取受控片段。",
+      contentLayer: "excerpt"
+    }));
+  }
+  if (hints.image) {
+    actions.push(buildAccessAction({
+      id: "analyze-image",
+      tool: "analyze_file_content",
+      input: buildFileIdentifierInput(file, { mode: "image" }),
+      reason: "图片走视觉模型分析，不直接暴露本机绝对路径。",
+      contentLayer: "analysis"
+    }));
+  } else if (hints.videoOrAudio && !hints.aiSummaryAvailable) {
+    actions.push(buildAccessAction({
+      id: "start-media-analysis",
+      tool: "invoke_video_analyze",
+      input: buildFileIdentifierInput(file, { waitForCompletion: false }),
+      reason: "媒体尚无摘要时启动转录与 AI 总结后台任务。",
+      riskLevel: "medium",
+      contentLayer: "analysis"
+    }));
+  } else if (hints.textReadable || hints.subtitleAvailable || hints.aiSummaryAvailable) {
+    actions.push(buildAccessAction({
+      id: "analyze-content",
+      tool: "analyze_file_content",
+      input: buildFileIdentifierInput(file, { mode: "auto" }),
+      reason: "目标明确后可基于已允许的内容层生成总结或回答。",
+      contentLayer: "analysis"
+    }));
+  }
+
+  actions.push(buildAccessAction({
+    id: "write-metadata-if-requested",
+    tool: "update_file_metadata",
+    input: buildFileIdentifierInput(file, { dryRun: true }),
+    reason: "只有用户要求写标签/摘要时才写入；批量或覆盖前需要确认。",
+    riskLevel: "medium",
+    requiresConfirmation: true,
+    contentLayer: "write-metadata"
+  }));
+
+  return actions;
 }
 
 function buildTagsPatch(currentTags = [], input = {}) {
@@ -1160,6 +1383,7 @@ export async function buildFileAccessExplanation(api, input = {}) {
       "二进制原文直接塞进模型上下文",
       "未经确认的删除、移动、重命名、批量覆盖"
     ],
+    actionPlan: buildGenericFileAccessActionPlan(),
     detail: kind === "tools"
       ? ["list_storage_files", "search_library_files", "read_file_metadata", "diagnose_file_access", "get_storage_file_details", "read_text_excerpt", "read_media_summary", "analyze_file_content", "update_file_metadata", "organize_files", "invoke_video_analyze", "invoke_video_tag", "analyze_storage_video"]
       : []
@@ -1194,6 +1418,22 @@ export async function buildDiagnoseFileAccessResult(api, input = {}) {
         }
       ],
       recommendedTools: ["search_library_files", "list_storage_files"],
+      actionPlan: [
+        buildAccessAction({
+          id: "search-index",
+          tool: "search_library_files",
+          input: { query: identifier, limit: 10 },
+          reason: "文件不在当前索引中，先重新搜索或刷新文件库。",
+          contentLayer: "index"
+        }),
+        buildAccessAction({
+          id: "list-nearby-files",
+          tool: "list_storage_files",
+          input: { query: identifier, limit: 10 },
+          reason: "必要时列出相近候选，拿到 fileId 后再诊断或读取。",
+          contentLayer: "index"
+        })
+      ],
       nextActions: ["先调用 search_library_files/list_storage_files 重新定位文件，拿到 fileId 后再诊断或读取。"]
     };
   }
@@ -1360,6 +1600,7 @@ export async function buildDiagnoseFileAccessResult(api, input = {}) {
     ],
     blockers,
     recommendedTools,
+    actionPlan: buildConcreteFileAccessActionPlan(file, hints, pathSafe, hiddenDirectory, analysisDependencies),
     nextActions: buildAccessNextActions(file, hints, pathSafe, hiddenDirectory, analysisDependencies)
   };
 }

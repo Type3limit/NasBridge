@@ -337,6 +337,11 @@ test("file access explanation exposes policy boundaries and tool list", async ()
     assert.ok(result.detail.includes("search_library_files"));
     assert.ok(result.detail.includes("diagnose_file_access"));
     assert.ok(result.detail.includes("organize_files"));
+    assert.ok(result.actionPlan.some((action) => action.tool === "search_library_files" && action.contentLayer === "index"));
+    assert.ok(result.actionPlan.some((action) => action.tool === "read_text_excerpt" && action.contentLayer === "excerpt"));
+    const organizeAction = result.actionPlan.find((action) => action.tool === "organize_files");
+    assert.equal(organizeAction.riskLevel, "high");
+    assert.equal(organizeAction.requiresConfirmation, true);
   });
 });
 
@@ -378,6 +383,13 @@ test("diagnose_file_access explains concrete file layers without exposing absolu
     assert.ok(result.recommendedTools.includes("read_text_excerpt"));
     assert.ok(result.recommendedTools.includes("read_media_summary"));
     assert.ok(result.recommendedTools.includes("invoke_video_analyze"));
+    const actionTools = result.actionPlan.map((action) => action.tool);
+    assert.ok(actionTools.includes("read_file_metadata"));
+    assert.ok(actionTools.includes("read_media_summary"));
+    assert.ok(actionTools.includes("read_text_excerpt"));
+    assert.ok(actionTools.includes("invoke_video_analyze"));
+    assert.equal(result.actionPlan.find((action) => action.tool === "read_text_excerpt")?.input.source, "subtitle");
+    assert.equal(result.actionPlan.find((action) => action.tool === "invoke_video_analyze")?.input.waitForCompletion, false);
     assert.ok(result.nextActions.some((item) => item.includes("字幕")));
     assert.doesNotMatch(JSON.stringify(result), new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
   });
@@ -430,6 +442,9 @@ test("diagnose_file_access includes health dependency blockers for unanalyzed me
     assert.ok(result.blockers.some((item) => item.id === "dependency-whisper"));
     assert.match(result.blockers.find((item) => item.id === "dependency-whisper")?.repairHint || "", /WHISPER_CPP_PATH/);
     assert.equal(result.layers.find((layer) => layer.id === "analysis")?.available, false);
+    assert.equal(result.actionPlan[0].tool, "diagnose_file_access");
+    assert.equal(result.actionPlan[0].blocked, true);
+    assert.ok(result.actionPlan[0].blockerIds.includes("dependency-whisper"));
     assert.match(result.nextActions[0], /Whisper|依赖/);
     assert.match(result.nextActions[0], /建议：Whisper/);
     assert.doesNotMatch(JSON.stringify(result), /C:\\secret/);
@@ -445,6 +460,7 @@ test("diagnose_file_access reports missing files as searchable instead of readin
     assert.equal(result.found, false);
     assert.equal(result.blockers[0].id, "file-not-found");
     assert.deepEqual(result.recommendedTools, ["search_library_files", "list_storage_files"]);
+    assert.deepEqual(result.actionPlan.map((action) => action.tool), ["search_library_files", "list_storage_files"]);
     assert.match(result.nextActions[0], /search_library_files/);
   });
 });
