@@ -123,6 +123,7 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
       rounds: [{
         round: 0,
         plans: [{
+          step: 2,
           status: "tool-requested",
           model: "openai::deepseek-v4-pro",
           fallback: "json-plan",
@@ -134,11 +135,13 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
           }]
         }],
         observations: [{
+          step: 4,
           status: "observed",
           tool: "invoke_video_analyze",
           observationLength: 256
         }],
         decisions: [{
+          step: 3,
           status: "continue",
           decision: "continue",
           planStatus: "tool-requested",
@@ -231,10 +234,11 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
   assert.match(body, /suggested tools: read_media_summary, invoke_video_analyze/);
   assert.match(body, /suggested reason: 已有媒体派生信息可读取。/);
   assert.match(body, /Agent 计划/);
+  assert.match(body, /plan: step=2 · tool-requested/);
   assert.match(body, /limit=4/);
   assert.match(body, /toolsAllowed=yes/);
   assert.match(body, /tools=invoke_video_analyze/);
-  assert.match(body, /decide: continue · decision=continue · plan=tool-requested · pending=1 · tools=invoke_video_analyze/);
+  assert.match(body, /decide: step=3 · continue · decision=continue · plan=tool-requested · pending=1 · tools=invoke_video_analyze/);
   assert.match(body, /子任务: failed 1/);
   assert.match(body, /video\.analyze · botjob_child · failed/);
   assert.match(body, /命令：@ai \/job botjob_child · @ai \/log botjob_child · @ai \/trace botjob_child/);

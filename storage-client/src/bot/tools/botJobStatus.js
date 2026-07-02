@@ -901,7 +901,8 @@ function buildTracePlanSummary(events = []) {
   const rounds = new Map();
   let count = 0;
   let latest = null;
-  for (const event of Array.isArray(events) ? events : []) {
+  const sourceEvents = Array.isArray(events) ? events : [];
+  for (const [index, event] of sourceEvents.entries()) {
     if (String(event?.kind || "").trim() !== "agent") {
       continue;
     }
@@ -910,10 +911,12 @@ function buildTracePlanSummary(events = []) {
       continue;
     }
     count += 1;
+    const step = index + 1;
     const round = ensurePlanRound(rounds, event.round);
     const detail = compactTraceAgentDetail(event.detail) || {};
     if (phase === "plan_next_step") {
       const plan = {
+        step,
         status: String(event.status || "").trim(),
         model: detail.model || "",
         fallback: detail.fallback || "",
@@ -934,9 +937,10 @@ function buildTracePlanSummary(events = []) {
         }
         return true;
       })));
-      latest = { phase, round: round.round, status: plan.status, pendingTools: plan.pendingTools };
+      latest = { step, phase, round: round.round, status: plan.status, pendingTools: plan.pendingTools };
     } else if (phase === "observe_result") {
       const observation = {
+        step,
         status: String(event.status || "").trim(),
         tool: detail.tool || "",
         fallback: detail.fallback || "",
@@ -944,9 +948,10 @@ function buildTracePlanSummary(events = []) {
         outputPreview: compactAgentPreview(event.outputPreview || "")
       };
       round.observations.push(Object.fromEntries(Object.entries(observation).filter(([, value]) => value !== null && value !== "")));
-      latest = { phase, round: round.round, status: observation.status, tool: observation.tool };
+      latest = { step, phase, round: round.round, status: observation.status, tool: observation.tool };
     } else {
       const decision = {
+        step,
         status: String(event.status || "").trim(),
         decision: detail.decision || "",
         planStatus: detail.planStatus || "",
@@ -968,7 +973,7 @@ function buildTracePlanSummary(events = []) {
         }
         return true;
       })));
-      latest = { phase, round: round.round, status: decision.status, decision: decision.decision };
+      latest = { step, phase, round: round.round, status: decision.status, decision: decision.decision };
     }
   }
   const normalizedRounds = [...rounds.values()].sort((left, right) => left.round - right.round);

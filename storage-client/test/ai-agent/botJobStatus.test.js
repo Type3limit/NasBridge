@@ -432,14 +432,18 @@ test("agent trace result summarizes plan and observation events", async () => {
 
   assert.equal(trace.planSummary.count, 3);
   assert.equal(trace.planSummary.rounds[0].round, 0);
+  assert.equal(trace.planSummary.latest.step, 4);
   assert.equal(trace.planSummary.rounds[0].plans[0].fallback, "json-plan");
+  assert.equal(trace.planSummary.rounds[0].plans[0].step, 2);
   assert.equal(trace.planSummary.rounds[0].plans[0].maxToolRounds, 4);
   assert.equal(trace.planSummary.rounds[0].plans[0].allowMoreToolCalls, true);
   assert.equal(trace.planSummary.rounds[0].plans[0].pendingTools[0].name, "search_library_files");
   assert.doesNotMatch(trace.planSummary.rounds[0].plans[0].pendingTools[0].reason, /sk-should-not-leak/);
   assert.equal(trace.planSummary.rounds[0].observations[0].tool, "search_library_files");
+  assert.equal(trace.planSummary.rounds[0].observations[0].step, 4);
   assert.equal(trace.planSummary.rounds[0].observations[0].observationLength, 512);
   assert.equal(trace.planSummary.rounds[0].decisions[0].decision, "continue");
+  assert.equal(trace.planSummary.rounds[0].decisions[0].step, 3);
   assert.equal(trace.planSummary.rounds[0].decisions[0].pendingToolCount, 1);
   assert.equal(trace.timeline[0].agentPhase, "Plan");
   assert.equal(trace.timeline[0].label, "textPlan:exit");

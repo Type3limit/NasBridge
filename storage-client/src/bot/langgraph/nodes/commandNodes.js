@@ -535,6 +535,7 @@ function formatAgentPlanSummary(planSummary = {}) {
           ? `tools=${plan.pendingTools.map((tool) => `${tool.name}${tool.reason ? `(${tool.reason})` : ""}`).join(", ")}`
           : "final-answer";
         const details = [
+          plan.step != null ? `step=${plan.step}` : "",
           plan.status || "",
           plan.fallback ? `fallback=${plan.fallback}` : "",
           plan.model ? `model=${plan.model}` : "",
@@ -550,6 +551,7 @@ function formatAgentPlanSummary(planSummary = {}) {
     if (Array.isArray(round.observations) && round.observations.length) {
       for (const observation of round.observations.slice(-2)) {
         const details = [
+          observation.step != null ? `step=${observation.step}` : "",
           observation.status || "",
           observation.tool ? `tool=${observation.tool}` : "",
           observation.fallback ? `fallback=${observation.fallback}` : "",
@@ -564,6 +566,7 @@ function formatAgentPlanSummary(planSummary = {}) {
           ? `tools=${decision.pendingTools.map((tool) => tool.name).filter(Boolean).join(", ")}`
           : "";
         const details = [
+          decision.step != null ? `step=${decision.step}` : "",
           decision.status || "",
           decision.decision ? `decision=${decision.decision}` : "",
           decision.planStatus ? `plan=${decision.planStatus}` : "",
