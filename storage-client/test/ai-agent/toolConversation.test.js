@@ -540,8 +540,22 @@ test("tool trace records structured confirmation previews", async () => {
   assert.equal(api.toolEvents[0].resultSummary.confirmation.confirmWith.confirmed, true);
 });
 
-test("parseJsonToolPlan rejects unknown tools and accepts final answers", () => {
-  const tools = [{ name: "search_library_files", inputSchema: { type: "object" } }];
+test("parseJsonToolPlan validates tools, schema arguments, and final answers", () => {
+  const tools = [
+    {
+      name: "search_library_files",
+      inputSchema: {
+        type: "object",
+        required: ["query"],
+        properties: {
+          query: { type: "string" },
+          kind: { type: "string", enum: ["all", "video", "audio"] },
+          tags: { type: "array", maxItems: 2, items: { type: "string" } },
+          limit: { type: "integer", minimum: 1, maximum: 80 }
+        }
+      }
+    }
+  ];
 
   const unknown = parseJsonToolPlan(
     JSON.stringify({ action: "call_tool", tool: "run_local_script", arguments: {} }),
@@ -549,6 +563,37 @@ test("parseJsonToolPlan rejects unknown tools and accepts final answers", () => 
   );
   assert.equal(unknown.ok, false);
   assert.match(unknown.error, /unknown tool/);
+
+  const missingRequired = parseJsonToolPlan(
+    JSON.stringify({ action: "call_tool", tool: "search_library_files", arguments: { kind: "video" } }),
+    tools
+  );
+  assert.equal(missingRequired.ok, false);
+  assert.match(missingRequired.error, /arguments\.query is required/);
+
+  const invalidEnum = parseJsonToolPlan(
+    JSON.stringify({ action: "call_tool", tool: "search_library_files", arguments: { query: "demo", kind: "pdf" } }),
+    tools
+  );
+  assert.equal(invalidEnum.ok, false);
+  assert.match(invalidEnum.error, /arguments\.kind must be one of/);
+
+  const tooManyItems = parseJsonToolPlan(
+    JSON.stringify({ action: "call_tool", tool: "search_library_files", arguments: { query: "demo", tags: ["a", "b", "c"] } }),
+    tools
+  );
+  assert.equal(tooManyItems.ok, false);
+  assert.match(tooManyItems.error, /arguments\.tags must contain at most 2 items/);
+
+  const validTool = parseJsonToolPlan(
+    JSON.stringify({ action: "call_tool", tool: "search_library_files", arguments: { query: "demo", kind: "video", tags: ["nas"], limit: 5 } }),
+    tools,
+    { round: 2 }
+  );
+  assert.equal(validTool.ok, true);
+  assert.equal(validTool.toolCall.name, "search_library_files");
+  assert.equal(validTool.toolCall.id, "jsonplan_2_search_library_files");
+  assert.deepEqual(validTool.toolCall.input, { query: "demo", kind: "video", tags: ["nas"], limit: 5 });
 
   const final = parseJsonToolPlan(
     JSON.stringify({ action: "final_answer", answer: "Done." }),

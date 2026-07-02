@@ -33,6 +33,87 @@ function normalizeToolInput(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
+function isPlainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value);
+}
+
+function validateJsonSchemaValue(value, schema = {}, pathLabel = "arguments") {
+  if (!schema || typeof schema !== "object") {
+    return [];
+  }
+  const errors = [];
+  const type = Array.isArray(schema.type) ? schema.type[0] : String(schema.type || "").trim();
+  if (schema.enum && Array.isArray(schema.enum) && !schema.enum.includes(value)) {
+    errors.push(`${pathLabel} must be one of: ${schema.enum.join(", ")}`);
+    return errors;
+  }
+  if (type === "object") {
+    if (!isPlainObject(value)) {
+      errors.push(`${pathLabel} must be an object`);
+      return errors;
+    }
+    const required = Array.isArray(schema.required) ? schema.required : [];
+    for (const key of required) {
+      if (!Object.prototype.hasOwnProperty.call(value, key) || value[key] === undefined || value[key] === null) {
+        errors.push(`${pathLabel}.${key} is required`);
+      }
+    }
+    const properties = schema.properties && typeof schema.properties === "object" ? schema.properties : {};
+    for (const [key, childSchema] of Object.entries(properties)) {
+      if (!Object.prototype.hasOwnProperty.call(value, key) || value[key] === undefined || value[key] === null) {
+        continue;
+      }
+      errors.push(...validateJsonSchemaValue(value[key], childSchema, `${pathLabel}.${key}`));
+    }
+    return errors;
+  }
+  if (type === "array") {
+    if (!Array.isArray(value)) {
+      errors.push(`${pathLabel} must be an array`);
+      return errors;
+    }
+    if (Number.isFinite(Number(schema.maxItems)) && value.length > Number(schema.maxItems)) {
+      errors.push(`${pathLabel} must contain at most ${Number(schema.maxItems)} items`);
+    }
+    const itemSchema = schema.items && typeof schema.items === "object" ? schema.items : null;
+    if (itemSchema) {
+      value.forEach((item, index) => {
+        errors.push(...validateJsonSchemaValue(item, itemSchema, `${pathLabel}[${index}]`));
+      });
+    }
+    return errors;
+  }
+  if (type === "string" && typeof value !== "string") {
+    errors.push(`${pathLabel} must be a string`);
+    return errors;
+  }
+  if (type === "boolean" && typeof value !== "boolean") {
+    errors.push(`${pathLabel} must be a boolean`);
+    return errors;
+  }
+  if (type === "integer" || type === "number") {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || (type === "integer" && !Number.isInteger(numeric))) {
+      errors.push(`${pathLabel} must be a ${type}`);
+      return errors;
+    }
+    if (Number.isFinite(Number(schema.minimum)) && numeric < Number(schema.minimum)) {
+      errors.push(`${pathLabel} must be >= ${Number(schema.minimum)}`);
+    }
+    if (Number.isFinite(Number(schema.maximum)) && numeric > Number(schema.maximum)) {
+      errors.push(`${pathLabel} must be <= ${Number(schema.maximum)}`);
+    }
+  }
+  return errors;
+}
+
+function validateToolInput(input = {}, tool = {}) {
+  const schema = tool?.inputSchema && typeof tool.inputSchema === "object"
+    ? tool.inputSchema
+    : { type: "object", properties: {} };
+  return validateJsonSchemaValue(input, schema, "arguments");
+}
+
 function compactToolDefinitionsForJsonFallback(tools = []) {
   return (Array.isArray(tools) ? tools : []).map((tool) => ({
     name: String(tool?.name || "").trim(),
@@ -175,13 +256,22 @@ export function parseJsonToolPlan(text = "", tools = [], options = {}) {
       finalAnswer: ""
     };
   }
+  const input = normalizeToolInput(parsed.arguments || parsed.args || parsed.input);
+  const inputErrors = validateToolInput(input, tool);
+  if (inputErrors.length) {
+    return {
+      ok: false,
+      error: `invalid arguments for ${toolName}: ${inputErrors.slice(0, 4).join("; ")}`,
+      finalAnswer: ""
+    };
+  }
   return {
     ok: true,
     action: "call_tool",
     toolCall: {
       id: `jsonplan_${Number(options.round || 0)}_${toolName.replace(/[^a-z0-9_:-]/gi, "_")}`,
       name: toolName,
-      input: normalizeToolInput(parsed.arguments || parsed.args || parsed.input),
+      input,
       fallbackJsonPlan: true,
       reason: String(parsed.reason || "").trim()
     }
