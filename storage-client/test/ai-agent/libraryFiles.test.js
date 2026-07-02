@@ -119,6 +119,12 @@ test("text excerpt reads bounded content without exposing absolute paths", async
     });
 
     assert.equal(result.excerpt.text, text.slice(4, 14));
+    assert.match(result.nextActions[0], /startChar=14/);
+    assert.equal(result.actionPlan[0].tool, "read_text_excerpt");
+    assert.equal(result.actionPlan[0].input.startChar, 14);
+    assert.equal(result.actionPlan[1].tool, "analyze_file_content");
+    assert.equal(result.actionPlan[2].tool, "update_file_metadata");
+    assert.equal(result.actionPlan[2].requiresConfirmation, true);
     assert.equal(result.policy.root, "STORAGE_ROOT");
     assert.deepEqual(result.policy.allowedRoots, ["STORAGE_ROOT"]);
     assert.equal(result.policy.storageRootConfigured, true);
@@ -170,6 +176,9 @@ test("text excerpt extracts PDF content through the document layer", async () =>
     assert.match(result.excerpt.extractor, /pdf/);
     assert.equal(result.excerpt.text, "Hello PDF excerp");
     assert.equal(result.excerpt.truncated, true);
+    assert.equal(result.actionPlan[0].tool, "read_text_excerpt");
+    assert.equal(result.actionPlan[1].tool, "analyze_file_content");
+    assert.match(result.nextActions[1], /analyze_file_content/);
     assert.doesNotMatch(JSON.stringify(result), new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
 
     const metadata = await buildLibraryMetadataResult(api, { path: "docs/paper.pdf" });
@@ -217,6 +226,7 @@ test("text excerpt extracts Office Open XML document text", async () => {
     assert.equal(result.excerpt.format, "docx");
     assert.equal(result.excerpt.text, "NAS document");
     assert.equal(result.policy.allowBinaryRead, false);
+    assert.ok(result.nextActions.some((item) => item.includes("update_file_metadata")));
   });
 });
 

@@ -1048,6 +1048,60 @@ function buildMediaSummaryActionPlan(file = {}, hints = {}, result = {}, analysi
   return actions;
 }
 
+function buildTextExcerptNextActions(file = {}, excerpt = {}, source = "") {
+  const normalizedSource = String(source || excerpt.source || "").trim();
+  const isSubtitle = normalizedSource === "subtitle";
+  const nextStart = Number.isFinite(Number(excerpt.nextStartChar)) ? Number(excerpt.nextStartChar) : null;
+  const actions = [];
+  if (excerpt.truncated === true && nextStart !== null) {
+    actions.push(isSubtitle
+      ? `片段已截断；需要更多字幕上下文时继续调用 read_text_excerpt source=subtitle startChar=${nextStart}。`
+      : `片段已截断；需要更多上下文时继续调用 read_text_excerpt startChar=${nextStart}。`);
+  }
+  actions.push(isSubtitle
+    ? "可基于当前字幕片段回答；需要完整媒体摘要时调用 read_media_summary 或 analyze_file_content。"
+    : "可基于当前文本片段回答；需要完整总结时调用 analyze_file_content。");
+  actions.push("只有用户明确要求保存摘要、标签或备注时，才调用 update_file_metadata dryRun=true 预览写入。");
+  return actions;
+}
+
+function buildTextExcerptActionPlan(file = {}, excerpt = {}, source = "") {
+  const normalizedSource = String(source || excerpt.source || "").trim();
+  const isSubtitle = normalizedSource === "subtitle";
+  const nextStart = Number.isFinite(Number(excerpt.nextStartChar)) ? Number(excerpt.nextStartChar) : null;
+  const actions = [];
+  if (excerpt.truncated === true && nextStart !== null) {
+    actions.push(buildAccessAction({
+      id: "read-next-excerpt-page",
+      tool: "read_text_excerpt",
+      input: buildFileIdentifierInput(file, {
+        ...(isSubtitle ? { source: "subtitle" } : {}),
+        startChar: nextStart,
+        maxChars: Math.min(8000, MAX_TEXT_EXCERPT_CHARS)
+      }),
+      reason: "当前片段已截断，继续分页读取下一段受控文本。",
+      contentLayer: "excerpt"
+    }));
+  }
+  actions.push(buildAccessAction({
+    id: isSubtitle ? "summarize-from-subtitle-excerpt" : "summarize-from-text-excerpt",
+    tool: "analyze_file_content",
+    input: buildFileIdentifierInput(file, { mode: "auto" }),
+    reason: isSubtitle ? "基于字幕/媒体派生文本生成回答或摘要。" : "基于受控文本/文档片段生成回答或摘要。",
+    contentLayer: "analysis"
+  }));
+  actions.push(buildAccessAction({
+    id: "write-metadata-if-requested",
+    tool: "update_file_metadata",
+    input: buildFileIdentifierInput(file, { dryRun: true }),
+    reason: "只有用户明确要求保存摘要、标签或备注时才写入 metadata；批量或覆盖前需要确认。",
+    riskLevel: "medium",
+    requiresConfirmation: true,
+    contentLayer: "write-metadata"
+  }));
+  return actions;
+}
+
 function buildTagsPatch(currentTags = [], input = {}) {
   const hasReplaceTags = Array.isArray(input.tags);
   const addTags = dedupeTags(input.addTags || []);
@@ -1465,6 +1519,16 @@ export async function buildTextExcerptResult(api, input = {}) {
       throw new Error(`字幕 sidecar 读取失败: ${file.relativePath}`);
     }
     const text = subtitle.text.slice(startChar, startChar + maxChars);
+    const excerpt = {
+      path: subtitle.path,
+      source: "subtitle",
+      text,
+      startChar,
+      nextStartChar: startChar + text.length,
+      length: subtitle.length,
+      fileSize: null,
+      truncated: subtitle.truncated || startChar + text.length < subtitle.length
+    };
     return {
       file: {
         fileId: file.id,
@@ -1472,20 +1536,13 @@ export async function buildTextExcerptResult(api, input = {}) {
         name: file.name,
         mimeType: file.mimeType
       },
-      excerpt: {
-        path: subtitle.path,
-        source: "subtitle",
-        text,
-        startChar,
-        nextStartChar: startChar + text.length,
-        length: subtitle.length,
-        fileSize: null,
-        truncated: subtitle.truncated || startChar + text.length < subtitle.length
-      },
+      excerpt,
       policy: {
         ...buildPublicFileAccessPolicy(api),
         contentLayer: "excerpt"
-      }
+      },
+      nextActions: buildTextExcerptNextActions(file, excerpt, "subtitle"),
+      actionPlan: buildTextExcerptActionPlan(file, excerpt, "subtitle")
     };
   }
 
@@ -1507,6 +1564,10 @@ export async function buildTextExcerptResult(api, input = {}) {
     startChar: input.startChar ?? input.offset,
     mimeType: source === "file" ? file.mimeType : ""
   });
+  const normalizedExcerpt = {
+    ...excerpt,
+    source: excerpt.source || source
+  };
   return {
     file: {
       fileId: file.id,
@@ -1514,14 +1575,13 @@ export async function buildTextExcerptResult(api, input = {}) {
       name: file.name,
       mimeType: file.mimeType
     },
-    excerpt: {
-      ...excerpt,
-      source: excerpt.source || source
-    },
+    excerpt: normalizedExcerpt,
     policy: {
       ...buildPublicFileAccessPolicy(api),
       contentLayer: "excerpt"
-    }
+    },
+    nextActions: buildTextExcerptNextActions(file, normalizedExcerpt, source),
+    actionPlan: buildTextExcerptActionPlan(file, normalizedExcerpt, source)
   };
 }
 
