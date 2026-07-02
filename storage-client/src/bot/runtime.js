@@ -325,7 +325,19 @@ export class BotRuntime {
         this.events.emit("job", next);
         return next;
       },
-      appendLog: (line) => this.store.appendLog(job.jobId, line),
+      appendLog: (line) => {
+        const normalizedLine = String(line || "").trim();
+        if (!normalizedLine) {
+          return Promise.resolve();
+        }
+        this.events.emit("job-log", {
+          jobId: job.jobId,
+          botId: plugin.botId,
+          line: normalizedLine,
+          createdAt: new Date().toISOString()
+        });
+        return this.store.appendLog(job.jobId, normalizedLine);
+      },
       createChatReply: (payload = {}) => createBotChatMessage(plugin, {
         ...payload,
         jobId: job.jobId,

@@ -70,6 +70,7 @@ const hlsCacheMaxAgeMs = Number(process.env.HLS_CACHE_MAX_AGE_MS || 604_800_000)
 const cacheCleanupIntervalMs = Number(process.env.CACHE_CLEANUP_INTERVAL_MS || 3_600_000);
 const audioStreamCacheDirName = process.env.AUDIO_STREAM_CACHE_DIR_NAME || ".nas-audio-stream-cache";
 const chatMediaWarmupThresholdBytes = Number(process.env.CHAT_MEDIA_WARMUP_THRESHOLD_BYTES || 10 * 1024 * 1024);
+const verboseInfoLogs = process.env.STORAGE_VERBOSE_LOGS === "1";
 const previewObservabilityEnabled = process.env.PREVIEW_OBSERVABILITY === "1";
 const previewObservabilityIntervalMs = Number(process.env.PREVIEW_OBSERVABILITY_INTERVAL_MS || 15_000);
 const previewObservabilitySampleCache = process.env.PREVIEW_OBSERVABILITY_SAMPLE_CACHE !== "0";
@@ -216,6 +217,7 @@ const state = {
 let botRuntime = null;
 let globalMusicPlayer = null;
 const botJobStatusCache = new Map();
+const botJobTerminalLogCache = new Map();
 
 function getPrunableLimit(value, fallback) {
   if (!Number.isFinite(value)) {
@@ -304,6 +306,9 @@ function log(...args) {
 }
 
 function logInfo(...args) {
+  if (!verboseInfoLogs && isNoisyInfoLog(args)) {
+    return;
+  }
   console.log("[storage-client]", ...args);
 }
 
@@ -313,6 +318,36 @@ function logWarn(...args) {
 
 function logError(...args) {
   console.error("[storage-client]", ...args);
+}
+
+function isNoisyInfoLog(args = []) {
+  const head = String(args?.[0] || "").trim();
+  return /^(?:\[rtc\]|\[dc\]|\[signal\])/.test(head);
+}
+
+function isExistingFile(filePath) {
+  const normalized = String(filePath || "").trim();
+  if (!normalized) {
+    return false;
+  }
+  try {
+    return fs.statSync(normalized).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function buildWhisperStartupConfig() {
+  const whisperCppPath = String(process.env.WHISPER_CPP_PATH || "").trim();
+  const modelPath = String(process.env.WHISPER_MODEL_PATH || "").trim();
+  return {
+    configured: Boolean(whisperCppPath && modelPath),
+    whisperCppPath: whisperCppPath || "(default: whisper)",
+    whisperCppExists: whisperCppPath ? isExistingFile(whisperCppPath) : false,
+    modelPath,
+    modelExists: modelPath ? isExistingFile(modelPath) : false,
+    language: String(process.env.WHISPER_LANGUAGE || "").trim() || "auto"
+  };
 }
 
 function queueChatAppend(relativePath, task) {
@@ -586,6 +621,88 @@ function getBotJobStatusMessageId(job) {
   return createBotJobMessageId(job?.jobId);
 }
 
+function formatShortJobId(jobId = "") {
+  const value = String(jobId || "").trim();
+  return value.length > 12 ? value.slice(0, 12) : value || "-";
+}
+
+function getBotJobTerminalSignature(job) {
+  const percentBucket = Number.isFinite(job?.progress?.percent)
+    ? Math.floor(Math.max(0, Math.min(100, Number(job.progress.percent))) / 5) * 5
+    : "";
+  return [
+    String(job?.status || ""),
+    String(job?.phase || ""),
+    String(job?.progress?.label || ""),
+    String(percentBucket),
+    String(job?.error?.message || "")
+  ].join("|");
+}
+
+function logBotJobStatus(job) {
+  if (!job?.jobId) {
+    return;
+  }
+  const signature = getBotJobTerminalSignature(job);
+  if (botJobTerminalLogCache.get(job.jobId) === signature) {
+    return;
+  }
+  botJobTerminalLogCache.set(job.jobId, signature);
+  while (botJobTerminalLogCache.size > 512) {
+    const oldestKey = botJobTerminalLogCache.keys().next().value;
+    botJobTerminalLogCache.delete(oldestKey);
+  }
+
+  const payload = {
+    jobId: formatShortJobId(job.jobId),
+    botId: String(job.botId || ""),
+    status: String(job.status || ""),
+    phase: String(job.phase || ""),
+    label: String(job.progress?.label || ""),
+    percent: Number.isFinite(job?.progress?.percent) ? Math.round(Number(job.progress.percent)) : null
+  };
+  if (job?.error?.message) {
+    payload.error = String(job.error.message).slice(0, 500);
+    logWarn("[bot-job]", JSON.stringify(payload));
+    return;
+  }
+  logInfo("[bot-job]", JSON.stringify(payload));
+}
+
+function shouldLogBotJobLine(line = "") {
+  if (verboseInfoLogs) {
+    return true;
+  }
+  const value = String(line || "").trim();
+  if (!value) {
+    return false;
+  }
+  if (/https?:\/\//i.test(value) && !/(failed|error|timeout|异常|失败)/i.test(value)) {
+    return false;
+  }
+  if (/^(?:ytdlp source|bilibili source|metadata title|download options|downloaded file|imported file|reuse imported file):/i.test(value)) {
+    return false;
+  }
+  return /(failed|error|timeout|cancel|queued|waiting|extracting audio|audio extracted|starting whisper|whisper|transcription done|srt sidecar|transcript:|summary:|fileMeta|AI|字幕|提取|转录|总结|失败|异常)/i.test(value);
+}
+
+function logBotJobLine(entry = {}) {
+  const line = String(entry.line || "").trim();
+  if (!shouldLogBotJobLine(line)) {
+    return;
+  }
+  const payload = {
+    jobId: formatShortJobId(entry.jobId),
+    botId: String(entry.botId || ""),
+    line: line.slice(0, 700)
+  };
+  if (/(failed|error|timeout|异常|失败)/i.test(line)) {
+    logWarn("[bot-log]", JSON.stringify(payload));
+    return;
+  }
+  logInfo("[bot-log]", JSON.stringify(payload));
+}
+
 async function publishBotJobStatusMessage(job) {
   if (!job?.jobId) {
     return;
@@ -679,7 +796,11 @@ async function ensureBotRuntime() {
   });
   await botRuntime.init();
   botRuntime.events.on("job", (job) => {
+    logBotJobStatus(job);
     publishBotJobStatusMessage(job).catch((error) => logWarn("bot-job-status-publish-failed", error?.message || error));
+  });
+  botRuntime.events.on("job-log", (entry) => {
+    logBotJobLine(entry);
   });
   return botRuntime;
 }
@@ -4318,12 +4439,14 @@ async function main() {
     ffmpegPath,
     transcodeVideoCodec,
     transcodePreferGpu,
+    storageVerboseLogs: verboseInfoLogs,
     previewObservabilityEnabled,
     previewObservabilityIntervalMs,
     wsReconnectDelayMs,
     wsIdleTimeoutMs,
     uploadStaleTimeoutMs
   });
+  logInfo("[startup] whisper config", buildWhisperStartupConfig());
 
   if (!fs.existsSync(storageRoot)) {
     logWarn(`[startup] storage root not found, creating: ${storageRoot}`);

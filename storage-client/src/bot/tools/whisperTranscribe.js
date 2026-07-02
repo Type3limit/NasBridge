@@ -17,6 +17,24 @@ function getWhisperLanguage() {
   return String(process.env.WHISPER_LANGUAGE || "").trim() || WHISPER_DEFAULT_LANGUAGE;
 }
 
+async function assertFileExists(filePath, label) {
+  const normalized = String(filePath || "").trim();
+  if (!normalized) {
+    throw new Error(`${label} is required`);
+  }
+  try {
+    const stat = await fs.promises.stat(normalized);
+    if (!stat.isFile()) {
+      throw new Error(`${label} is not a file: ${normalized}`);
+    }
+  } catch (error) {
+    if (/ is not a file: /.test(String(error?.message || ""))) {
+      throw error;
+    }
+    throw new Error(`${label} not found: ${normalized}`);
+  }
+}
+
 function spawnWithAbort(command, args, spawnOptions, signal) {
   const proc = spawn(command, args, spawnOptions);
   if (signal) {
@@ -111,6 +129,8 @@ export async function transcribeWithWhisperCpp(audioPath, outputDir, options = {
       "Set it to the path of your ggml model file, e.g. /path/to/ggml-medium.bin"
     );
   }
+  await assertFileExists(whisperCppPath, "WHISPER_CPP_PATH");
+  await assertFileExists(modelPath, "WHISPER_MODEL_PATH");
 
   await fs.promises.mkdir(outputDir, { recursive: true });
   const baseName = path.basename(audioPath, path.extname(audioPath));
