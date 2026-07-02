@@ -956,6 +956,98 @@ function buildConcreteFileAccessActionPlan(file = {}, hints = {}, pathSafe = tru
   return actions;
 }
 
+function buildMediaSummaryNextActions(file = {}, hints = {}, result = {}, analysisDependencies = null) {
+  if (hints.aiSummaryAvailable && String(result.aiSummary || "").trim()) {
+    return [
+      "已有 AI 摘要；可直接基于 aiSummary 回答用户问题。",
+      hints.subtitleAvailable ? "如需核对细节，调用 read_text_excerpt 并设置 source=subtitle 读取字幕片段。" : "如需更新摘要，再调用 invoke_video_analyze 或 analyze_file_content(startAnalysis=true)。"
+    ];
+  }
+  if (result.transcriptExcerpt?.text) {
+    const nextStart = Number.isFinite(Number(result.transcriptExcerpt.nextStartChar)) ? Number(result.transcriptExcerpt.nextStartChar) : null;
+    return [
+      nextStart != null && result.transcriptExcerpt.truncated === true
+        ? `已读取字幕片段；需要更多上下文时继续调用 read_text_excerpt source=subtitle startChar=${nextStart}。`
+        : "已读取字幕片段；可基于该片段回答或总结。",
+      "需要完整视频摘要时，调用 analyze_file_content 或 invoke_video_analyze。"
+    ];
+  }
+  if (hints.subtitleAvailable) {
+    return [
+      "没有 AI 摘要但已有字幕；先调用 read_text_excerpt source=subtitle 读取受控字幕片段。",
+      "如需生成正式摘要，调用 analyze_file_content 或 invoke_video_analyze。"
+    ];
+  }
+  if (Array.isArray(analysisDependencies?.blockers) && analysisDependencies.blockers.length) {
+    return [
+      analysisDependencies.nextAction,
+      "修复依赖后重新调用 read_media_summary 或 diagnose_file_access，再启动媒体分析。"
+    ];
+  }
+  if (hints.videoOrAudio) {
+    return ["没有 AI 摘要或字幕；调用 invoke_video_analyze，可设置 waitUntilPhase=transcribe 或 waitForCompletion=true 生成字幕和摘要。"];
+  }
+  if (hints.image) {
+    return ["图片摘要当前只有 metadata/probe 信息；需要理解图片内容时调用 analyze_file_content mode=image。"];
+  }
+  if (hints.media) {
+    return ["当前只有媒体 metadata/probe 信息；需要内容理解时调用 analyze_file_content。"];
+  }
+  return ["该文件没有可用媒体派生内容；改用 diagnose_file_access 判断可读取层级。"];
+}
+
+function buildMediaSummaryActionPlan(file = {}, hints = {}, result = {}, analysisDependencies = null) {
+  const actions = [];
+  const dependencyBlockers = Array.isArray(analysisDependencies?.blockers) ? analysisDependencies.blockers : [];
+  if (hints.subtitleAvailable && !result.transcriptExcerpt) {
+    actions.push(buildAccessAction({
+      id: "read-subtitle-excerpt",
+      tool: "read_text_excerpt",
+      input: buildFileIdentifierInput(file, { source: "subtitle", maxChars: 8000 }),
+      reason: "已有字幕 sidecar，读取受控字幕片段可用于问答或总结。",
+      contentLayer: "excerpt"
+    }));
+  }
+  if (dependencyBlockers.length) {
+    actions.push(buildAccessAction({
+      id: "repair-analysis-dependencies",
+      tool: "diagnose_file_access",
+      input: buildFileIdentifierInput(file),
+      reason: analysisDependencies.nextAction || "媒体分析依赖未就绪，修复后重新诊断。",
+      blocked: true,
+      blockerIds: dependencyBlockers.map((item) => `dependency-${item.id}`),
+      contentLayer: "analysis"
+    }));
+  } else if (hints.videoOrAudio && !hints.aiSummaryAvailable) {
+    actions.push(buildAccessAction({
+      id: "start-media-analysis",
+      tool: "invoke_video_analyze",
+      input: buildFileIdentifierInput(file, { waitForCompletion: false, waitUntilPhase: "transcribe" }),
+      reason: "媒体还没有 AI 摘要时启动转录与总结任务。",
+      riskLevel: "medium",
+      contentLayer: "analysis"
+    }));
+  } else if (hints.image) {
+    actions.push(buildAccessAction({
+      id: "analyze-image",
+      tool: "analyze_file_content",
+      input: buildFileIdentifierInput(file, { mode: "image" }),
+      reason: "图片内容理解走视觉分析，不直接暴露本机绝对路径。",
+      contentLayer: "analysis"
+    }));
+  }
+  actions.push(buildAccessAction({
+    id: "write-metadata-if-requested",
+    tool: "update_file_metadata",
+    input: buildFileIdentifierInput(file, { dryRun: true }),
+    reason: "只有用户明确要求写标签/摘要时才写入 metadata；批量或覆盖前需要确认。",
+    riskLevel: "medium",
+    requiresConfirmation: true,
+    contentLayer: "write-metadata"
+  }));
+  return actions;
+}
+
 function buildTagsPatch(currentTags = [], input = {}) {
   const hasReplaceTags = Array.isArray(input.tags);
   const addTags = dedupeTags(input.addTags || []);
@@ -1443,6 +1535,11 @@ export async function buildMediaSummaryResult(api, input = {}) {
   if (!file) {
     throw new Error(`文件未找到: ${identifier}`);
   }
+  const hints = buildContentAccessHints(file);
+  const analyzeMode = inferAnalyzeAccessMode(file, hints);
+  const analysisDependencies = buildDependencyStatus(getAnalysisDependencyRequirements(analyzeMode, hints), api, {
+    blockingWarnIds: analyzeMode === "media" && hints.videoOrAudio && !hints.aiSummaryAvailable ? ["whisper"] : []
+  });
 
   const result = {
     file: {
@@ -1463,6 +1560,13 @@ export async function buildMediaSummaryResult(api, input = {}) {
       aiSummaryAvailable: Boolean(file.aiSummaryAvailable),
       subtitleAvailable: Boolean(file.subtitleAvailable),
       subtitlePath: file.subtitlePath || ""
+    },
+    policy: {
+      ...buildPublicFileAccessPolicy(api),
+      contentLayer: "derived-media"
+    },
+    dependencies: {
+      analysis: analysisDependencies
     }
   };
   if (input.includeSummary !== false) {
@@ -1516,6 +1620,8 @@ export async function buildMediaSummaryResult(api, input = {}) {
       result.transcriptError = String(error?.message || error);
     }
   }
+  result.nextActions = buildMediaSummaryNextActions(file, hints, result, analysisDependencies);
+  result.actionPlan = buildMediaSummaryActionPlan(file, hints, result, analysisDependencies);
   return result;
 }
 

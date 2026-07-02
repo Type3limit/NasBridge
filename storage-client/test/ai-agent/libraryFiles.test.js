@@ -279,6 +279,11 @@ test("media summary includes ffprobe-derived technical metadata without exposing
     assert.equal(result.media.subtitleTrackCount, 1);
     assert.equal(result.media.probe.primaryAudio.language, "jpn");
     assert.equal(result.aiSummary, "A demo summary");
+    assert.equal(result.policy.root, "STORAGE_ROOT");
+    assert.equal(result.dependencies.analysis.ready, true);
+    assert.match(result.nextActions[0], /已有 AI 摘要/);
+    assert.deepEqual(result.actionPlan.map((action) => action.tool), ["update_file_metadata"]);
+    assert.equal(result.actionPlan[0].requiresConfirmation, true);
     assert.doesNotMatch(JSON.stringify(result), new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
   });
 });
@@ -309,6 +314,10 @@ test("media summary redacts absolute paths from probe errors", async () => {
 
     assert.equal(result.media.probeAvailable, false);
     assert.match(result.media.probeError, /\[storage-path\]/);
+    assert.match(result.nextActions[0], /invoke_video_analyze/);
+    assert.equal(result.actionPlan[0].tool, "invoke_video_analyze");
+    assert.equal(result.actionPlan[0].input.waitUntilPhase, "transcribe");
+    assert.equal(result.actionPlan[0].riskLevel, "medium");
     assert.doesNotMatch(result.media.probeError, new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
   });
 });
