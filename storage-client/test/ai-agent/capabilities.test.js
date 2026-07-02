@@ -494,7 +494,14 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.deepEqual(byId.get("video.analyze").outputSchema.required, ["status", "botId", "jobId"]);
   assert.ok(byId.get("invoke_video_analyze").outputSchema.required.includes("logHint"));
   assert.ok(byId.get("invoke_video_analyze").outputSchema.required.includes("tracking"));
-  assert.ok(byId.get("download_yyets_episodes").outputSchema.required.includes("nextAction"));
+  assert.deepEqual(byId.get("read_chat_history").outputSchema.required, ["count", "messages"]);
+  assert.deepEqual(byId.get("search_web").outputSchema.required, ["query", "resultCount", "results"]);
+  assert.ok(byId.get("search_web").outputSchema.properties.followUpDecision);
+  assert.deepEqual(byId.get("search_bilibili_video").outputSchema.required, ["query", "resultCount", "results"]);
+  assert.ok(byId.get("search_bilibili_video").outputSchema.properties.recommendedSource);
+  assert.deepEqual(byId.get("search_yyets_show").outputSchema.required, ["keyword", "count", "results"]);
+  assert.deepEqual(byId.get("download_yyets_episodes").outputSchema.required, ["status", "cnname"]);
+  assert.ok(byId.get("download_yyets_episodes").outputSchema.properties.dispatched);
   assert.ok(byId.get("analyze_file_content").outputSchema.properties.logHint);
 
   const summary = formatCapabilityPromptSummary(descriptors, {
@@ -616,6 +623,10 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(summary, /returns=imageCount\/analysis/);
   assert.match(summary, /returns=operation\/actions/);
   assert.match(summary, /returns=status\/botId\/jobId/);
+  assert.match(summary, /search_web: .*returns=query\/resultCount\/results/);
+  assert.match(summary, /search_bilibili_video: .*returns=query\/resultCount\/results/);
+  assert.match(summary, /search_yyets_show: .*returns=keyword\/count\/results/);
+  assert.match(summary, /download_yyets_episodes: .*returns=status\/cnname/);
   assert.match(summary, /Recommended task workflows/);
   assert.match(summary, /media-summary: search_library_files -> read_media_summary -> invoke_video_analyze -> get_bot_job_status/);
   assert.match(summary, /hasAiSummary=false/);

@@ -159,6 +159,12 @@ const FILE_ACTION_OUTPUT_FIELDS = {
   actionPlan: { type: "array", items: { type: "object" } }
 };
 
+const SEARCH_RESULTS_OUTPUT_FIELDS = {
+  searchedAt: { type: "string" },
+  resultCount: { type: "integer" },
+  results: { type: "array", items: { type: "object" } }
+};
+
 const TOOL_OUTPUT_SCHEMAS = {
   list_storage_files: {
     type: "object",
@@ -319,6 +325,66 @@ const TOOL_OUTPUT_SCHEMAS = {
     },
     additionalProperties: true
   },
+  read_chat_history: {
+    type: "object",
+    required: ["count", "messages"],
+    properties: {
+      count: { type: "integer" },
+      messages: { type: "array", items: { type: "object" } }
+    },
+    additionalProperties: true
+  },
+  search_bilibili_video: {
+    type: "object",
+    required: ["query", "resultCount", "results"],
+    properties: {
+      query: { type: "string" },
+      ...SEARCH_RESULTS_OUTPUT_FIELDS,
+      recommendedSource: { type: "string" },
+      backend: { type: "string" }
+    },
+    additionalProperties: true
+  },
+  search_web: {
+    type: "object",
+    required: ["query", "resultCount", "results"],
+    properties: {
+      query: { type: "string" },
+      ...SEARCH_RESULTS_OUTPUT_FIELDS,
+      directFetchUsed: { type: "boolean" },
+      directUrls: { type: "array", items: { type: "string" } },
+      plan: { type: "object" },
+      followUpDecision: { type: "object" },
+      executedQueries: { type: "array", items: { type: "string" } },
+      preferredSource: { type: "string" },
+      preferredSourceLabel: { type: "string" }
+    },
+    additionalProperties: true
+  },
+  search_yyets_show: {
+    type: "object",
+    required: ["keyword", "count", "results"],
+    properties: {
+      keyword: { type: "string" },
+      count: { type: "integer" },
+      results: { type: "array", items: { type: "object" } }
+    },
+    additionalProperties: true
+  },
+  download_yyets_episodes: {
+    type: "object",
+    required: ["status", "cnname"],
+    properties: {
+      status: { type: "string" },
+      cnname: { type: "string" },
+      season: { type: "string" },
+      totalMagnets: { type: "integer" },
+      dispatched: { type: "array", items: { type: "object" } },
+      failed: { type: "array", items: { type: "object" } },
+      message: { type: "string" }
+    },
+    additionalProperties: true
+  },
   invoke_video_analyze: DELEGATED_TOOL_OUTPUT_SCHEMA,
   analyze_storage_video: DELEGATED_TOOL_OUTPUT_SCHEMA,
   invoke_video_tag: DELEGATED_TOOL_OUTPUT_SCHEMA,
@@ -329,7 +395,6 @@ const TOOL_OUTPUT_SCHEMAS = {
   invoke_torrent_downloader: DELEGATED_TOOL_OUTPUT_SCHEMA,
   invoke_aria2_downloader: DELEGATED_TOOL_OUTPUT_SCHEMA,
   import_bilibili_video: DELEGATED_TOOL_OUTPUT_SCHEMA,
-  download_yyets_episodes: DELEGATED_TOOL_OUTPUT_SCHEMA,
   get_bot_job_status: {
     type: "object",
     required: ["jobs"],
