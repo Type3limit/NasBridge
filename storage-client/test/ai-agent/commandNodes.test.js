@@ -56,6 +56,21 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
         jobRefs: [{ botId: "video.analyze", jobId: "botjob_child" }]
       }]
     },
+    childJobCount: 1,
+    childJobStatusCounts: { failed: 1 },
+    childJobs: [{
+      jobId: "botjob_child",
+      botId: "video.analyze",
+      status: "failed",
+      phase: "failed",
+      progress: {
+        label: "Whisper failed",
+        percent: 12
+      },
+      error: {
+        message: "WHISPER_MODEL_PATH missing"
+      }
+    }],
     timeline: [{
       index: 1,
       label: "invoke_video_analyze (succeeded)",
@@ -71,6 +86,8 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
   assert.match(body, /恢复建议/);
   assert.match(body, /Agent 计划/);
   assert.match(body, /tools=invoke_video_analyze/);
+  assert.match(body, /子任务: failed 1/);
+  assert.match(body, /video\.analyze · botjob_child · failed/);
   assert.match(body, /invoke_video_analyze: 1 次/);
   assert.match(body, /video\.analyze:botjob_child/);
   assert.match(body, /最近步骤/);
@@ -83,6 +100,7 @@ test("trace command route publishes latest agent trace report", async () => {
     const graphRoot = path.join(appDataRoot, "ai-chat-graph");
     await fs.mkdir(path.join(graphRoot, "executions"), { recursive: true });
     await fs.mkdir(path.join(graphRoot, "traces"), { recursive: true });
+    await fs.mkdir(path.join(appDataRoot, "jobs"), { recursive: true });
     await fs.writeFile(path.join(graphRoot, "executions", `${jobId}.json`), JSON.stringify({
       jobId,
       botId: "ai.chat",
@@ -118,6 +136,27 @@ test("trace command route publishes latest agent trace report", async () => {
       inputSummary: { tool: "read_agent_trace" },
       resultSummary: { status: "succeeded" }
     })}\n`, "utf8");
+    await fs.writeFile(path.join(appDataRoot, "jobs", "botjob_trace_child.json"), JSON.stringify({
+      jobId: "botjob_trace_child",
+      botId: "video.analyze",
+      status: "failed",
+      phase: "failed",
+      progress: {
+        label: "Whisper failed",
+        percent: 10
+      },
+      options: {
+        parentJobId: jobId,
+        delegatedBy: "ai.chat",
+        toolName: "invoke_video_analyze"
+      },
+      error: {
+        message: "WHISPER_MODEL_PATH missing"
+      },
+      input: {},
+      result: {},
+      audit: {}
+    }), "utf8");
 
     const replies = [];
     const api = {
@@ -151,9 +190,12 @@ test("trace command route publishes latest agent trace report", async () => {
     assert.equal(replies[0].card.status, "succeeded");
     assert.match(result.result.chatReply.text, /read_agent_trace/);
     assert.match(result.result.chatReply.text, /Agent 计划/);
+    assert.match(result.result.chatReply.text, /子任务: failed 1/);
     assert.equal(result.result.artifacts[0].type, "agent-trace");
     assert.equal(result.result.artifacts[0].jobId, jobId);
     assert.equal(result.result.artifacts[0].planSummary.rounds[0].plans[0].pendingTools[0].name, "read_agent_trace");
+    assert.equal(result.result.artifacts[0].childJobCount, 1);
+    assert.equal(result.result.artifacts[0].childJobs[0].jobId, "botjob_trace_child");
   } finally {
     await fs.rm(appDataRoot, { recursive: true, force: true });
   }

@@ -135,6 +135,10 @@ test("bot job log bundle includes redacted log, agent trace, and delegated child
   assert.equal(bundle.agentTrace.toolStats.tools[0].tool, "invoke_video_analyze");
   assert.equal(bundle.agentTrace.toolStats.tools[0].averageDurationMs, 1250);
   assert.equal(bundle.agentTrace.toolStats.tools[0].jobRefs[0].jobId, "botjob_child");
+  assert.equal(bundle.agentTrace.childJobCount, 1);
+  assert.equal(bundle.agentTrace.childJobs[0].jobId, "botjob_child");
+  assert.equal(bundle.agentTrace.childJobs[0].botId, "video.analyze");
+  assert.equal(bundle.agentTrace.childJobStatusCounts.queued, 1);
 });
 
 test("bot job status includes delegated child jobs for an explicit parent job", async () => {
@@ -176,6 +180,48 @@ test("bot job status includes delegated child jobs for an explicit parent job", 
   assert.equal(status.jobs[0].childJobs[0].jobId, "botjob_child");
   assert.equal(status.jobs[0].childJobs[0].botId, "video.analyze");
   assert.equal(status.jobs[0].childJobs[0].progress.label, "Whisper transcribing");
+});
+
+test("agent trace result includes delegated child job summaries by default", async () => {
+  const appDataRoot = await createTempAppDataRoot();
+  const store = new BotJobStore({ rootDir: appDataRoot });
+  const jobId = "botjob_trace_parent";
+  await store.save(createJob(jobId, {
+    status: "running",
+    phase: "textTools"
+  }));
+  await store.save(createJob("botjob_trace_child", {
+    botId: "video.analyze",
+    status: "failed",
+    phase: "failed",
+    progress: { label: "Whisper failed", percent: 12, details: null },
+    options: {
+      delegatedBy: "ai.chat",
+      parentJobId: jobId,
+      toolName: "invoke_video_analyze"
+    },
+    error: {
+      message: "WHISPER_MODEL_PATH missing"
+    }
+  }));
+  await store.waitForPendingWrite(jobId);
+  await store.waitForPendingWrite("botjob_trace_child");
+
+  const trace = await buildAgentTraceResult({
+    appDataRoot,
+    getJob: (targetJobId) => store.get(targetJobId)
+  }, {
+    jobId,
+    store
+  });
+
+  assert.equal(trace.childJobCount, 1);
+  assert.equal(trace.childJobStatusCounts.failed, 1);
+  assert.equal(trace.childJobs[0].jobId, "botjob_trace_child");
+  assert.equal(trace.childJobs[0].botId, "video.analyze");
+  assert.equal(trace.childJobs[0].status, "failed");
+  assert.equal(trace.childJobs[0].progress.label, "Whisper failed");
+  assert.match(trace.childJobs[0].error.message, /WHISPER_MODEL_PATH/);
 });
 
 test("agent trace result summarizes plan and observation events", async () => {

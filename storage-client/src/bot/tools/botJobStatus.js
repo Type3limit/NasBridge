@@ -752,12 +752,28 @@ export async function buildAgentTraceResult(api = {}, input = {}) {
       timeline: [],
       planSummary: buildTracePlanSummary([]),
       toolStats: buildTraceToolStats([]),
+      childJobs: [],
+      childJobCount: 0,
+      childJobStatusCounts: {},
       missing: true
     };
   }
   const snapshot = await readExecutionSnapshot(appDataRoot, jobId);
   const events = await readTraceEvents(appDataRoot, jobId, clampInteger(input.maxEvents || 40, 1, MAX_AGENT_TRACE_EVENTS));
   const pendingConfirmation = await readExecutionPendingConfirmation(appDataRoot, jobId);
+  const includeChildJobs = input.includeChildJobs !== false;
+  const childJobLimit = clampInteger(input.childJobLimit || MAX_CHILD_JOB_SUMMARY_LIMIT, 1, MAX_CHILD_JOB_SUMMARY_LIMIT);
+  const store = input.store instanceof BotJobStore ? input.store : new BotJobStore({ rootDir: appDataRoot });
+  const childJobs = [];
+  if (includeChildJobs) {
+    const childJobIds = await listChildJobIds(appDataRoot, jobId, childJobLimit);
+    for (const childJobId of childJobIds) {
+      const childJob = await readJob(api, store, childJobId);
+      if (childJob) {
+        childJobs.push(summarizeJob(childJob));
+      }
+    }
+  }
   return {
     generatedAt: new Date().toISOString(),
     jobId,
@@ -769,6 +785,9 @@ export async function buildAgentTraceResult(api = {}, input = {}) {
     timeline: buildTraceTimeline(events),
     planSummary: buildTracePlanSummary(events),
     toolStats: buildTraceToolStats(events),
+    childJobs,
+    childJobCount: childJobs.length,
+    childJobStatusCounts: summarizeStatusCounts(childJobs),
     events
   };
 }

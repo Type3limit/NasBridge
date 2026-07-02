@@ -162,6 +162,31 @@ function formatAgentPlanSummary(planSummary = {}) {
   return lines.join("\n");
 }
 
+function formatChildJobSummary(trace = {}) {
+  const childJobs = Array.isArray(trace.childJobs) ? trace.childJobs : [];
+  if (!childJobs.length) {
+    return "";
+  }
+  const counts = formatStatusCounts(trace.childJobStatusCounts || {});
+  const lines = [`子任务:${counts ? ` ${counts}` : ""}`];
+  for (const job of childJobs.slice(0, 8)) {
+    const progress = job.progress?.label
+      ? `${job.progress.label}${job.progress.percent != null ? ` ${job.progress.percent}%` : ""}`
+      : "";
+    const error = job.error?.message ? `error=${job.error.message}` : "";
+    const parts = [
+      job.botId || "bot",
+      job.jobId || "",
+      job.status || "",
+      job.phase || "",
+      progress,
+      error
+    ].filter(Boolean);
+    lines.push(`- ${parts.join(" · ")}`);
+  }
+  return lines.join("\n");
+}
+
 export function formatAgentTraceReport(trace = {}) {
   const jobId = String(trace.jobId || "").trim();
   if (!jobId) {
@@ -205,6 +230,7 @@ export function formatAgentTraceReport(trace = {}) {
     : "";
 
   const plan = formatAgentPlanSummary(trace.planSummary || {});
+  const childJobs = formatChildJobSummary(trace);
 
   const toolStats = trace.toolStats || {};
   const toolRows = Array.isArray(toolStats.tools)
@@ -228,7 +254,7 @@ export function formatAgentTraceReport(trace = {}) {
     ? ["最近步骤:", ...timelineItems.map(formatTraceTimelineItem)].join("\n")
     : "最近步骤: trace 里没有可展示的事件。";
 
-  return [header, pending, recovery, plan, tools, timeline].filter(Boolean).join("\n\n");
+  return [header, pending, recovery, plan, childJobs, tools, timeline].filter(Boolean).join("\n\n");
 }
 
 async function resolveModelForSettings(rawModel = "", modelSettings = {}, api = {}, purpose = "text") {
@@ -401,7 +427,10 @@ export async function handleAiChatCommandRoute(state = {}) {
             missing: trace.missing === true,
             planSummary: trace.planSummary || null,
             recoveryHint: trace.recoveryHint || null,
-            toolStats: trace.toolStats || null
+            toolStats: trace.toolStats || null,
+            childJobCount: trace.childJobCount || 0,
+            childJobStatusCounts: trace.childJobStatusCounts || {},
+            childJobs: Array.isArray(trace.childJobs) ? trace.childJobs : []
           }]
         }
       };
