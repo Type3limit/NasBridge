@@ -814,12 +814,14 @@ function compactTraceErrorSummary(errorSummary = null) {
 }
 
 function buildTraceToolStats(events = []) {
-  const toolEvents = (Array.isArray(events) ? events : []).filter((event) => String(event.kind || "").trim() === "tool");
+  const toolEvents = (Array.isArray(events) ? events : [])
+    .map((event, index) => ({ event, step: index + 1 }))
+    .filter(({ event }) => String(event.kind || "").trim() === "tool");
   const byTool = new Map();
   const statusCounts = {};
   let totalDurationMs = 0;
   let timedCallCount = 0;
-  for (const event of toolEvents) {
+  for (const { event, step } of toolEvents) {
     const tool = String(event.tool || "unknown").trim() || "unknown";
     const status = String(event.status || "unknown").trim() || "unknown";
     const durationMs = Number(event.durationMs);
@@ -833,6 +835,8 @@ function buildTraceToolStats(events = []) {
         timedCallCount: 0,
         lastStatus: "",
         lastAt: "",
+        lastStep: null,
+        steps: [],
         jobRefs: []
       });
     }
@@ -841,6 +845,10 @@ function buildTraceToolStats(events = []) {
     item.statusCounts[status] = (item.statusCounts[status] || 0) + 1;
     item.lastStatus = status;
     item.lastAt = String(event.at || "").trim();
+    item.lastStep = step;
+    if (!item.steps.includes(step)) {
+      item.steps.push(step);
+    }
     if (Number.isFinite(durationMs)) {
       item.totalDurationMs += Math.max(0, durationMs);
       item.timedCallCount += 1;
@@ -861,6 +869,7 @@ function buildTraceToolStats(events = []) {
   const tools = [...byTool.values()].map((item) => ({
     ...item,
     averageDurationMs: item.timedCallCount ? Math.round(item.totalDurationMs / item.timedCallCount) : null,
+    steps: item.steps.slice(0, 12),
     jobRefs: item.jobRefs.slice(0, 8)
   })).sort((left, right) => right.totalDurationMs - left.totalDurationMs || right.callCount - left.callCount);
   return {

@@ -1011,10 +1011,14 @@ export function formatAgentTraceReport(trace = {}) {
     ? toolStats.tools.slice(0, 6).map((tool) => {
         const stats = formatStatusCounts(tool.statusCounts);
         const avg = tool.averageDurationMs != null ? `avg ${formatDurationMs(tool.averageDurationMs)}` : "";
+        const stepNumbers = Array.isArray(tool.steps)
+          ? tool.steps.map((step) => Number(step)).filter(Number.isFinite)
+          : [];
+        const stepRefs = stepNumbers.length ? `steps ${stepNumbers.join(",")}` : "";
         const refs = Array.isArray(tool.jobRefs) && tool.jobRefs.length
           ? `jobs ${tool.jobRefs.map((ref) => `${ref.botId || "bot"}:${ref.jobId}`).join(", ")}`
           : "";
-        return `- ${tool.tool}: ${tool.callCount} 次${stats ? ` · ${stats}` : ""}${avg ? ` · ${avg}` : ""}${refs ? ` · ${refs}` : ""}`;
+        return `- ${tool.tool}: ${tool.callCount} 次${stats ? ` · ${stats}` : ""}${avg ? ` · ${avg}` : ""}${stepRefs ? ` · ${stepRefs}` : ""}${refs ? ` · ${refs}` : ""}`;
       })
     : [];
   const tools = [

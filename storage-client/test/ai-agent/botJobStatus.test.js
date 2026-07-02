@@ -187,6 +187,8 @@ test("bot job log bundle includes redacted log, agent trace, and delegated child
   assert.equal(bundle.agentTrace.toolStats.totalDurationMs, 1250);
   assert.equal(bundle.agentTrace.toolStats.tools[0].tool, "invoke_video_analyze");
   assert.equal(bundle.agentTrace.toolStats.tools[0].averageDurationMs, 1250);
+  assert.deepEqual(bundle.agentTrace.toolStats.tools[0].steps, [1]);
+  assert.equal(bundle.agentTrace.toolStats.tools[0].lastStep, 1);
   assert.equal(bundle.agentTrace.toolStats.tools[0].jobRefs[0].jobId, "botjob_child");
   assert.equal(bundle.agentTrace.childJobCount, 1);
   assert.equal(bundle.agentTrace.childJobs[0].jobId, "botjob_child");

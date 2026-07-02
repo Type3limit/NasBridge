@@ -158,6 +158,8 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
         callCount: 1,
         statusCounts: { succeeded: 1 },
         averageDurationMs: 1250,
+        steps: [1],
+        lastStep: 1,
         jobRefs: [{ botId: "video.analyze", jobId: "botjob_child" }]
       }]
     },
@@ -243,6 +245,7 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
   assert.match(body, /video\.analyze · botjob_child · failed/);
   assert.match(body, /命令：@ai \/job botjob_child · @ai \/log botjob_child · @ai \/trace botjob_child/);
   assert.match(body, /invoke_video_analyze: 1 次/);
+  assert.match(body, /steps 1/);
   assert.match(body, /video\.analyze:botjob_child/);
   assert.match(body, /最近步骤/);
   assert.match(body, /phase=ToolExecute\/Observe/);
