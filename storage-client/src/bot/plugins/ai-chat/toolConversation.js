@@ -716,7 +716,13 @@ function inferConfirmationChangedFields(toolName = "", input = {}) {
   if (toolName === "update_file_metadata") {
     return [
       Array.isArray(input.tags) || Array.isArray(input.addTags) || Array.isArray(input.removeTags) || input.replaceTags === true ? "tags" : "",
-      String(input.aiSummary || "").trim() ? "aiSummary" : ""
+      (Object.prototype.hasOwnProperty.call(input, "aiSummary") || input.clearAiSummary === true) ? "aiSummary" : "",
+      (Object.prototype.hasOwnProperty.call(input, "notes")
+        || Object.prototype.hasOwnProperty.call(input, "note")
+        || Object.prototype.hasOwnProperty.call(input, "remark")
+        || input.clearNotes === true
+        || input.clearNote === true
+        || input.clearRemark === true) ? "notes" : ""
     ].filter(Boolean);
   }
   if (toolName === "invoke_video_tag" || toolName === "tag_storage_video") {

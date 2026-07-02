@@ -278,6 +278,7 @@ function normalizeFileRecord(file = {}, clientId = "") {
     createdAt: String(file.createdAt || "").trim(),
     updatedAt: String(file.updatedAt || "").trim(),
     aiSummary: String(file.aiSummary || "").trim() || null,
+    notes: String(file.notes || "").trim(),
     subtitleCachePath: normalizeRelativePath(file.subtitleCachePath || ""),
     tags: normalizeTags(file.tags)
   };
@@ -400,7 +401,8 @@ function matchesQuery(file, query = "") {
     file.relativePath,
     file.mimeType,
     ...(Array.isArray(file.tags) ? file.tags : []),
-    file.aiSummary || ""
+    file.aiSummary || "",
+    file.notes || ""
   ].join("\n").toLowerCase();
   return haystack.includes(normalized);
 }
@@ -521,6 +523,7 @@ export function compactLibraryFile(file = {}, index = 0) {
     mimeType: file.mimeType,
     updatedAt: file.updatedAt,
     aiSummaryAvailable: Boolean(file.aiSummaryAvailable),
+    notesAvailable: Boolean(String(file.notes || "").trim()),
     subtitleAvailable: Boolean(file.subtitleAvailable),
     subtitlePath: file.subtitlePath || "",
     tags: file.tags || []
@@ -852,7 +855,7 @@ function buildGenericFileAccessActionPlan() {
     buildAccessAction({
       id: "write-metadata",
       tool: "update_file_metadata",
-      reason: "写入 tags/aiSummary 必须走 metadata 工具并记录审计。",
+      reason: "写入 tags/aiSummary/notes 必须走 metadata 工具并记录审计。",
       riskLevel: "medium",
       requiresConfirmation: true,
       contentLayer: "write-metadata"
@@ -1047,7 +1050,7 @@ function buildConcreteFileAccessActionPlan(file = {}, hints = {}, pathSafe = tru
     id: "write-metadata-if-requested",
     tool: "update_file_metadata",
     input: buildFileIdentifierInput(file, { dryRun: true }),
-    reason: "只有用户要求写标签/摘要时才写入；批量或覆盖前需要确认。",
+    reason: "只有用户要求写标签/摘要/备注时才写入；批量或覆盖前需要确认。",
     riskLevel: "medium",
     requiresConfirmation: true,
     contentLayer: "write-metadata"
@@ -1140,7 +1143,7 @@ function buildMediaSummaryActionPlan(file = {}, hints = {}, result = {}, analysi
     id: "write-metadata-if-requested",
     tool: "update_file_metadata",
     input: buildFileIdentifierInput(file, { dryRun: true }),
-    reason: "只有用户明确要求写标签/摘要时才写入 metadata；批量或覆盖前需要确认。",
+    reason: "只有用户明确要求写标签/摘要/备注时才写入 metadata；批量或覆盖前需要确认。",
     riskLevel: "medium",
     requiresConfirmation: true,
     contentLayer: "write-metadata"
@@ -1249,6 +1252,19 @@ function buildMetadataPatch(file = {}, input = {}) {
   } else if (input.clearAiSummary === true) {
     patch.aiSummary = "";
     changedFields.push("aiSummary");
+  }
+  if (Object.prototype.hasOwnProperty.call(input, "notes")) {
+    patch.notes = String(input.notes || "").trim();
+    changedFields.push("notes");
+  } else if (Object.prototype.hasOwnProperty.call(input, "note")) {
+    patch.notes = String(input.note || "").trim();
+    changedFields.push("notes");
+  } else if (Object.prototype.hasOwnProperty.call(input, "remark")) {
+    patch.notes = String(input.remark || "").trim();
+    changedFields.push("notes");
+  } else if (input.clearNotes === true || input.clearNote === true || input.clearRemark === true) {
+    patch.notes = "";
+    changedFields.push("notes");
   }
   return { patch, changedFields };
 }
@@ -1378,6 +1394,9 @@ function buildFileMetaCarryPatch(file = {}) {
   }
   if (String(file.aiSummary || "").trim()) {
     patch.aiSummary = String(file.aiSummary || "").trim();
+  }
+  if (String(file.notes || "").trim()) {
+    patch.notes = String(file.notes || "").trim();
   }
   return patch;
 }
@@ -1656,6 +1675,7 @@ export async function buildLibraryMetadataResult(api, input = {}) {
       createdAt: file.createdAt,
       updatedAt: file.updatedAt,
       tags: file.tags || [],
+      notes: file.notes || "",
       subtitlePath: file.subtitlePath || "",
       contentAccess: profile.contentAccess,
       dependencies: profile.dependencies,
@@ -1794,7 +1814,8 @@ export async function buildMediaSummaryResult(api, input = {}) {
       mimeType: file.mimeType,
       createdAt: file.createdAt,
       updatedAt: file.updatedAt,
-      tags: file.tags || []
+      tags: file.tags || [],
+      notes: file.notes || ""
     },
     media: {
       type: String(file.mimeType || "").split("/")[0] || "unknown",
@@ -1943,7 +1964,7 @@ export async function buildFileAccessExplanation(api, input = {}) {
       "读取文本/字幕/PDF/Office 片段: diagnose_file_access -> read_text_excerpt",
       "读取媒体摘要或技术信息: read_media_summary",
       "生成视频/音频字幕和摘要: invoke_video_analyze 或 analyze_file_content(startAnalysis=true)",
-      "写标签/摘要: update_file_metadata；批量或覆盖前先确认",
+      "写标签/摘要/备注: update_file_metadata；批量或覆盖前先确认",
       "移动/重命名: organize_files dryRun=true -> 用户确认 -> confirmed=true dryRun=false"
     ],
     actionPlan: buildGenericFileAccessActionPlan(),
@@ -2081,6 +2102,7 @@ export async function buildDiagnoseFileAccessResult(api, input = {}) {
       createdAt: file.createdAt,
       updatedAt: file.updatedAt,
       tags: file.tags || [],
+      notes: file.notes || "",
       aiSummaryAvailable: Boolean(file.aiSummaryAvailable),
       subtitleAvailable: Boolean(file.subtitleAvailable),
       subtitlePath: file.subtitlePath || ""
@@ -2150,7 +2172,7 @@ export async function buildDiagnoseFileAccessResult(api, input = {}) {
         available: pathSafe && !hiddenDirectory,
         riskLevel: "medium",
         tools: ["update_file_metadata"],
-        detail: "可写入 tags/aiSummary；批量写入需要确认并记录审计。"
+        detail: "可写入 tags/aiSummary/notes；批量写入需要确认并记录审计。"
       }),
       buildAccessLayer({
         id: "file-mutation",
@@ -2203,6 +2225,7 @@ export async function buildLibraryDetailsResult(api, input = {}) {
       createdAt: file.createdAt,
       updatedAt: file.updatedAt,
       tags: file.tags || [],
+      notes: file.notes || "",
       aiSummaryAvailable: Boolean(file.aiSummaryAvailable),
       subtitleAvailable: Boolean(file.subtitleAvailable),
       subtitlePath: file.subtitlePath || ""
@@ -2298,6 +2321,16 @@ function copyMetadataMutationInput(input = {}) {
   if (input.clearAiSummary === true) {
     result.clearAiSummary = true;
   }
+  if (Object.prototype.hasOwnProperty.call(input, "notes")) {
+    result.notes = String(input.notes || "").trim();
+  } else if (Object.prototype.hasOwnProperty.call(input, "note")) {
+    result.notes = String(input.note || "").trim();
+  } else if (Object.prototype.hasOwnProperty.call(input, "remark")) {
+    result.notes = String(input.remark || "").trim();
+  }
+  if (input.clearNotes === true || input.clearNote === true || input.clearRemark === true) {
+    result.clearNotes = true;
+  }
   return result;
 }
 
@@ -2329,20 +2362,20 @@ function buildUpdateMetadataNextActions({
   if (dryRun && executableCount) {
     return [
       `已生成 ${executableCount} 个文件的 metadata 写入预览，本次没有写入文件。`,
-      "确认字段无误后调用 update_file_metadata dryRun=false 执行；执行后调用 read_file_metadata 复查 tags/aiSummary。"
+      "确认字段无误后调用 update_file_metadata dryRun=false 执行；执行后调用 read_file_metadata 复查 tags/aiSummary/notes。"
     ];
   }
   if (updatedCount) {
     return [
       `已写入 ${updatedCount} 个文件的 metadata，并记录了 riskLevel=medium 审计信息。`,
-      "调用 read_file_metadata 复查 tags/aiSummary 状态；如果索引或 metadata 缓存未刷新，先重新搜索目标文件。"
+      "调用 read_file_metadata 复查 tags/aiSummary/notes 状态；如果索引或 metadata 缓存未刷新，先重新搜索目标文件。"
     ];
   }
   if (missing.length) {
     return [`未找到 ${missing.length} 个文件；先调用 search_library_files 重新定位候选文件，再写入 metadata。`];
   }
   if (skippedCount) {
-    return ["没有可写 metadata 变化；请提供 tags/addTags/removeTags/aiSummary/clearAiSummary 之一后再调用。"];
+    return ["没有可写 metadata 变化；请提供 tags/addTags/removeTags/aiSummary/clearAiSummary/notes/clearNotes 之一后再调用。"];
   }
   return ["没有执行任何 metadata 写入；先确认目标文件和要修改的字段。"];
 }
@@ -2382,7 +2415,7 @@ function buildUpdateMetadataActionPlan(input = {}, {
       id: "verify-metadata-write",
       tool: "read_file_metadata",
       input: updatedFileIds.length === 1 ? { fileId: updatedFileIds[0] } : { fileIds: updatedFileIds },
-      reason: "写入完成后复查 tags/aiSummary，避免缓存或索引状态误导后续计划。",
+      reason: "写入完成后复查 tags/aiSummary/notes，避免缓存或索引状态误导后续计划。",
       contentLayer: "metadata"
     }));
   }
@@ -2453,7 +2486,7 @@ function buildOrganizeNextActions({
   const movedCount = results.filter((item) => item.status === "moved").length;
   if (movedCount) {
     return [
-      `已在 storage root 内移动/重命名 ${movedCount} 个文件，并尽量迁移 tags/aiSummary metadata。`,
+      `已在 storage root 内移动/重命名 ${movedCount} 个文件，并尽量迁移 tags/aiSummary/notes metadata。`,
       "调用 search_library_files 检查目标目录；如果索引尚未刷新，等待下一次扫描后再用 read_file_metadata 复查新 fileId。"
     ];
   }
@@ -2527,7 +2560,7 @@ function buildOrganizeActionPlan({
         id: "verify-moved-metadata",
         tool: "read_file_metadata",
         input: movedFileIds.length === 1 ? { fileId: movedFileIds[0] } : { fileIds: movedFileIds },
-        reason: "索引刷新后复查迁移后的 tags/aiSummary metadata。",
+        reason: "索引刷新后复查迁移后的 tags/aiSummary/notes metadata。",
         contentLayer: "metadata"
       }));
     }
@@ -2569,7 +2602,8 @@ export async function buildUpdateFileMetadataResult(api, input = {}) {
         reason: "no supported metadata changes",
         before: {
           tags: file.tags || [],
-          aiSummaryAvailable: Boolean(file.aiSummaryAvailable)
+          aiSummaryAvailable: Boolean(file.aiSummaryAvailable),
+          notesLength: String(file.notes || "").length
         },
         patch: {}
       });
@@ -2587,7 +2621,8 @@ export async function buildUpdateFileMetadataResult(api, input = {}) {
       before: {
         tags: file.tags || [],
         aiSummaryAvailable: Boolean(file.aiSummaryAvailable),
-        aiSummaryLength: String(file.aiSummary || "").length
+        aiSummaryLength: String(file.aiSummary || "").length,
+        notesLength: String(file.notes || "").length
       },
       patch,
       audit: {
@@ -2633,11 +2668,11 @@ export async function buildUpdateFileMetadataResult(api, input = {}) {
       ? buildSafetyConfirmation({
           operation: "update_file_metadata",
           riskLevel: "medium",
-          reason: "批量写入 tags/aiSummary 会修改多个文件的 NAS metadata。",
+          reason: "批量写入 tags/aiSummary/notes 会修改多个文件的 NAS metadata。",
           targetFileCount: executable.length,
           changedFields: [...allChangedFields],
           files: executable,
-          recoverability: "metadata 写入会覆盖对应字段；请先确认 dry-run 预览，必要时保留当前标签/摘要作为回滚依据。",
+          recoverability: "metadata 写入会覆盖对应字段；请先确认 dry-run 预览，必要时保留当前标签/摘要/备注作为回滚依据。",
           estimatedDuration: estimateSmallBatchDuration(executable.length),
           confirmWith: {
             confirmed: true,
@@ -2729,7 +2764,8 @@ export async function buildOrganizeFilesResult(api, input = {}) {
         size: file.size,
         mimeType: file.mimeType,
         tags: file.tags || [],
-        aiSummaryAvailable: Boolean(file.aiSummaryAvailable)
+        aiSummaryAvailable: Boolean(file.aiSummaryAvailable),
+        notesAvailable: Boolean(String(file.notes || "").trim())
       },
       target: {
         path: targetPath,
@@ -2738,7 +2774,7 @@ export async function buildOrganizeFilesResult(api, input = {}) {
         overwrite: action.overwrite === true
       },
       metadataMigration: {
-        available: Boolean(file.tags?.length || file.aiSummary),
+        available: Boolean(file.tags?.length || file.aiSummary || String(file.notes || "").trim()),
         fields: Object.keys(buildFileMetaCarryPatch(file))
       }
     });

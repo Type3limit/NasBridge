@@ -457,7 +457,7 @@ const CAPABILITY_EXAMPLES = {
   analyze_storage_video: ["总结这个视频"],
   invoke_video_tag: ["给这个视频生成标签"],
   read_media_summary: ["读取这个视频已有摘要、字幕状态、时长和分辨率"],
-  update_file_metadata: ["给这个文件添加标签"],
+  update_file_metadata: ["给这个文件添加标签", "给这个文件写一条备注"],
   organize_files: ["把这几个文件移动到整理目录"],
   invoke_music_control: ["点歌 晴天", "下一首"],
   invoke_bilibili_downloader: ["下载这个 B 站视频"],

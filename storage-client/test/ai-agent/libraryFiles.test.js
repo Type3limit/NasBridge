@@ -10,6 +10,7 @@ import {
   buildFileAccessPolicy,
   buildFileAccessExplanation,
   buildPublicFileAccessPolicy,
+  buildLibraryDetailsResult,
   buildLibraryListResult,
   buildLibraryMetadataResult,
   buildMediaSummaryResult,
@@ -845,6 +846,65 @@ test("update_file_metadata returns confirmation preview for batch writes", async
   });
 });
 
+test("update_file_metadata writes and clears file notes", async () => {
+  await withTempDir(async (root) => {
+    const metadataWrites = [];
+    const files = [
+      {
+        id: "client:note.md",
+        clientId: "client",
+        path: "note.md",
+        name: "note.md",
+        size: 1,
+        mimeType: "text/markdown",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+        tags: [],
+        notes: "old note"
+      }
+    ];
+    const api = createApi(root, files, {
+      upsertFileMeta: async (fileId, patch) => {
+        metadataWrites.push({ fileId, patch });
+      }
+    });
+
+    const metadata = await buildLibraryMetadataResult(api, { fileId: "client:note.md" });
+    assert.equal(metadata.files[0].notes, "old note");
+
+    const search = await buildLibraryListResult(api, { query: "old note" });
+    assert.equal(search.total, 1);
+    assert.equal(search.files[0].notesAvailable, true);
+    assert.equal(Object.prototype.hasOwnProperty.call(search.files[0], "notes"), false);
+
+    const details = await buildLibraryDetailsResult(api, { fileId: "client:note.md" });
+    assert.equal(details.files[0].notes, "old note");
+
+    const updated = await buildUpdateFileMetadataResult(api, {
+      fileId: "client:note.md",
+      notes: "review after reading",
+      dryRun: false
+    });
+
+    assert.equal(updated.requiresConfirmation, false);
+    assert.deepEqual(updated.results[0].changedFields, ["notes"]);
+    assert.equal(updated.results[0].before.notesLength, "old note".length);
+    assert.deepEqual(updated.results[0].patch, { notes: "review after reading" });
+    assert.deepEqual(metadataWrites, [
+      { fileId: "client:note.md", patch: { notes: "review after reading" } }
+    ]);
+    assert.equal(updated.actionPlan[0].tool, "read_file_metadata");
+
+    const cleared = await buildUpdateFileMetadataResult(api, {
+      fileId: "client:note.md",
+      clearNotes: true,
+      dryRun: false
+    });
+    assert.deepEqual(cleared.results[0].changedFields, ["notes"]);
+    assert.deepEqual(cleared.results[0].patch, { notes: "" });
+    assert.deepEqual(metadataWrites[1], { fileId: "client:note.md", patch: { notes: "" } });
+  });
+});
+
 test("organize_files moves inside storage root and migrates metadata after confirmation", async () => {
   await withTempDir(async (root) => {
     const sourceRelative = "downloads/video.mp4";
@@ -862,7 +922,8 @@ test("organize_files moves inside storage root and migrates metadata after confi
         mimeType: "video/mp4",
         updatedAt: "2026-07-01T00:00:00.000Z",
         tags: ["raw"],
-        aiSummary: "A demo video"
+        aiSummary: "A demo video",
+        notes: "keep this note"
       }
     ], {
       upsertFileMeta: async (fileId, patch) => {
@@ -893,7 +954,8 @@ test("organize_files moves inside storage root and migrates metadata after confi
         fileId: `client:${targetRelative}`,
         patch: {
           tags: ["raw"],
-          aiSummary: "A demo video"
+          aiSummary: "A demo video",
+          notes: "keep this note"
         }
       }
     ]);

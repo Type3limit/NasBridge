@@ -383,6 +383,7 @@ function compactStorageFileForTool(file = {}) {
     mimeType: String(file.mimeType || "application/octet-stream").trim(),
     tags: Array.isArray(file.tags) ? file.tags : [],
     aiSummaryAvailable: Boolean(file.aiSummaryAvailable),
+    notesAvailable: Boolean(String(file.notes || "").trim()),
     subtitleAvailable: Boolean(file.subtitleAvailable),
     subtitlePath: String(file.subtitlePath || "").trim()
   };
@@ -1148,7 +1149,7 @@ export function getAiToolDefinitions() {
     },
     {
       name: "update_file_metadata",
-      description: "受控写入 NAS 文件 metadata，仅支持 tags 和 aiSummary。单文件可直接执行并返回审计；批量写入必须先向用户确认并传 confirmed=true。设置 dryRun=true 可预览变更。",
+      description: "受控写入 NAS 文件 metadata，支持 tags、aiSummary 和 notes。单文件可直接执行并返回审计；批量写入必须先向用户确认并传 confirmed=true。设置 dryRun=true 可预览变更。",
       inputSchema: {
         type: "object",
         properties: {
@@ -1161,6 +1162,10 @@ export function getAiToolDefinitions() {
           removeTags: { type: "array", items: { type: "string" }, description: "移除标签，大小写不敏感" },
           aiSummary: { type: "string", description: "写入/覆盖 AI 摘要" },
           clearAiSummary: { type: "boolean", description: "清空 AI 摘要" },
+          notes: { type: "string", description: "写入/覆盖备注" },
+          note: { type: "string", description: "notes 的别名" },
+          remark: { type: "string", description: "notes 的别名" },
+          clearNotes: { type: "boolean", description: "清空备注" },
           dryRun: { type: "boolean", description: "只预览不写入，默认 false" },
           confirmed: { type: "boolean", description: "批量写入前必须由用户确认" }
         }

@@ -674,6 +674,7 @@ app.get("/api/files", requireAuth, (req, res) => {
       mimeType: meta.mimeType || file.mimeType,
       originalMimeType: file.mimeType,
       aiSummary: meta.aiSummary || null,
+      notes: meta.notes || "",
       subtitleCachePath: meta.subtitleCachePath || "",
       tags: Array.isArray(meta.tags) ? meta.tags : []
     };
@@ -971,7 +972,7 @@ app.post("/api/client/files-meta", requireAuth, requireRole("client"), (req, res
   if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
     return res.status(400).json({ message: "patch must be a non-null object" });
   }
-  const ALLOWED_META_FIELDS = ["aiSummary", "subtitleCachePath", "columnId", "folderPath", "mimeType", "tags"];
+  const ALLOWED_META_FIELDS = ["aiSummary", "notes", "subtitleCachePath", "columnId", "folderPath", "mimeType", "tags"];
   const sanitized = {};
   for (const key of ALLOWED_META_FIELDS) {
     if (Object.prototype.hasOwnProperty.call(patch, key)) {

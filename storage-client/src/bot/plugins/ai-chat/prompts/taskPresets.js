@@ -55,7 +55,7 @@ const TASK_PRESETS = [
     title: "Update metadata or organize files",
     triggers: [/标签|整理|移动|重命名|归类|metadata|organize|move|rename/i],
     lines: [
-      "单文件 tags/aiSummary 使用 update_file_metadata，并记录审计结果。",
+      "单文件 tags/aiSummary/notes 使用 update_file_metadata，并记录审计结果。",
       "批量 metadata 写入前说明文件数量、字段变化和影响范围，取得 confirmed=true。",
       "移动/重命名只能用 organize_files；先 dryRun=true 展示预览，用户确认后才 dryRun=false confirmed=true。"
     ]

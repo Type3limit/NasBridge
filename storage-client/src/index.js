@@ -3287,6 +3287,7 @@ async function listLocalLibraryFilesForBot() {
       mimeType: meta.mimeType || file.mimeType,
       originalMimeType: file.mimeType,
       aiSummary: meta.aiSummary || null,
+      notes: meta.notes || "",
       subtitleCachePath: meta.subtitleCachePath || "",
       tags: Array.isArray(meta.tags) ? meta.tags : [],
       columnId: meta.columnId || "",
