@@ -300,6 +300,28 @@ function formatJobTrackingLine(job = {}, prefix = "  ") {
   return `${prefix}命令：${commands.statusCommand} · ${commands.logCommand} · ${commands.traceCommand}`;
 }
 
+function buildBotJobCardActions(job = {}, fallbackJobId = "") {
+  const jobId = String(job?.jobId || fallbackJobId || "").trim();
+  if (!jobId) {
+    return [];
+  }
+  const status = String(job?.status || "").trim().toLowerCase();
+  if (["queued", "running"].includes(status)) {
+    return [
+      { type: "continue-bot-job", label: "继续等待", jobId },
+      { type: "open-bot-log", label: "查看日志", jobId },
+      { type: "cancel-bot-job", label: "停止生成", jobId }
+    ];
+  }
+  if (["failed", "cancelled"].includes(status)) {
+    return [
+      { type: "open-bot-log", label: "查看日志", jobId },
+      { type: "retry-bot-job", label: "重新生成", jobId }
+    ];
+  }
+  return [{ type: "open-bot-log", label: "查看日志", jobId }];
+}
+
 function formatBotJobLine(job = {}, prefix = "-") {
   const progress = job.progress?.label
     ? `${job.progress.label}${job.progress.percent != null ? ` ${job.progress.percent}%` : ""}`
@@ -654,7 +676,8 @@ export async function handleAiChatCommandRoute(state = {}) {
               status: trace.missing === true ? "failed" : "succeeded",
               title: "AI Agent Trace",
               subtitle: withSessionSubtitle(trace.jobId ? `job: ${trace.jobId}` : "没有可用 trace", activeSession),
-              body
+              body,
+              actions: trace.missing === true ? [] : buildBotJobCardActions(trace.snapshot || {}, trace.jobId || "")
             }
           }),
           importedFiles: [],
@@ -693,7 +716,8 @@ export async function handleAiChatCommandRoute(state = {}) {
               status: status.missing?.length && !status.jobs?.length ? "failed" : "succeeded",
               title: jobId ? "Bot 任务状态" : "最近 Bot 任务",
               subtitle: withSessionSubtitle(jobId || `共 ${status.count || 0} 个任务`, activeSession),
-              body
+              body,
+              actions: jobId ? buildBotJobCardActions(status.jobs?.[0] || {}, jobId) : []
             }
           }),
           importedFiles: [],
@@ -727,7 +751,8 @@ export async function handleAiChatCommandRoute(state = {}) {
               status: bundle.job ? "succeeded" : "failed",
               title: "Bot 任务日志",
               subtitle: withSessionSubtitle(jobId || "unknown", activeSession),
-              body
+              body,
+              actions: buildBotJobCardActions(bundle.job || {}, bundle.jobId || jobId)
             }
           }),
           importedFiles: [],

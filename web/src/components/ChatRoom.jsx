@@ -548,6 +548,8 @@ function normalizeMessage(message) {
                 rawText: String(action?.rawText || ""),
                 botId: String(action?.botId || ""),
                 url: String(action?.url || ""),
+                jobId: String(action?.jobId || ""),
+                hostClientId: String(action?.hostClientId || ""),
                 attachmentId: String(action?.attachmentId || ""),
                 parsedArgs: action?.parsedArgs && typeof action.parsedArgs === "object"
                   ? action.parsedArgs
@@ -1941,9 +1943,33 @@ export default function ChatRoom({
     });
   }
 
-  async function continueBotJob(message) {
-    const jobId = String(message?.bot?.jobId || "").trim();
-    const clientId = String(message?.hostClientId || "").trim();
+  function getBotJobActionTarget(message, action = {}) {
+    return {
+      jobId: String(action?.jobId || message?.bot?.jobId || "").trim(),
+      clientId: String(action?.hostClientId || message?.hostClientId || "").trim(),
+      botId: String(action?.botId || message?.bot?.botId || "").trim()
+    };
+  }
+
+  function buildBotJobActionMessage(message, action = {}, job = null) {
+    const target = getBotJobActionTarget(message, action);
+    return {
+      ...(message || {}),
+      hostClientId: target.clientId || String(message?.hostClientId || ""),
+      card: {
+        ...(message?.card || {}),
+        title: String(message?.card?.title || job?.botId || target.botId || "Bot").trim() || "Bot"
+      },
+      bot: {
+        ...(message?.bot || {}),
+        botId: String(job?.botId || target.botId || message?.bot?.botId || "").trim(),
+        jobId: String(job?.jobId || target.jobId || "").trim()
+      }
+    };
+  }
+
+  async function continueBotJob(message, action = {}) {
+    const { jobId, clientId } = getBotJobActionTarget(message, action);
     if (!jobId || !clientId || !p2p) {
       setMessage?.("当前任务无法继续等待", "warning");
       return;
@@ -1952,7 +1978,7 @@ export default function ChatRoom({
     const result = await p2p.getBotJob(clientId, jobId);
     const status = formatBotStatusText(result?.job?.status || "");
     setMessage?.(`任务 ${jobId.slice(0, 12)} 当前状态：${status}`, "info");
-    await openBotLogDialog(message);
+    await openBotLogDialog(buildBotJobActionMessage(message, action, result?.job || null));
   }
 
   async function openChildBotLog(job) {
@@ -2042,12 +2068,12 @@ export default function ChatRoom({
       return;
     }
     if (action.type === "retry-bot-job") {
-      const jobId = String(message?.bot?.jobId || "").trim();
-      if (!jobId || !message?.hostClientId || !p2p) {
+      const { jobId, clientId } = getBotJobActionTarget(message, action);
+      if (!jobId || !clientId || !p2p) {
         setMessage?.("当前任务无法重新生成", "warning");
         return;
       }
-      retryBotJobById(message.hostClientId, jobId)
+      retryBotJobById(clientId, jobId)
         .then((invoked) => {
           if (invoked?.job?.jobId) {
             setMessage?.(`已重新提交任务 ${invoked.job.jobId.slice(0, 12)}`, "success");
@@ -2059,18 +2085,18 @@ export default function ChatRoom({
       return;
     }
     if (action.type === "continue-bot-job") {
-      continueBotJob(message).catch((error) => {
+      continueBotJob(message, action).catch((error) => {
         setMessage?.(error?.message || "继续等待失败", "error");
       });
       return;
     }
     if (action.type === "cancel-bot-job") {
-      const jobId = String(message?.bot?.jobId || "").trim();
-      if (!jobId || !message?.hostClientId || !p2p) {
+      const { jobId, clientId } = getBotJobActionTarget(message, action);
+      if (!jobId || !clientId || !p2p) {
         setMessage?.("当前任务无法取消", "warning");
         return;
       }
-      p2p.cancelBotJob(message.hostClientId, jobId)
+      p2p.cancelBotJob(clientId, jobId)
         .then(() => {
           setMessage?.("已请求停止生成", "success");
         })
@@ -2080,7 +2106,7 @@ export default function ChatRoom({
       return;
     }
     if (action.type === "open-bot-log") {
-      openBotLogDialog(message).catch((error) => {
+      openBotLogDialog(buildBotJobActionMessage(message, action)).catch((error) => {
         setMessage?.(error?.message || "读取日志失败", "error");
       });
       return;

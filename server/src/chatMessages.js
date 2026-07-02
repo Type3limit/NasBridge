@@ -77,6 +77,8 @@ export function sanitizeMessageCard(rawCard) {
         label: String(action?.label || "").slice(0, 80),
         rawText: String(action?.rawText || "").slice(0, 500),
         botId: String(action?.botId || "").slice(0, 120),
+        jobId: String(action?.jobId || "").slice(0, 160),
+        hostClientId: String(action?.hostClientId || "").slice(0, 160),
         url: String(action?.url || "").slice(0, 500),
         attachmentId: String(action?.attachmentId || "").slice(0, 160),
         parsedArgs: action?.parsedArgs && typeof action.parsedArgs === "object" ? action.parsedArgs : null

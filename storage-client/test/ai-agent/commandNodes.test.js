@@ -455,6 +455,9 @@ test("trace command route publishes latest agent trace report", async () => {
 
     assert.equal(replies[0].card.title, "AI Agent Trace");
     assert.equal(replies[0].card.status, "succeeded");
+    assert.deepEqual(replies[0].card.actions, [
+      { type: "open-bot-log", label: "查看日志", jobId }
+    ]);
     assert.match(result.result.chatReply.text, /read_agent_trace/);
     assert.match(result.result.chatReply.text, /Agent 计划/);
     assert.match(result.result.chatReply.text, /子任务: failed 1/);
@@ -541,6 +544,10 @@ test("log command route publishes redacted bot job log bundle", async () => {
 
     assert.equal(replies[0].card.title, "Bot 任务日志");
     assert.equal(replies[0].card.status, "succeeded");
+    assert.deepEqual(replies[0].card.actions, [
+      { type: "open-bot-log", label: "查看日志", jobId: "botjob_parent" },
+      { type: "retry-bot-job", label: "重新生成", jobId: "botjob_parent" }
+    ]);
     assert.match(result.result.chatReply.text, /Bot 日志：botjob_parent/);
     assert.match(result.result.chatReply.text, /OPENAI_API_KEY=\*\*\*/);
     assert.doesNotMatch(result.result.chatReply.text, /sk-should-not-leak/);
@@ -621,6 +628,11 @@ test("jobs command route publishes bot job status with child jobs", async () => 
 
     assert.equal(replies[0].card.title, "Bot 任务状态");
     assert.equal(replies[0].card.status, "succeeded");
+    assert.deepEqual(replies[0].card.actions, [
+      { type: "continue-bot-job", label: "继续等待", jobId: "botjob_parent" },
+      { type: "open-bot-log", label: "查看日志", jobId: "botjob_parent" },
+      { type: "cancel-bot-job", label: "停止生成", jobId: "botjob_parent" }
+    ]);
     assert.match(result.result.chatReply.text, /ai\.chat · botjob_parent · running/);
     assert.match(result.result.chatReply.text, /子任务：1 · queued 1/);
     assert.equal(result.result.artifacts[0].type, "bot-job-status");
