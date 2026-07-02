@@ -372,6 +372,88 @@ test("models command refresh migrates display names to executable model refs", a
   }
 });
 
+test("health command route publishes status badges", async () => {
+  const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-health-command-"));
+  const storageRoot = path.join(appDataRoot, "storage");
+  const originalFetch = globalThis.fetch;
+  try {
+    await fs.mkdir(storageRoot, { recursive: true });
+    globalThis.fetch = async (url) => {
+      const text = String(url || "");
+      if (text.includes("/models")) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          text: async () => JSON.stringify({
+            data: [{
+              id: "deepseek-v4-pro",
+              name: "DeepSeek V4 Pro",
+              capabilities: { supports: { tool_calls: false } }
+            }]
+          }),
+          json: async () => ({})
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        text: async () => "{}",
+        json: async () => ({ sources: ["qq"] })
+      };
+    };
+
+    await withEnv({
+      AI_PROVIDER: "openai",
+      OPENAI_BASE_URL: "https://example.invalid/v1",
+      OPENAI_API_KEY: "sk-test",
+      OPENAI_MODEL: "deepseek-v4-pro",
+      MUSIC_LIB_BRIDGE_URL: "http://music.invalid"
+    }, async () => {
+      const replies = [];
+      const api = {
+        appDataRoot,
+        storageRoot,
+        signal: null,
+        throwIfCancelled() {},
+        async publishChatReply(payload) {
+          replies.push(payload);
+          return {
+            id: "reply_health",
+            text: payload.text,
+            card: payload.card
+          };
+        }
+      };
+
+      const result = await handleAiChatCommandRoute({
+        prepared: {
+          api,
+          modelDirective: {
+            command: {
+              type: "health"
+            }
+          },
+          modelSettings: {
+            textModel: "openai::deepseek-v4-pro",
+            lastListedModels: []
+          }
+        }
+      });
+
+      assert.equal(replies[0].card.title, "AI Agent 健康检查");
+      assert.ok(Array.isArray(replies[0].card.badges));
+      assert.ok(replies[0].card.badges.length > 0);
+      assert.ok(replies[0].card.badges.some((badge) => /^错误|^警告|^可用|^未知/.test(badge.label)));
+      assert.equal(result.result.artifacts[0].type, "agent-health");
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(appDataRoot, { recursive: true, force: true });
+  }
+});
+
 test("tools command route publishes structured capability artifact", async () => {
   const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-tools-command-"));
   const storageRoot = path.join(appDataRoot, "storage");
@@ -446,6 +528,8 @@ test("tools command route publishes structured capability artifact", async () =>
 
       const artifact = result.result.artifacts[0];
       assert.equal(replies[0].card.title, "AI Agent 工具列表");
+      assert.ok(replies[0].card.badges.some((badge) => /^能力 \d+/.test(badge.label)));
+      assert.ok(replies[0].card.badges.some((badge) => /^阻断|^错误|^警告|^可用|^未知/.test(badge.label)));
       assert.equal(artifact.type, "agent-tools");
       assert.equal(artifact.count, artifact.capabilities.length);
       assert.ok(artifact.health);

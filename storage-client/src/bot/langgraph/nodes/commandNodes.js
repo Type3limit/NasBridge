@@ -75,6 +75,59 @@ function buildEffectiveProviderBadges(settings = {}) {
   ].filter(Boolean);
 }
 
+const STATUS_BADGE_META = {
+  blocked: { label: "阻断", color: "danger" },
+  error: { label: "错误", color: "danger" },
+  warn: { label: "警告", color: "warning" },
+  ok: { label: "可用", color: "success" },
+  unknown: { label: "未知", color: "informative" }
+};
+
+function createStatusBadge(status = "", count = null) {
+  const normalized = String(status || "unknown").trim().toLowerCase() || "unknown";
+  const meta = STATUS_BADGE_META[normalized] || STATUS_BADGE_META.unknown;
+  const suffix = Number.isFinite(Number(count)) ? ` ${Number(count)}` : "";
+  return {
+    label: `${meta.label}${suffix}`,
+    color: meta.color,
+    appearance: "tint"
+  };
+}
+
+function countByStatus(items = [], getStatus = (item) => item?.status) {
+  const counts = {};
+  for (const item of Array.isArray(items) ? items : []) {
+    const status = String(getStatus(item) || "unknown").trim().toLowerCase() || "unknown";
+    counts[status] = (counts[status] || 0) + 1;
+  }
+  return counts;
+}
+
+function buildHealthStatusBadges(health = {}) {
+  const counts = countByStatus(health.checks);
+  return [
+    createStatusBadge(health.overall || "unknown"),
+    counts.error ? createStatusBadge("error", counts.error) : null,
+    counts.warn ? createStatusBadge("warn", counts.warn) : null,
+    counts.ok ? createStatusBadge("ok", counts.ok) : null,
+    counts.unknown ? createStatusBadge("unknown", counts.unknown) : null
+  ].filter(Boolean);
+}
+
+function buildCapabilityStatusBadges(artifact = {}) {
+  const counts = countByStatus(artifact.capabilities);
+  return [
+    Number.isFinite(Number(artifact.count))
+      ? { label: `能力 ${Number(artifact.count)}`, color: "informative", appearance: "tint" }
+      : null,
+    counts.blocked ? createStatusBadge("blocked", counts.blocked) : null,
+    counts.error ? createStatusBadge("error", counts.error) : null,
+    counts.warn ? createStatusBadge("warn", counts.warn) : null,
+    counts.ok ? createStatusBadge("ok", counts.ok) : null,
+    counts.unknown ? createStatusBadge("unknown", counts.unknown) : null
+  ].filter(Boolean);
+}
+
 function formatDurationMs(value) {
   const durationMs = Number(value);
   if (!Number.isFinite(durationMs)) {
@@ -676,7 +729,7 @@ export async function handleAiChatCommandRoute(state = {}) {
         result: {
           chatReply: await api.publishChatReply({
             text: body,
-            card: { type: "ai-answer", status: health.overall === "error" ? "failed" : "succeeded", title: "AI Agent 健康检查", subtitle: withSessionSubtitle(`overall: ${health.overall}`, activeSession), body }
+            card: { type: "ai-answer", status: health.overall === "error" ? "failed" : "succeeded", title: "AI Agent 健康检查", subtitle: withSessionSubtitle(`overall: ${health.overall}`, activeSession), body, badges: buildHealthStatusBadges(health) }
           }),
           importedFiles: [],
           artifacts: [{ type: "agent-health", health }]
@@ -693,7 +746,7 @@ export async function handleAiChatCommandRoute(state = {}) {
         result: {
           chatReply: await api.publishChatReply({
             text: body,
-            card: { type: "ai-answer", status: health.overall === "error" ? "failed" : "succeeded", title: "AI Agent 工具列表", subtitle: withSessionSubtitle(`共 ${descriptors.length} 项能力`, activeSession), body }
+            card: { type: "ai-answer", status: health.overall === "error" ? "failed" : "succeeded", title: "AI Agent 工具列表", subtitle: withSessionSubtitle(`共 ${descriptors.length} 项能力`, activeSession), body, badges: buildCapabilityStatusBadges(artifact) }
           }),
           importedFiles: [],
           artifacts: [{ type: "agent-tools", ...artifact, health }]
