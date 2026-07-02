@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,12 +16,12 @@ import (
 	"github.com/guohuiyuan/music-lib/bilibili"
 	"github.com/guohuiyuan/music-lib/jamendo"
 	"github.com/guohuiyuan/music-lib/kugou"
+	"github.com/guohuiyuan/music-lib/kuwo"
 	"github.com/guohuiyuan/music-lib/migu"
 	"github.com/guohuiyuan/music-lib/model"
 	"github.com/guohuiyuan/music-lib/netease"
 	"github.com/guohuiyuan/music-lib/provider"
 	"github.com/guohuiyuan/music-lib/qq"
-	"github.com/guohuiyuan/music-lib/kuwo"
 )
 
 type searchRequest struct {
@@ -30,16 +31,16 @@ type searchRequest struct {
 }
 
 type candidate struct {
-	Source         string            `json:"source"`
-	ProviderTrackID string           `json:"providerTrackId"`
-	Title          string            `json:"title"`
-	Artist         string            `json:"artist"`
-	Album          string            `json:"album"`
-	Duration       int               `json:"duration"`
-	CoverURL       string            `json:"coverUrl"`
-	Link           string            `json:"link"`
-	Ext            string            `json:"ext"`
-	Extra          map[string]string `json:"extra,omitempty"`
+	Source          string            `json:"source"`
+	ProviderTrackID string            `json:"providerTrackId"`
+	Title           string            `json:"title"`
+	Artist          string            `json:"artist"`
+	Album           string            `json:"album"`
+	Duration        int               `json:"duration"`
+	CoverURL        string            `json:"coverUrl"`
+	Link            string            `json:"link"`
+	Ext             string            `json:"ext"`
+	Extra           map[string]string `json:"extra,omitempty"`
 }
 
 type resolveRequest struct {
@@ -65,6 +66,17 @@ type resolveResponse struct {
 var supportedSources = []string{"qq", "kugou", "migu", "kuwo", "netease", "bilibili", "jamendo"}
 
 var musicProviders map[string]provider.MusicProvider
+var providerCookieKeys = []string{"NETEASE_COOKIE", "QQ_COOKIE", "KUGOU_COOKIE", "KUWO_COOKIE", "MIGU_COOKIE", "BILIBILI_COOKIE", "JAMENDO_COOKIE"}
+var providerCookieKeySet = map[string]bool{
+	"NETEASE_COOKIE":  true,
+	"QQ_COOKIE":       true,
+	"KUGOU_COOKIE":    true,
+	"KUWO_COOKIE":     true,
+	"MIGU_COOKIE":     true,
+	"BILIBILI_COOKIE": true,
+	"JAMENDO_COOKIE":  true,
+}
+var providerCookieFingerprint string
 
 func main() {
 	loadDotEnvFile(".env")
@@ -100,6 +112,28 @@ func initProviders() {
 		"bilibili": bilibili.New(strings.TrimSpace(os.Getenv("BILIBILI_COOKIE"))),
 		"jamendo":  jamendo.New(strings.TrimSpace(os.Getenv("JAMENDO_COOKIE"))),
 	}
+	providerCookieFingerprint = buildProviderCookieFingerprint()
+}
+
+func refreshProvidersFromDotEnv() {
+	loadDotEnvFileWithOptions(".env", true, providerCookieKeySet)
+	nextFingerprint := buildProviderCookieFingerprint()
+	if nextFingerprint == providerCookieFingerprint {
+		return
+	}
+	initProviders()
+	log.Printf("[music-lib-bridge] provider cookies refreshed from .env")
+}
+
+func buildProviderCookieFingerprint() string {
+	hash := sha256.New()
+	for _, key := range providerCookieKeys {
+		hash.Write([]byte(key))
+		hash.Write([]byte{0})
+		hash.Write([]byte(os.Getenv(key)))
+		hash.Write([]byte{0})
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil))
 }
 
 func getProvider(source string) (provider.MusicProvider, error) {
@@ -127,6 +161,7 @@ func withJSONHeaders(next http.Handler) http.Handler {
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
+	refreshProvidersFromDotEnv()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":      true,
 		"version": "1",
@@ -135,6 +170,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleSearch(w http.ResponseWriter, r *http.Request) {
+	refreshProvidersFromDotEnv()
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -159,7 +195,7 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	items := make([]candidate, 0, min(req.Limit, len(songs)))
+	items := make([]candidate, 0, minInt(req.Limit, len(songs)))
 	for _, song := range songs {
 		items = append(items, toCandidate(song))
 		if len(items) >= req.Limit {
@@ -173,6 +209,7 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleResolve(w http.ResponseWriter, r *http.Request) {
+	refreshProvidersFromDotEnv()
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -295,7 +332,7 @@ func extFromURL(urlValue string) string {
 	if urlValue == "" {
 		return ""
 	}
-	withoutQuery := strings.Split(strings.Split(urlValue, "?" )[0], "#")[0]
+	withoutQuery := strings.Split(strings.Split(urlValue, "?")[0], "#")[0]
 	ext := path.Ext(withoutQuery)
 	if ext == "" {
 		return ""
@@ -322,7 +359,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func min(a, b int) int {
+func minInt(a, b int) int {
 	if a < b {
 		return a
 	}
@@ -338,6 +375,10 @@ func init() {
 }
 
 func loadDotEnvFile(filePath string) {
+	loadDotEnvFileWithOptions(filePath, false, nil)
+}
+
+func loadDotEnvFileWithOptions(filePath string, override bool, allowedKeys map[string]bool) {
 	body, err := os.ReadFile(filePath)
 	if err != nil {
 		return
@@ -353,7 +394,13 @@ func loadDotEnvFile(filePath string) {
 			continue
 		}
 		key := strings.TrimSpace(line[:separator])
-		if key == "" || os.Getenv(key) != "" {
+		if key == "" {
+			continue
+		}
+		if allowedKeys != nil && !allowedKeys[key] {
+			continue
+		}
+		if !override && os.Getenv(key) != "" {
 			continue
 		}
 		value := strings.TrimSpace(line[separator+1:])

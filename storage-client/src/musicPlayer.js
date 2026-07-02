@@ -7,8 +7,10 @@ import { createMusicLibBridgeClient } from "./musicBridge.js";
 const MUSIC_PLAYER_DIR = "music-player";
 const MUSIC_PLAYER_STATE_FILE = "state.json";
 const MUSIC_PLAYER_CACHE_DIR = "cache";
-const DEFAULT_SOURCE = "bilibili";
 const MUSIC_SOURCES = ["qq", "migu", "kuwo", "netease", "bilibili", "jamendo"];
+const CONFIGURED_DEFAULT_SOURCE = String(process.env.MUSIC_PLAYER_DEFAULT_SOURCE || "qq").trim().toLowerCase();
+const DEFAULT_SOURCE = MUSIC_SOURCES.includes(CONFIGURED_DEFAULT_SOURCE) ? CONFIGURED_DEFAULT_SOURCE : "qq";
+const FORCE_DEFAULT_SOURCE_ON_START = process.env.MUSIC_PLAYER_FORCE_DEFAULT_SOURCE === "1";
 const SOURCE_LABELS = {
   qq: "QQ 音乐",
   migu: "咪咕音乐",
@@ -525,6 +527,9 @@ export class GlobalMusicPlayer {
       }
     } catch {
       this.state = createDefaultState();
+    }
+    if (FORCE_DEFAULT_SOURCE_ON_START) {
+      this.state.source = DEFAULT_SOURCE;
     }
     this.normalizeState();
     await this.persist();

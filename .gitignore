@@ -6,3 +6,4 @@ server/data
 web/dist
 storage-client/data
 *.log
+.local
