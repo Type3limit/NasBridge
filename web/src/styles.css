@@ -4890,6 +4890,40 @@ button.chatAttachmentTile:disabled {
   gap: 8px;
 }
 
+
+.chatBotConfirmationPanel {
+  border: 1px solid rgba(245, 158, 11, 0.24);
+  border-radius: 12px;
+  background: rgba(255, 251, 235, 0.72);
+  padding: 10px;
+}
+
+.chatBotConfirmationHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.chatBotConfirmationHeader > div:first-child {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chatBotConfirmationHeader .fui-Text {
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.chatBotConfirmationActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
 .chatBotChildJob {
   display: flex;
   flex-direction: column;

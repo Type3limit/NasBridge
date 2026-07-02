@@ -689,6 +689,13 @@ function formatAgentTraceText(agentTrace = null) {
   const lines = [];
   const snapshot = agentTrace.snapshot && typeof agentTrace.snapshot === "object" ? agentTrace.snapshot : null;
   lines.push(`traceJobId: ${String(agentTrace.jobId || snapshot?.jobId || "")}`);
+  if (agentTrace.pendingConfirmation && typeof agentTrace.pendingConfirmation === "object") {
+    const pending = agentTrace.pendingConfirmation;
+    lines.push(`pendingConfirmation: ${String(pending.tool || pending.confirmation?.operation || "tool").trim()}`);
+    if (pending.confirmation?.reason) {
+      lines.push(`confirmReason: ${String(pending.confirmation.reason).trim()}`);
+    }
+  }
   if (snapshot) {
     lines.push(`snapshot: ${String(snapshot.status || "unknown")}${snapshot.route ? ` · ${snapshot.route}` : ""}`);
     if (snapshot.traceSummary?.lastNode) {
@@ -706,6 +713,31 @@ function formatAgentTraceText(agentTrace = null) {
   return lines.join("\n").trim();
 }
 
+function formatPendingConfirmationText(pendingConfirmation = null) {
+  if (!pendingConfirmation || typeof pendingConfirmation !== "object") {
+    return "";
+  }
+  const confirmation = pendingConfirmation.confirmation && typeof pendingConfirmation.confirmation === "object"
+    ? pendingConfirmation.confirmation
+    : {};
+  const impact = confirmation.impact && typeof confirmation.impact === "object" ? confirmation.impact : {};
+  const lines = [
+    `tool: ${String(pendingConfirmation.tool || confirmation.operation || "unknown").trim()}`,
+    confirmation.riskLevel ? `risk: ${confirmation.riskLevel}` : "",
+    confirmation.reason ? `reason: ${confirmation.reason}` : "",
+    Number.isFinite(Number(impact.targetFileCount)) ? `targetFiles: ${Number(impact.targetFileCount)}` : "",
+    Array.isArray(impact.changedFields) && impact.changedFields.length ? `changedFields: ${impact.changedFields.join(", ")}` : "",
+    confirmation.recoverability ? `recoverability: ${confirmation.recoverability}` : "",
+    confirmation.estimatedDuration ? `estimatedDuration: ${confirmation.estimatedDuration}` : ""
+  ].filter(Boolean);
+  const confirmInput = pendingConfirmation.confirmInput && typeof pendingConfirmation.confirmInput === "object"
+    ? safeStringifyCompact(pendingConfirmation.confirmInput, 1200)
+    : "";
+  if (confirmInput) {
+    lines.push("", "confirmInput:", confirmInput);
+  }
+  return lines.join("\n");
+}
 function mergeMessages(existing, incoming) {
   const map = new Map();
   for (const item of existing || []) {
@@ -1020,6 +1052,7 @@ export default function ChatRoom({
     jobId: "",
     summaryText: "",
     traceText: "",
+    pendingConfirmation: null,
     childJobs: [],
     loading: false,
     truncated: false,
@@ -2266,6 +2299,7 @@ export default function ChatRoom({
       jobId,
       summaryText: cached?.summaryText || "",
       traceText: cached?.traceText || "",
+      pendingConfirmation: cached?.pendingConfirmation || null,
       childJobs: Array.isArray(cached?.childJobs) ? cached.childJobs : [],
       loading: !cached,
       truncated: Boolean(cached?.truncated),
@@ -2283,10 +2317,14 @@ export default function ChatRoom({
         childJobLimit: 20
       });
       const childJobs = Array.isArray(result?.childJobs) ? result.childJobs : [];
+      const pendingConfirmation = result?.agentTrace?.pendingConfirmation && typeof result.agentTrace.pendingConfirmation === "object"
+        ? result.agentTrace.pendingConfirmation
+        : null;
       const next = {
         content: String(result?.log?.content || "").trim() || "暂无日志内容",
         summaryText: formatBotJobSummary(result?.job || null, childJobs),
         traceText: formatAgentTraceText(result?.agentTrace || null),
+        pendingConfirmation,
         childJobs,
         truncated: result?.log?.truncated === true
       };
@@ -2299,6 +2337,7 @@ export default function ChatRoom({
         jobId,
         summaryText: next.summaryText,
         traceText: next.traceText,
+        pendingConfirmation: next.pendingConfirmation,
         childJobs: next.childJobs,
         loading: false,
         truncated: next.truncated,
@@ -2313,6 +2352,7 @@ export default function ChatRoom({
         jobId,
         summaryText: "",
         traceText: "",
+        pendingConfirmation: null,
         childJobs: [],
         loading: false,
         truncated: false,
@@ -3716,6 +3756,37 @@ export default function ChatRoom({
                       <section className="chatBotLogSection">
                         <Caption1>任务概览</Caption1>
                         <pre className="chatBotLogMiniPre">{botLogDialog.summaryText}</pre>
+                      </section>
+                    ) : null}
+                    {botLogDialog.pendingConfirmation ? (
+                      <section className="chatBotLogSection chatBotConfirmationPanel">
+                        <div className="chatBotConfirmationHeader">
+                          <div>
+                            <Caption1>待确认操作</Caption1>
+                            <Text>{String(botLogDialog.pendingConfirmation?.tool || botLogDialog.pendingConfirmation?.confirmation?.operation || "tool")}</Text>
+                          </div>
+                          <div className="chatBotConfirmationActions">
+                            <Button
+                              size="small"
+                              appearance="secondary"
+                              icon={<CopyRegular />}
+                              onClick={() => copyTextToClipboard(
+                                safeStringifyCompact(botLogDialog.pendingConfirmation?.confirmInput || {}, 2000),
+                                "已复制确认参数"
+                              )}
+                            >
+                              复制参数
+                            </Button>
+                            <Button
+                              size="small"
+                              appearance="secondary"
+                              onClick={() => copyTextToClipboard("@ai 确认，继续执行", "已复制确认回复")}
+                            >
+                              复制确认回复
+                            </Button>
+                          </div>
+                        </div>
+                        <pre className="chatBotLogMiniPre">{formatPendingConfirmationText(botLogDialog.pendingConfirmation)}</pre>
                       </section>
                     ) : null}
                     {Array.isArray(botLogDialog.childJobs) && botLogDialog.childJobs.length ? (
