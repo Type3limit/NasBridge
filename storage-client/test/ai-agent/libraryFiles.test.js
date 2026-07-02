@@ -329,6 +329,20 @@ test("file access explanation exposes policy boundaries and tool list", async ()
     const result = await buildFileAccessExplanation(api, { kind: "tools" });
     assert.equal(result.storageRoot, "STORAGE_ROOT");
     assert.equal(result.storageRootConfigured, true);
+    assert.equal(result.currentStatus.storageRoot, "STORAGE_ROOT");
+    assert.equal(result.currentStatus.storageRootConfigured, true);
+    assert.equal(result.currentStatus.exists, true);
+    assert.equal(result.currentStatus.readable, true);
+    assert.equal(result.currentStatus.status, "ok");
+    assert.equal(result.currentStatus.indexSource, "dependency");
+    assert.equal(result.currentStatus.visibleFiles, 1);
+    assert.equal(result.currentStatus.visibleDirectories, 0);
+    assert.equal(result.currentStatus.countsByKind.video, 1);
+    assert.ok(result.currentStatus.hiddenDirsExcluded >= 1);
+    assert.equal(result.currentStatus.policy.storageRootOnly, true);
+    assert.equal(result.currentStatus.policy.allowBinaryRead, false);
+    assert.equal(result.currentStatus.policy.rawAbsolutePathExposed, false);
+    assert.equal(result.currentStatus.policy.writeRequiresConfirmation, true);
     assert.equal(result.policy.root, "STORAGE_ROOT");
     assert.deepEqual(result.policy.allowedRoots, ["STORAGE_ROOT"]);
     assert.equal(result.policy.storageRootConfigured, true);
@@ -359,6 +373,7 @@ test("file access explanation exposes policy boundaries and tool list", async ()
     const organizeAction = result.actionPlan.find((action) => action.tool === "organize_files");
     assert.equal(organizeAction.riskLevel, "high");
     assert.equal(organizeAction.requiresConfirmation, true);
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
   });
 });
 

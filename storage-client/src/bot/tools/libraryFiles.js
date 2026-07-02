@@ -1048,6 +1048,50 @@ export function buildPublicFileAccessPolicy(api = {}) {
   };
 }
 
+async function inspectStorageRootAccess(api = {}) {
+  const root = String(api?.storageRoot || "").trim();
+  const result = {
+    storageRoot: root ? PUBLIC_STORAGE_ROOT_LABEL : "",
+    storageRootConfigured: Boolean(root),
+    exists: false,
+    readable: false,
+    writable: false,
+    status: "error",
+    detail: root ? "storage root unavailable" : "storage root is not configured"
+  };
+  if (!root) {
+    return result;
+  }
+  try {
+    const stat = await fs.promises.stat(root);
+    result.exists = stat.isDirectory();
+    if (!result.exists) {
+      result.detail = "configured storage root is not a directory";
+      return result;
+    }
+  } catch (error) {
+    result.detail = error?.code === "ENOENT"
+      ? "configured storage root does not exist"
+      : `storage root stat failed: ${String(error?.code || "unknown")}`;
+    return result;
+  }
+  try {
+    await fs.promises.access(root, fs.constants.R_OK);
+    result.readable = true;
+  } catch {
+  }
+  try {
+    await fs.promises.access(root, fs.constants.W_OK);
+    result.writable = true;
+  } catch {
+  }
+  result.status = result.readable && result.writable ? "ok" : (result.readable ? "warn" : "error");
+  result.detail = result.readable && result.writable
+    ? "storage root is readable and writable"
+    : `storage root access: readable=${result.readable} writable=${result.writable}`;
+  return result;
+}
+
 function isHiddenRelativePath(relativePath = "") {
   const firstSegment = normalizeRelativePath(relativePath).split("/").filter(Boolean)[0] || "";
   return getHiddenDirectoryNames().includes(firstSegment);
@@ -1373,6 +1417,8 @@ export async function buildMediaSummaryResult(api, input = {}) {
 export async function buildFileAccessExplanation(api, input = {}) {
   const snapshot = await loadLibrarySnapshot(api);
   const kind = String(input.kind || "summary").trim().toLowerCase();
+  const policy = buildPublicFileAccessPolicy(api);
+  const rootAccess = await inspectStorageRootAccess(api);
   const countsByKind = {
     video: snapshot.files.filter((file) => matchesKind(file, "video")).length,
     audio: snapshot.files.filter((file) => matchesKind(file, "audio")).length,
@@ -1380,12 +1426,34 @@ export async function buildFileAccessExplanation(api, input = {}) {
     document: snapshot.files.filter((file) => matchesKind(file, "document")).length,
     subtitle: snapshot.files.filter((file) => matchesKind(file, "subtitle")).length
   };
+  const currentStatus = {
+    ...rootAccess,
+    indexSource: snapshot.indexSource || snapshot.source || "unknown",
+    indexedAt: snapshot.generatedAt || "",
+    latestFileUpdatedAt: snapshot.latestFileUpdatedAt || "",
+    visibleFiles: snapshot.files.length,
+    visibleDirectories: snapshot.directories.length,
+    hiddenDirsExcluded: Array.isArray(snapshot.hiddenDirectories) ? snapshot.hiddenDirectories.length : policy.hiddenDirs.length,
+    skippedDirectories: Array.isArray(snapshot.skippedDirectories) ? snapshot.skippedDirectories.length : 0,
+    countsByKind,
+    policy: {
+      storageRootOnly: policy.storageRootOnly,
+      allowRawTextRead: policy.allowRawTextRead,
+      allowBinaryRead: policy.allowBinaryRead,
+      rawAbsolutePathExposed: policy.rawAbsolutePathExposed,
+      writeRequiresConfirmation: policy.writeRequiresConfirmation,
+      maxListResults: policy.maxListResults,
+      maxInlineTextChars: policy.maxInlineTextChars,
+      maxBatchFiles: policy.maxBatchFiles
+    }
+  };
   return {
     storageRoot: api.storageRoot ? PUBLIC_STORAGE_ROOT_LABEL : "",
     storageRootConfigured: Boolean(api.storageRoot),
     visibleFiles: snapshot.files.length,
     visibleDirectories: snapshot.directories.length,
     countsByKind,
+    currentStatus,
     summary: "AI 可以通过索引、fileId 和相对路径访问 STORAGE_ROOT 内的 NAS 文件元数据、摘要、字幕和受控片段；不能读取任意本机路径、STORAGE_ROOT 外文件或二进制原文。",
     canAccess: {
       indexedFiles: true,
@@ -1401,7 +1469,7 @@ export async function buildFileAccessExplanation(api, input = {}) {
       outsideStorageRoot: false,
       unauditedWrites: false
     },
-    policy: buildPublicFileAccessPolicy(api),
+    policy,
     readableLayers: [
       "Index: 文件名、相对路径、MIME、大小、mtime、标签、摘要/字幕可用性",
       "Metadata: 单文件元数据、标签、摘要/字幕状态",
