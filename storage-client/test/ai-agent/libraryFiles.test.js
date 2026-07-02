@@ -644,6 +644,7 @@ test("image metadata recommends visual analysis rather than video analyze", asyn
     assert.equal(result.files[0].contentAccess.videoOrAudio, false);
     assert.ok(result.files[0].contentAccess.recommendedTools.includes("analyze_file_content"));
     assert.ok(!result.files[0].contentAccess.recommendedTools.includes("invoke_video_analyze"));
+    assert.deepEqual(result.files[0].dependencies.analysis.required, ["ai-vision-model", "storage-root"]);
     assert.equal(result.policy.root, "STORAGE_ROOT");
     assert.ok(result.files[0].nextActions.some((item) => item.includes("analyze_file_content")));
     assert.ok(result.files[0].actionPlan.some((action) => action.tool === "analyze_file_content"));

@@ -496,6 +496,71 @@ test("tool execution preflight blocks analyze_file_content media starts when Whi
   assert.match(api.logs.join("\n"), /tool-call-blocked analyze_file_content/);
 });
 
+test("tool execution preflight blocks image analysis when vision model is unavailable", async () => {
+  const api = createFakeApi();
+  api.dependencies.invokeMultimodalModel = async () => {
+    throw new Error("vision model should not be invoked when preflight blocks the tool");
+  };
+  const observedMessages = await executePendingToolCallsRound({
+    pendingToolCalls: [
+      {
+        id: "call_image",
+        name: "analyze_file_content",
+        input: {
+          fileId: "client:Images/photo.png",
+          mode: "image"
+        }
+      }
+    ],
+    planningMessages: [
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call_image",
+            type: "function",
+            function: {
+              name: "analyze_file_content",
+              arguments: JSON.stringify({
+                fileId: "client:Images/photo.png",
+                mode: "image"
+              })
+            }
+          }
+        ]
+      }
+    ],
+    recentMessages: [],
+    context: { chat: {}, attachments: [] },
+    api,
+    round: 0,
+    healthSnapshot: {
+      overall: "warn",
+      checks: [
+        { id: "ai-model", label: "AI 模型", status: "ok", detail: "文本模型可用" },
+        { id: "ai-vision-model", label: "看图模型", status: "warn", detail: "无法确认看图模型是否支持 vision" },
+        { id: "storage-root", label: "NAS 文件访问", status: "ok", detail: "D:\\NAS；可读写" },
+        { id: "document-text", label: "文档抽取", status: "ok", detail: "可用" }
+      ]
+    }
+  });
+
+  const observation = observedMessages.at(-1);
+  assert.equal(observation.role, "tool");
+  assert.equal(observation.tool_call_id, "call_image");
+  assert.match(observation.content, /"status": "blocked"/);
+  assert.match(observation.content, /"id": "ai-vision-model"/);
+  assert.doesNotMatch(observation.content, /D:\\NAS/);
+  const blockedPayload = JSON.parse(observation.content);
+  assert.deepEqual(blockedPayload.fallbackActions.map((action) => action.tool), ["diagnose_file_access"]);
+  assert.deepEqual(blockedPayload.fallbackActions[0].input, { fileId: "client:Images/photo.png" });
+  assert.ok(blockedPayload.repairCommands.includes("@ai /models vision"));
+  assert.equal(api.toolEvents[0].status, "blocked");
+  assert.equal(api.toolEvents[0].resultSummary.blocker.id, "ai-vision-model");
+  assert.match(api.logs.join("\n"), /tool-call-blocked analyze_file_content: ai-vision-model/);
+});
+
 test("delegated tool results write structured job refs into tool trace events", async () => {
   const api = createFakeApi();
   api.botId = "ai.chat";

@@ -188,6 +188,8 @@ test("health cache uses isolated local dependencies and caches the second snapsh
         assert.equal(storageCheck.fileAccess.fileIdResolution.resolved, 1);
         assert.equal(checks.get("ai-tool-call").status, "ok");
         assert.match(checks.get("ai-tool-call").detail, /JSON plan fallback/);
+        assert.equal(checks.get("ai-vision-model").status, "ok");
+        assert.match(checks.get("ai-vision-model").detail, /支持 vision/);
         assert.equal(checks.get("document-text").status, "ok");
         assert.match(checks.get("document-text").detail, /Office Open XML/);
         assert.equal(checks.get("qq-music-cookie").status, "ok");
@@ -454,7 +456,7 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.deepEqual(byId.get("read_bot_job_log").healthChecks, ["storage-root"]);
   assert.ok(byId.get("invoke_video_analyze").healthChecks.includes("bot-queue"));
   assert.ok(byId.get("analyze_file_content").healthChecks.includes("document-text"));
-  assert.deepEqual(byId.get("describe_image").healthChecks, ["ai-model", "storage-root"]);
+  assert.deepEqual(byId.get("describe_image").healthChecks, ["ai-vision-model", "storage-root"]);
   assert.deepEqual(byId.get("invoke_music_control").healthChecks, ["music-bridge", "qq-music-cookie"]);
   assert.ok(byId.get("invoke_bilibili_downloader").healthChecks.includes("bilibili-auth"));
   assert.ok(byId.get("video.analyze").permissions.includes("storage:metadata:write"));
@@ -544,6 +546,23 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
       }
     ]
   }, { maxItems: 28 });
+  const visionBlockedSummary = formatCapabilityPromptSummary(descriptors, {
+    overall: "warn",
+    checks: [
+      {
+        id: "ai-vision-model",
+        label: "看图模型",
+        status: "warn",
+        detail: "无法从最近 /models 缓存确认看图模型是否支持 vision：text-only"
+      },
+      {
+        id: "storage-root",
+        label: "NAS 文件访问",
+        status: "ok",
+        detail: "STORAGE_ROOT；可读写"
+      }
+    ]
+  }, { maxItems: 28 });
   const artifact = buildCapabilityArtifactSummary(descriptors, {
     overall: "warn",
     generatedAt: "2026-07-02T00:00:00.000Z",
@@ -618,6 +637,8 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.doesNotMatch(JSON.stringify(leakySearchArtifact), /sk-should-not-leak/);
   assert.match(blockedSummary, /invoke_video_analyze: status=warn, ready=blocked, blocker=whisper/);
   assert.match(blockedSummary, /media-summary: .*invoke_video_analyze:blocked\(whisper\)/);
+  assert.match(visionBlockedSummary, /describe_image: status=warn, ready=blocked, blocker=ai-vision-model/);
+  assert.match(visionBlockedSummary, /image-analysis: .*describe_image:blocked\(ai-vision-model\)/);
   const videoAnalyzeArtifact = artifact.capabilities.find((item) => item.id === "invoke_video_analyze");
   assert.equal(videoAnalyzeArtifact.status, "blocked");
   assert.equal(videoAnalyzeArtifact.readiness.ready, false);

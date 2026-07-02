@@ -26,7 +26,7 @@ const BOT_EXECUTION_MODES = {
 
 const BOT_HEALTH_CHECKS = {
   "ai.chat": ["ai-model", "ai-tool-call", "storage-root"],
-  "ai.multimodal-image": ["ai-model", "storage-root"],
+  "ai.multimodal-image": ["ai-vision-model", "storage-root"],
   "music.control": ["music-bridge", "qq-music-cookie"],
   "video.analyze": ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root", "bot-queue"],
   "video.tag": ["ai-model", "ffmpeg", "ffprobe", "whisper", "storage-root", "bot-queue"],
@@ -466,7 +466,7 @@ const TOOL_HEALTH_CHECKS = {
   get_bot_job_status: ["storage-root"],
   read_agent_trace: ["storage-root"],
   read_bot_job_log: ["storage-root"],
-  describe_image: ["ai-model", "storage-root"],
+  describe_image: ["ai-vision-model", "storage-root"],
   search_yyets_show: ["ai-model"],
   download_yyets_episodes: ["storage-root", "bot-queue"]
 };
@@ -474,7 +474,10 @@ const TOOL_HEALTH_CHECKS = {
 const BLOCKING_WARN_HEALTH_CHECKS = {
   "video.analyze": ["whisper"],
   "video.tag": ["whisper"],
+  "ai.multimodal-image": ["ai-vision-model"],
   "music.control": ["music-bridge"],
+  describe_image: ["ai-vision-model"],
+  analyze_file_content: ["ai-vision-model"],
   invoke_video_analyze: ["whisper"],
   analyze_storage_video: ["whisper"],
   invoke_video_tag: ["whisper"],

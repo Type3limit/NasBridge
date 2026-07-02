@@ -544,7 +544,21 @@ function isAnalyzeFileContentMediaStart(toolName = "", input = {}) {
     && (input.startAnalysis === true || input.analyze === true || input.forceAnalyze === true);
 }
 
+function isAnalyzeFileContentImageMode(toolName = "", input = {}) {
+  return String(toolName || "").trim() === "analyze_file_content"
+    && String(input.mode || "").trim().toLowerCase() === "image";
+}
+
 function buildPreflightDescriptor(toolName = "", descriptor = {}, descriptors = [], input = {}) {
+  if (isAnalyzeFileContentImageMode(toolName, input)) {
+    return {
+      ...descriptor,
+      healthChecks: [...new Set([
+        ...((Array.isArray(descriptor.healthChecks) ? descriptor.healthChecks : [])),
+        "ai-vision-model"
+      ])]
+    };
+  }
   if (!isAnalyzeFileContentMediaStart(toolName, input)) {
     return descriptor;
   }
@@ -653,6 +667,9 @@ function buildBlockedToolRepairCommands(blocker = {}) {
   const commands = [];
   if (blockerId === "ai-model" || blockerId === "ai-tool-call") {
     commands.push("@ai /models");
+  }
+  if (blockerId === "ai-vision-model") {
+    commands.push("@ai /models vision");
   }
   if (blockerId === "bot-queue") {
     commands.push("@ai /jobs");

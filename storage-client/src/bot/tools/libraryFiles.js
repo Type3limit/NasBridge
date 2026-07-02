@@ -999,7 +999,7 @@ function getAnalysisDependencyRequirements(analyzeMode = "metadata", hints = {})
     return ["ai-model", "storage-root", "document-text"];
   }
   if (analyzeMode === "image") {
-    return ["ai-model", "storage-root"];
+    return ["ai-vision-model", "storage-root"];
   }
   if (analyzeMode === "text") {
     return ["ai-model", "storage-root"];
@@ -1773,7 +1773,9 @@ function buildMetadataAccessProfile(api = {}, file = {}) {
   const hints = buildContentAccessHints(file);
   const analyzeMode = inferAnalyzeAccessMode(file, hints);
   const analysisDependencies = buildDependencyStatus(getAnalysisDependencyRequirements(analyzeMode, hints), api, {
-    blockingWarnIds: analyzeMode === "media" && hints.videoOrAudio && !hints.aiSummaryAvailable ? ["whisper"] : []
+    blockingWarnIds: analyzeMode === "media" && hints.videoOrAudio && !hints.aiSummaryAvailable
+      ? ["whisper"]
+      : (analyzeMode === "image" ? ["ai-vision-model"] : [])
   });
   const actionPlan = buildConcreteFileAccessActionPlan(file, hints, pathSafe, hiddenDirectory, analysisDependencies)
     .filter((action) => action.id !== "read-metadata");
@@ -2252,7 +2254,9 @@ export async function buildDiagnoseFileAccessResult(api, input = {}) {
   const analyzeMode = inferAnalyzeAccessMode(file, hints);
   const analysisDependencyRequirements = getAnalysisDependencyRequirements(analyzeMode, hints);
   const analysisDependencies = buildDependencyStatus(analysisDependencyRequirements, api, {
-    blockingWarnIds: analyzeMode === "media" && hints.videoOrAudio && !hints.aiSummaryAvailable ? ["whisper"] : []
+    blockingWarnIds: analyzeMode === "media" && hints.videoOrAudio && !hints.aiSummaryAvailable
+      ? ["whisper"]
+      : (analyzeMode === "image" ? ["ai-vision-model"] : [])
   });
   const canReadExcerpt = pathSafe && !hiddenDirectory && (hints.textReadable || hints.subtitleAvailable);
   const canReadMediaSummary = pathSafe && !hiddenDirectory && (hints.media || hints.aiSummaryAvailable || hints.subtitleAvailable);

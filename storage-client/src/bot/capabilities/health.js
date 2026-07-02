@@ -548,6 +548,37 @@ function buildToolCallRoutingCheck(modelSettings = {}, models = [], source = "ca
   };
 }
 
+function buildVisionModelCheck(modelSettings = {}, models = [], source = "cache") {
+  const visionModel = getEffectiveMultimodalModel(modelSettings);
+  if (!visionModel) {
+    return { id: "ai-vision-model", label: "看图模型", status: "error", detail: "未配置看图模型" };
+  }
+  const model = findModelInCatalog(visionModel, models);
+  const modelLabel = parseModelRef(visionModel).modelId || visionModel;
+  if (!model) {
+    return {
+      id: "ai-vision-model",
+      label: "看图模型",
+      status: "warn",
+      detail: `无法从${source}确认看图模型是否支持 vision：${modelLabel}`
+    };
+  }
+  if (model.vision !== true) {
+    return {
+      id: "ai-vision-model",
+      label: "看图模型",
+      status: "error",
+      detail: `当前看图模型未声明 vision 能力：${model.id}`
+    };
+  }
+  return {
+    id: "ai-vision-model",
+    label: "看图模型",
+    status: "ok",
+    detail: `当前看图模型支持 vision：${model.id}`
+  };
+}
+
 async function checkAiModels(modelSettings = {}, signal = null) {
   const textModel = getEffectiveTextModel(modelSettings);
   const visionModel = getEffectiveMultimodalModel(modelSettings);
@@ -664,6 +695,9 @@ export function getHealthRepairHint(checkOrId = "") {
   if (id === "ai-tool-call") {
     return "如果模型不支持原生 tool-call 会自动使用 JSON plan fallback；若判断失败，先运行 @ai /models 刷新模型能力缓存。";
   }
+  if (id === "ai-vision-model") {
+    return "运行 @ai /models vision 查看可用看图模型，再用 @ai /model set-vision <模型名或序号> 设置支持 vision 的模型。";
+  }
   if (id === "storage-root") {
     return "检查 STORAGE_ROOT 是否存在、storage-client 是否有读写权限，并确认索引扫描能访问该目录。";
   }
@@ -706,6 +740,7 @@ export async function collectAiAgentHealth(api = {}, options = {}) {
     : await checkAiModels(options.modelSettings || {}, options.signal || api.signal || null);
   checks.push(aiModelResult.check);
   checks.push(buildToolCallRoutingCheck(options.modelSettings || {}, aiModelResult.models || [], aiModelResult.source || "模型列表"));
+  checks.push(buildVisionModelCheck(options.modelSettings || {}, aiModelResult.models || [], aiModelResult.source || "模型列表"));
   checks.push(await checkStorage(api));
   checks.push(await getDocumentTextExtractionHealth({ pdfToTextPath: api.dependencies?.pdfToTextPath || "" }));
   checks.push(await checkCommandOrPath("ffmpeg", "ffmpeg", api.dependencies?.ffmpegPath || process.env.FFMPEG_PATH || "ffmpeg"));
