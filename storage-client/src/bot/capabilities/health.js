@@ -343,6 +343,16 @@ async function checkBotQueue(api = {}) {
 async function checkStorage(api = {}) {
   const access = await directoryAccess(api.storageRoot || "");
   const policy = buildFileAccessPolicy(api);
+  const baseFileAccess = {
+    rootConfigured: Boolean(String(api.storageRoot || "").trim()),
+    exists: access.exists,
+    readable: access.readable,
+    writable: access.writable,
+    storageRootOnly: policy.storageRootOnly,
+    allowBinaryRead: policy.allowBinaryRead,
+    rawAbsolutePathExposed: policy.rawAbsolutePathExposed,
+    writeRequiresConfirmation: policy.writeRequiresConfirmation
+  };
   const healthPolicy = {
     accessBy: policy.accessBy,
     hiddenDirs: policy.hiddenDirs,
@@ -362,16 +372,28 @@ async function checkStorage(api = {}) {
       label: "NAS 文件访问",
       status: "error",
       detail: `${api.storageRoot || "未配置"}；${access.detail}`,
-      policy: healthPolicy
+      policy: healthPolicy,
+      fileAccess: baseFileAccess
     };
   }
   let snapshotDetail = "";
+  let fileAccess = baseFileAccess;
   try {
     const snapshot = await loadLibrarySnapshot(api);
     const hiddenDirs = Array.isArray(snapshot.hiddenDirectories) && snapshot.hiddenDirectories.length
       ? snapshot.hiddenDirectories
       : policy.hiddenDirs;
     const skippedDirectories = Array.isArray(snapshot.skippedDirectories) ? snapshot.skippedDirectories : [];
+    fileAccess = {
+      ...baseFileAccess,
+      files: snapshot.files.length,
+      directories: snapshot.directories.length,
+      indexSource: snapshot.indexSource || snapshot.source || "unknown",
+      indexedAt: snapshot.generatedAt || "",
+      hiddenDirsExcluded: hiddenDirs.length,
+      skippedDirectories: skippedDirectories.length,
+      latestFileUpdatedAt: snapshot.latestFileUpdatedAt || ""
+    };
     snapshotDetail = [
       `files=${snapshot.files.length}`,
       `dirs=${snapshot.directories.length}`,
@@ -387,7 +409,8 @@ async function checkStorage(api = {}) {
       label: "NAS 文件访问",
       status: "warn",
       detail: `${api.storageRoot}；${access.detail}；索引读取失败：${error?.message || error}`,
-      policy: healthPolicy
+      policy: healthPolicy,
+      fileAccess
     };
   }
   return {
@@ -395,7 +418,8 @@ async function checkStorage(api = {}) {
     label: "NAS 文件访问",
     status: access.writable ? "ok" : "warn",
     detail: `${api.storageRoot}；${access.detail}；${snapshotDetail}`,
-    policy: healthPolicy
+    policy: healthPolicy,
+    fileAccess
   };
 }
 

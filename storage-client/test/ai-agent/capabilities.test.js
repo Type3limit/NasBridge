@@ -161,6 +161,25 @@ test("health cache uses isolated local dependencies and caches the second snapsh
         assert.equal(storageCheck.policy.allowBinaryRead, false);
         assert.equal(storageCheck.policy.storageRootOnly, true);
         assert.ok(storageCheck.policy.hiddenDirs.includes(".nas-bot"));
+        assert.deepEqual({
+          rootConfigured: storageCheck.fileAccess.rootConfigured,
+          exists: storageCheck.fileAccess.exists,
+          readable: storageCheck.fileAccess.readable,
+          writable: storageCheck.fileAccess.writable,
+          files: storageCheck.fileAccess.files,
+          directories: storageCheck.fileAccess.directories,
+          indexSource: storageCheck.fileAccess.indexSource,
+          latestFileUpdatedAt: storageCheck.fileAccess.latestFileUpdatedAt
+        }, {
+          rootConfigured: true,
+          exists: true,
+          readable: true,
+          writable: true,
+          files: 1,
+          directories: 0,
+          indexSource: "dependency",
+          latestFileUpdatedAt: "2026-07-01T00:00:00.000Z"
+        });
         assert.equal(checks.get("ai-tool-call").status, "ok");
         assert.match(checks.get("ai-tool-call").detail, /JSON plan fallback/);
         assert.equal(checks.get("document-text").status, "ok");
@@ -254,6 +273,12 @@ test("storage health scans NAS root and reports hidden directory exclusions", as
         assert.equal(storageCheck.policy.rawAbsolutePathExposed, false);
         assert.equal(storageCheck.policy.allowBinaryRead, false);
         assert.ok(storageCheck.policy.hiddenDirs.includes(".nas-preview-cache"));
+        assert.equal(storageCheck.fileAccess.files, 1);
+        assert.equal(storageCheck.fileAccess.directories, 0);
+        assert.equal(storageCheck.fileAccess.indexSource, "scan");
+        assert.equal(storageCheck.fileAccess.skippedDirectories, 2);
+        assert.equal(storageCheck.fileAccess.allowBinaryRead, false);
+        assert.equal(storageCheck.fileAccess.rawAbsolutePathExposed, false);
       });
     } finally {
       await music.close();
@@ -347,7 +372,29 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
         label: "NAS",
         status: "warn",
         detail: "C:\\Secret\\nas-data is read only",
-        repairHint: "检查 C:\\Secret\\nas-data 的读写权限"
+        repairHint: "检查 C:\\Secret\\nas-data 的读写权限",
+        policy: {
+          storageRootOnly: true,
+          allowBinaryRead: false,
+          rawAbsolutePathExposed: false,
+          writeRequiresConfirmation: true
+        },
+        fileAccess: {
+          rootConfigured: true,
+          exists: true,
+          readable: true,
+          writable: false,
+          files: 42,
+          directories: 7,
+          indexSource: "dependency",
+          indexedAt: "2026-07-02T00:00:00.000Z",
+          hiddenDirsExcluded: 4,
+          skippedDirectories: 2,
+          storageRootOnly: true,
+          allowBinaryRead: false,
+          rawAbsolutePathExposed: false,
+          writeRequiresConfirmation: true
+        }
       }
     ]
   }, { maxItems: 24 });
@@ -379,6 +426,9 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(summary, /file-access-diagnostic: explain_file_access -> search_library_files -> diagnose_file_access/);
   assert.match(summary, /download-into-library: search_bilibili_video -> invoke_bilibili_downloader -> invoke_ytdlp_downloader -> search_yyets_show -> download_yyets_episodes/);
   assert.match(summary, /failure-diagnostic: get_bot_job_status -> read_agent_trace -> read_bot_job_log/);
+  assert.match(summary, /NAS file access snapshot: status=warn, rootConfigured=true, exists=true, readable=true, writable=false, indexedFiles=42, dirs=7, indexSource=dependency/);
+  assert.match(summary, /hiddenDirsExcluded=4, skippedDirs=2/);
+  assert.match(summary, /policy storageRootOnly=true, allowBinaryRead=false, rawAbsolutePathExposed=false, writeRequiresConfirmation=true/);
   assert.match(summary, /fix=检查 \[local-path\] 的读写权限/);
   assert.match(summary, /\[local-path\]/);
   assert.doesNotMatch(summary, /C:\\Secret/);

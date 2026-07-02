@@ -280,6 +280,57 @@ function summarizeCheckForPrompt(check = {}) {
   return `${label}=${status} (${compactDetail})${compactHint ? ` fix=${compactHint}` : ""}`;
 }
 
+function summarizeStorageAccessForPrompt(checks = []) {
+  const storageCheck = (Array.isArray(checks) ? checks : []).find((check) => check?.id === "storage-root");
+  if (!storageCheck) {
+    return "";
+  }
+  const fileAccess = storageCheck.fileAccess && typeof storageCheck.fileAccess === "object"
+    ? storageCheck.fileAccess
+    : {};
+  const policy = storageCheck.policy && typeof storageCheck.policy === "object"
+    ? storageCheck.policy
+    : {};
+  const parts = [
+    `status=${String(storageCheck.status || "unknown").trim() || "unknown"}`
+  ];
+  for (const [key, label] of [
+    ["rootConfigured", "rootConfigured"],
+    ["exists", "exists"],
+    ["readable", "readable"],
+    ["writable", "writable"]
+  ]) {
+    if (typeof fileAccess[key] === "boolean") {
+      parts.push(`${label}=${fileAccess[key]}`);
+    }
+  }
+  if (Number.isFinite(Number(fileAccess.files))) {
+    parts.push(`indexedFiles=${Number(fileAccess.files)}`);
+  }
+  if (Number.isFinite(Number(fileAccess.directories))) {
+    parts.push(`dirs=${Number(fileAccess.directories)}`);
+  }
+  if (String(fileAccess.indexSource || "").trim()) {
+    parts.push(`indexSource=${String(fileAccess.indexSource).trim()}`);
+  }
+  if (String(fileAccess.indexedAt || "").trim()) {
+    parts.push(`indexedAt=${String(fileAccess.indexedAt).trim()}`);
+  }
+  if (Number.isFinite(Number(fileAccess.hiddenDirsExcluded))) {
+    parts.push(`hiddenDirsExcluded=${Number(fileAccess.hiddenDirsExcluded)}`);
+  }
+  if (Number.isFinite(Number(fileAccess.skippedDirectories)) && Number(fileAccess.skippedDirectories) > 0) {
+    parts.push(`skippedDirs=${Number(fileAccess.skippedDirectories)}`);
+  }
+  const policyBits = [
+    `storageRootOnly=${fileAccess.storageRootOnly ?? policy.storageRootOnly ?? "unknown"}`,
+    `allowBinaryRead=${fileAccess.allowBinaryRead ?? policy.allowBinaryRead ?? "unknown"}`,
+    `rawAbsolutePathExposed=${fileAccess.rawAbsolutePathExposed ?? policy.rawAbsolutePathExposed ?? "unknown"}`,
+    `writeRequiresConfirmation=${fileAccess.writeRequiresConfirmation ?? policy.writeRequiresConfirmation ?? "unknown"}`
+  ];
+  return `NAS file access snapshot: ${parts.join(", ")}; policy ${policyBits.join(", ")}.`;
+}
+
 function selectCapabilityWorkflows(descriptors = [], maxWorkflows = 7) {
   const byId = new Map((Array.isArray(descriptors) ? descriptors : []).map((item) => [item.id, item]));
   return CAPABILITY_WORKFLOWS
@@ -416,6 +467,10 @@ export function formatCapabilityPromptSummary(descriptors = [], health = {}, opt
     lines.push(`Unavailable or degraded checks: ${nonOkChecks.map(summarizeCheckForPrompt).join("; ")}.`);
   } else {
     lines.push("Core checks are ok; still verify tool results instead of assuming success.");
+  }
+  const storageAccessSummary = summarizeStorageAccessForPrompt(checks);
+  if (storageAccessSummary) {
+    lines.push(storageAccessSummary);
   }
 
   if (selected.length) {
