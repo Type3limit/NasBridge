@@ -280,6 +280,31 @@ function summarizeCheckForPrompt(check = {}) {
   return `${label}=${status} (${compactDetail})${compactHint ? ` fix=${compactHint}` : ""}`;
 }
 
+function selectCapabilityWorkflows(descriptors = [], maxWorkflows = 7) {
+  const byId = new Map((Array.isArray(descriptors) ? descriptors : []).map((item) => [item.id, item]));
+  return CAPABILITY_WORKFLOWS
+    .filter((workflow) => workflow.tools.some((toolId) => byId.has(toolId)))
+    .slice(0, maxWorkflows)
+    .map((workflow) => ({
+      ...workflow,
+      availableTools: workflow.tools.filter((toolId) => byId.has(toolId))
+    }));
+}
+
+function formatWorkflowToolStatuses(workflow = {}, descriptors = [], health = {}) {
+  const byId = new Map((Array.isArray(descriptors) ? descriptors : []).map((item) => [item.id, item]));
+  return (Array.isArray(workflow.availableTools) ? workflow.availableTools : [])
+    .map((toolId) => {
+      const descriptor = byId.get(toolId);
+      if (!descriptor) {
+        return "";
+      }
+      const availability = summarizeCapabilityAvailability(descriptor, health);
+      return `${toolId}:${availability.status}`;
+    })
+    .filter(Boolean);
+}
+
 export function summarizeCapabilityAvailability(descriptor = {}, health = {}) {
   const checks = new Map((Array.isArray(health.checks) ? health.checks : []).map((check) => [check.id, check]));
   const related = (Array.isArray(descriptor.healthChecks) ? descriptor.healthChecks : [])
@@ -357,6 +382,19 @@ export function formatCapabilityReport(descriptors = [], health = {}) {
       }
     }
   }
+  const workflows = selectCapabilityWorkflows(descriptors, 7);
+  if (workflows.length) {
+    lines.push("", "常用工作流:");
+    for (const workflow of workflows) {
+      const toolChain = workflow.availableTools.join(" -> ");
+      const statuses = formatWorkflowToolStatuses(workflow, descriptors, health);
+      lines.push(`- ${workflow.id} · ${workflow.title}: ${toolChain}`);
+      if (statuses.length) {
+        lines.push(`  - 状态: ${statuses.join(", ")}`);
+      }
+      lines.push(`  - ${workflow.guidance}`);
+    }
+  }
   return lines.join("\n");
 }
 
@@ -388,19 +426,12 @@ export function formatCapabilityPromptSummary(descriptors = [], health = {}, opt
       lines.push(`- ${item.id}: status=${availability.status}, risk=${item.riskLevel}, mode=${item.executionMode}.${examples}`);
     }
   }
-  const workflows = CAPABILITY_WORKFLOWS
-    .filter((workflow) => workflow.tools.some((toolId) => byId.has(toolId)))
-    .slice(0, maxWorkflows);
+  const workflows = selectCapabilityWorkflows(descriptors, maxWorkflows);
   if (workflows.length) {
     lines.push("Recommended task workflows:");
     for (const workflow of workflows) {
-      const toolStatuses = workflow.tools
-        .filter((toolId) => byId.has(toolId))
-        .map((toolId) => {
-          const availability = summarizeCapabilityAvailability(byId.get(toolId), health);
-          return `${toolId}:${availability.status}`;
-        });
-      lines.push(`- ${workflow.id}: ${workflow.tools.filter((toolId) => byId.has(toolId)).join(" -> ")}. status=${toolStatuses.join(", ")}. ${workflow.guidance}`);
+      const toolStatuses = formatWorkflowToolStatuses(workflow, descriptors, health);
+      lines.push(`- ${workflow.id}: ${workflow.availableTools.join(" -> ")}. status=${toolStatuses.join(", ")}. ${workflow.guidance}`);
     }
   }
   lines.push("Use unavailable/degraded capability details to explain blockers before starting dependent jobs. High risk actions require explicit confirmation.");

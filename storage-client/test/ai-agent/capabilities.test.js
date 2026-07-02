@@ -381,6 +381,9 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   assert.match(summary, /\[local-path\]/);
   assert.doesNotMatch(summary, /C:\\Secret/);
   assert.match(report, /video\.analyze/);
+  assert.match(report, /常用工作流/);
+  assert.match(report, /media-summary · Summarize NAS video\/audio: search_library_files -> read_media_summary -> invoke_video_analyze -> get_bot_job_status/);
+  assert.match(report, /failure-diagnostic · Diagnose bot or agent failure: get_bot_job_status -> read_agent_trace -> read_bot_job_log/);
   assert.match(report, /建议\(Whisper\): 配置 WHISPER_CPP_PATH 和 WHISPER_MODEL_PATH/);
 
   const queueReport = formatCapabilityReport(descriptors, {
