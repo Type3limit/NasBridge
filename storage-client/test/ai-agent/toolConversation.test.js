@@ -180,12 +180,18 @@ test("JSON fallback plans, executes, observes, and finishes through tool message
   assert.equal(modelCalls.length, 2);
   assert.deepEqual(
     api.agentEvents.map((event) => event.phase),
-    ["plan_next_step", "observe_result", "plan_next_step"]
+    ["plan_next_step", "decide_continue_or_finish", "observe_result", "plan_next_step", "decide_continue_or_finish"]
   );
   assert.equal(api.agentEvents[0].detail.maxToolRounds, 4);
   assert.equal(api.agentEvents[0].detail.allowMoreToolCalls, true);
-  assert.equal(api.agentEvents[2].detail.maxToolRounds, 4);
-  assert.equal(api.agentEvents[2].detail.allowMoreToolCalls, true);
+  assert.equal(api.agentEvents[1].status, "continue");
+  assert.equal(api.agentEvents[1].detail.decision, "continue");
+  assert.equal(api.agentEvents[1].detail.pendingToolCount, 1);
+  assert.equal(api.agentEvents[3].detail.maxToolRounds, 4);
+  assert.equal(api.agentEvents[3].detail.allowMoreToolCalls, true);
+  assert.equal(api.agentEvents[4].status, "finish");
+  assert.equal(api.agentEvents[4].detail.decision, "finish");
+  assert.equal(api.agentEvents[4].detail.finalAnswerLength, "Found demo.mp4 in Videos.".length);
   assert.equal(api.toolEvents[0].name, "search_library_files");
   assert.equal(api.toolEvents[0].input.__fallback, "json-plan");
 });
@@ -244,6 +250,8 @@ test("native tool-call unsupported errors recover into JSON fallback", async () 
   assert.equal(planned.pendingToolCalls[0].name, "search_library_files");
   assert.equal(api.agentEvents[0].detail.maxToolRounds, 4);
   assert.equal(api.agentEvents[0].detail.allowMoreToolCalls, true);
+  assert.equal(api.agentEvents[1].phase, "decide_continue_or_finish");
+  assert.equal(api.agentEvents[1].status, "continue");
   assert.match(api.logs.join("\n"), /json-tool-fallback round=0/);
 });
 

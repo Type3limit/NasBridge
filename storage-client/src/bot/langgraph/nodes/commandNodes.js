@@ -230,6 +230,22 @@ function formatAgentPlanSummary(planSummary = {}) {
         lines.push(`${prefix} observe: ${details}`);
       }
     }
+    if (Array.isArray(round.decisions) && round.decisions.length) {
+      for (const decision of round.decisions.slice(-2)) {
+        const tools = Array.isArray(decision.pendingTools) && decision.pendingTools.length
+          ? `tools=${decision.pendingTools.map((tool) => tool.name).filter(Boolean).join(", ")}`
+          : "";
+        const details = [
+          decision.status || "",
+          decision.decision ? `decision=${decision.decision}` : "",
+          decision.planStatus ? `plan=${decision.planStatus}` : "",
+          Number.isFinite(Number(decision.pendingToolCount)) ? `pending=${Number(decision.pendingToolCount)}` : "",
+          Number.isFinite(Number(decision.finalAnswerLength)) ? `answerChars=${Number(decision.finalAnswerLength)}` : "",
+          tools
+        ].filter(Boolean).join(" · ");
+        lines.push(`${prefix} decide: ${details}`);
+      }
+    }
   }
   return lines.join("\n");
 }

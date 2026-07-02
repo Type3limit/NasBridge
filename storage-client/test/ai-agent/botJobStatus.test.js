@@ -313,6 +313,26 @@ test("agent trace result summarizes plan and observation events", async () => {
       }),
       JSON.stringify({
         kind: "agent",
+        phase: "decide_continue_or_finish",
+        round: 0,
+        status: "continue",
+        detail: {
+          decision: "continue",
+          planStatus: "tool-requested",
+          pendingToolCount: 1,
+          pendingTools: [
+            {
+              name: "search_library_files",
+              reason: "继续读取 NAS 文件"
+            }
+          ],
+          maxToolRounds: 4,
+          allowMoreToolCalls: true
+        },
+        outputPreview: "search_library_files"
+      }),
+      JSON.stringify({
+        kind: "agent",
         phase: "observe_result",
         round: 0,
         status: "observed",
@@ -329,7 +349,7 @@ test("agent trace result summarizes plan and observation events", async () => {
 
   const trace = await buildAgentTraceResult({ appDataRoot }, { jobId });
 
-  assert.equal(trace.planSummary.count, 2);
+  assert.equal(trace.planSummary.count, 3);
   assert.equal(trace.planSummary.rounds[0].round, 0);
   assert.equal(trace.planSummary.rounds[0].plans[0].fallback, "json-plan");
   assert.equal(trace.planSummary.rounds[0].plans[0].maxToolRounds, 4);
@@ -338,12 +358,15 @@ test("agent trace result summarizes plan and observation events", async () => {
   assert.doesNotMatch(trace.planSummary.rounds[0].plans[0].pendingTools[0].reason, /sk-should-not-leak/);
   assert.equal(trace.planSummary.rounds[0].observations[0].tool, "search_library_files");
   assert.equal(trace.planSummary.rounds[0].observations[0].observationLength, 512);
+  assert.equal(trace.planSummary.rounds[0].decisions[0].decision, "continue");
+  assert.equal(trace.planSummary.rounds[0].decisions[0].pendingToolCount, 1);
   assert.equal(trace.timeline[0].agentPhase, "Plan");
   assert.equal(trace.timeline[0].label, "textPlan:exit");
   assert.equal(trace.timeline[1].detailSummary.maxToolRounds, 4);
   assert.equal(trace.timeline[1].detailSummary.allowMoreToolCalls, true);
   assert.equal(trace.timeline[1].detailSummary.pendingTools[0].name, "search_library_files");
-  assert.equal(trace.timeline[2].detailSummary.tool, "search_library_files");
+  assert.equal(trace.timeline[2].detailSummary.decision, "continue");
+  assert.equal(trace.timeline[3].detailSummary.tool, "search_library_files");
 });
 
 test("agent trace result exposes pending confirmation summary", async () => {

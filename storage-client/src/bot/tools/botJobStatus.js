@@ -516,6 +516,10 @@ function compactTraceAgentDetail(detail = null) {
     model: String(detail.model || "").trim(),
     fallback: String(detail.fallback || "").trim(),
     finishReason: String(detail.finishReason || "").trim(),
+    decision: String(detail.decision || "").trim(),
+    planStatus: String(detail.planStatus || "").trim(),
+    pendingToolCount: Number.isFinite(Number(detail.pendingToolCount)) ? Number(detail.pendingToolCount) : null,
+    finalAnswerLength: Number.isFinite(Number(detail.finalAnswerLength)) ? Number(detail.finalAnswerLength) : null,
     pendingTools,
     parseError: redactSensitiveText(String(detail.parseError || "").trim()).slice(0, 240),
     retryReason: redactSensitiveText(String(detail.retryReason || "").trim()).slice(0, 240),
@@ -654,7 +658,8 @@ function ensurePlanRound(rounds, roundValue) {
     rounds.set(key, {
       round: Number(key),
       plans: [],
-      observations: []
+      observations: [],
+      decisions: []
     });
   }
   return rounds.get(key);
@@ -674,7 +679,7 @@ function buildTracePlanSummary(events = []) {
       continue;
     }
     const phase = String(event.phase || "").trim();
-    if (phase !== "plan_next_step" && phase !== "observe_result") {
+    if (phase !== "plan_next_step" && phase !== "observe_result" && phase !== "decide_continue_or_finish") {
       continue;
     }
     count += 1;
@@ -703,7 +708,7 @@ function buildTracePlanSummary(events = []) {
         return true;
       })));
       latest = { phase, round: round.round, status: plan.status, pendingTools: plan.pendingTools };
-    } else {
+    } else if (phase === "observe_result") {
       const observation = {
         status: String(event.status || "").trim(),
         tool: detail.tool || "",
@@ -713,6 +718,30 @@ function buildTracePlanSummary(events = []) {
       };
       round.observations.push(Object.fromEntries(Object.entries(observation).filter(([, value]) => value !== null && value !== "")));
       latest = { phase, round: round.round, status: observation.status, tool: observation.tool };
+    } else {
+      const decision = {
+        status: String(event.status || "").trim(),
+        decision: detail.decision || "",
+        planStatus: detail.planStatus || "",
+        pendingToolCount: detail.pendingToolCount ?? null,
+        pendingTools: Array.isArray(detail.pendingTools) ? detail.pendingTools : [],
+        finalAnswerLength: detail.finalAnswerLength ?? null,
+        parseError: detail.parseError || "",
+        finishReason: detail.finishReason || "",
+        maxToolRounds: detail.maxToolRounds ?? null,
+        allowMoreToolCalls: detail.allowMoreToolCalls ?? null,
+        outputPreview: compactAgentPreview(event.outputPreview || "")
+      };
+      round.decisions.push(Object.fromEntries(Object.entries(decision).filter(([, value]) => {
+        if (value === null || value === "") {
+          return false;
+        }
+        if (Array.isArray(value)) {
+          return value.length > 0;
+        }
+        return true;
+      })));
+      latest = { phase, round: round.round, status: decision.status, decision: decision.decision };
     }
   }
   const normalizedRounds = [...rounds.values()].sort((left, right) => left.round - right.round);

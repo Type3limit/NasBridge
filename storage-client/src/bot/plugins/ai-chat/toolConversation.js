@@ -424,6 +424,43 @@ async function recordAgentObservationEvent(api = {}, { round = 0, toolName = "",
   });
 }
 
+async function recordAgentDecisionEvent(api = {}, {
+  round = 0,
+  planStatus = "",
+  pendingToolCalls = [],
+  finalAnswer = "",
+  parseError = "",
+  finishReason = "",
+  maxToolRounds = null,
+  allowMoreToolCalls = null
+} = {}) {
+  const pendingTools = summarizePendingToolCalls(pendingToolCalls);
+  const decision = pendingTools.length ? "continue" : "finish";
+  const status = decision === "continue"
+    ? "continue"
+    : (String(planStatus || "").trim() === "parse-failed" ? "finish-with-error" : "finish");
+  const safeMaxToolRounds = Number(maxToolRounds);
+  await api?.traceHooks?.recordAgentEvent?.({
+    phase: "decide_continue_or_finish",
+    round,
+    status,
+    detail: {
+      decision,
+      planStatus: String(planStatus || "").trim(),
+      pendingToolCount: pendingTools.length,
+      pendingTools,
+      finalAnswerLength: String(finalAnswer || "").length,
+      parseError: String(parseError || "").trim(),
+      finishReason: String(finishReason || "").trim(),
+      maxToolRounds: Number.isFinite(safeMaxToolRounds) ? Math.max(0, Math.floor(safeMaxToolRounds)) : null,
+      allowMoreToolCalls: typeof allowMoreToolCalls === "boolean" ? allowMoreToolCalls : null
+    },
+    outputPreview: pendingTools.length
+      ? pendingTools.map((tool) => tool.name).filter(Boolean).join(", ")
+      : previewText(finalAnswer)
+  });
+}
+
 function redactLocalPaths(value = "") {
   return String(value || "")
     .replace(/[A-Za-z]:[\\/][^\s；,，]+/g, "[local-path]")
@@ -1144,6 +1181,15 @@ async function invokeJsonFallbackPlanningRound({
       maxToolRounds,
       allowMoreToolCalls
     });
+    await recordAgentDecisionEvent(api, {
+      round,
+      planStatus: "tool-requested",
+      pendingToolCalls: [parsed.toolCall],
+      finalAnswer: "",
+      finishReason: result.finishReason || "",
+      maxToolRounds,
+      allowMoreToolCalls
+    });
     return {
       planningMessages: nextPlanningMessages,
       pendingToolCalls: [parsed.toolCall],
@@ -1155,16 +1201,28 @@ async function invokeJsonFallbackPlanningRound({
     };
   }
 
+  const finalPlanStatus = parsed.ok ? "final-answer" : "parse-failed";
+  const finalAnswer = parsed.finalAnswer || result.text || "";
   await recordAgentPlanningEvent(api, {
     round,
-    status: parsed.ok ? "final-answer" : "parse-failed",
+    status: finalPlanStatus,
     model: result.model || model,
     fallback: "json-plan",
     finishReason: result.finishReason || "",
     pendingToolCalls: [],
-    text: parsed.finalAnswer || result.text || "",
+    text: finalAnswer,
     parseError: parsed.ok ? "" : parsed.error,
     retryReason,
+    maxToolRounds,
+    allowMoreToolCalls
+  });
+  await recordAgentDecisionEvent(api, {
+    round,
+    planStatus: finalPlanStatus,
+    pendingToolCalls: [],
+    finalAnswer,
+    parseError: parsed.ok ? "" : parsed.error,
+    finishReason: result.finishReason || "",
     maxToolRounds,
     allowMoreToolCalls
   });
@@ -1244,14 +1302,24 @@ export async function invokeToolAwarePlanningRound({ messages, recentMessages, c
   if (pendingToolCalls.length) {
     planningMessages.push(createToolCallAssistantMessage(result));
   }
+  const planStatus = pendingToolCalls.length ? "tool-requested" : "final-answer";
   await recordAgentPlanningEvent(api, {
     round,
-    status: pendingToolCalls.length ? "tool-requested" : "final-answer",
+    status: planStatus,
     model: result.model || model,
     fallback: "",
     finishReason: result.finishReason || "",
     pendingToolCalls,
     text: result.text || "",
+    maxToolRounds,
+    allowMoreToolCalls
+  });
+  await recordAgentDecisionEvent(api, {
+    round,
+    planStatus,
+    pendingToolCalls,
+    finalAnswer: result.text || "",
+    finishReason: result.finishReason || "",
     maxToolRounds,
     allowMoreToolCalls
   });

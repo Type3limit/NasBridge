@@ -86,6 +86,13 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
           status: "observed",
           tool: "invoke_video_analyze",
           observationLength: 256
+        }],
+        decisions: [{
+          status: "continue",
+          decision: "continue",
+          planStatus: "tool-requested",
+          pendingToolCount: 1,
+          pendingTools: [{ name: "invoke_video_analyze" }]
         }]
       }]
     },
@@ -165,6 +172,7 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
   assert.match(body, /limit=4/);
   assert.match(body, /toolsAllowed=yes/);
   assert.match(body, /tools=invoke_video_analyze/);
+  assert.match(body, /decide: continue · decision=continue · plan=tool-requested · pending=1 · tools=invoke_video_analyze/);
   assert.match(body, /子任务: failed 1/);
   assert.match(body, /video\.analyze · botjob_child · failed/);
   assert.match(body, /命令：@ai \/job botjob_child · @ai \/log botjob_child · @ai \/trace botjob_child/);
