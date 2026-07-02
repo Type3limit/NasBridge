@@ -6,7 +6,7 @@ import { compressAiSessionContext } from "../../plugins/ai-chat/services/compres
 import { getEffectiveMultimodalModel, getEffectiveTextModel, writeAiModelSettings } from "../../plugins/ai-chat/services/modelSettings.js";
 import { buildCapabilityDescriptors, formatCapabilityReport } from "../../capabilities/registry.js";
 import { collectAiAgentHealth, formatHealthReport } from "../../capabilities/health.js";
-import { buildAgentTraceResult, buildBotJobStatusResult } from "../../tools/botJobStatus.js";
+import { buildAgentTraceResult, buildBotJobLogBundle, buildBotJobStatusResult } from "../../tools/botJobStatus.js";
 import { getDefaultTextModelName, listAvailableModels, resolveModelReference } from "../../tools/llmClient.js";
 
 const MODEL_PROVIDER_SEPARATOR = "::";
@@ -234,6 +234,40 @@ export function formatBotJobStatusReport(status = {}) {
   }
   lines.push("");
   lines.push("查看 agent 执行细节：@ai /trace <jobId>");
+  return lines.join("\n");
+}
+
+export function formatBotJobLogReport(bundle = {}) {
+  const jobId = String(bundle.jobId || bundle.log?.jobId || "").trim();
+  if (!bundle.job && !bundle.log?.content) {
+    return jobId ? `没有找到 ${jobId} 的任务或日志。` : "没有找到可显示的 bot 日志。";
+  }
+  const lines = [`Bot 日志：${jobId || "unknown"}`];
+  if (bundle.job) {
+    lines.push(formatBotJobLine(bundle.job));
+  }
+  const childJobs = Array.isArray(bundle.childJobs) ? bundle.childJobs : [];
+  if (childJobs.length) {
+    lines.push(`子任务：${childJobs.length}`);
+    for (const child of childJobs.slice(0, 5)) {
+      lines.push(formatBotJobLine(child, "  -"));
+    }
+  }
+  const trace = bundle.agentTrace;
+  if (trace?.recoveryHint?.nextAction) {
+    lines.push(`恢复建议：${trace.recoveryHint.nextAction}`);
+  }
+  const content = String(bundle.log?.content || "").trim();
+  lines.push("");
+  lines.push(bundle.log?.truncated ? "日志尾部（已截断）:" : "日志:");
+  lines.push(content ? "```text" : "（没有日志内容）");
+  if (content) {
+    lines.push(content.slice(-12_000));
+    lines.push("```");
+  }
+  lines.push("");
+  lines.push("查看任务状态：@ai /job " + (jobId || "<jobId>"));
+  lines.push("查看 agent trace：@ai /trace " + (jobId || "<jobId>"));
   return lines.join("\n");
 }
 
@@ -515,6 +549,41 @@ export async function handleAiChatCommandRoute(state = {}) {
             count: status.count || 0,
             missing: status.missing || [],
             jobs: status.jobs || []
+          }]
+        }
+      };
+    }
+
+    if (modelDirective.command.type === "log") {
+      const jobId = String(modelDirective.command.jobId || "").trim();
+      const bundle = await buildBotJobLogBundle(api, {
+        jobId,
+        includeChildJobs: true,
+        includeTrace: true,
+        maxBytes: 16_000,
+        maxTraceEvents: 24
+      });
+      const body = formatBotJobLogReport(bundle);
+      return {
+        result: {
+          chatReply: await api.publishChatReply({
+            text: body,
+            card: {
+              type: "ai-answer",
+              status: bundle.job ? "succeeded" : "failed",
+              title: "Bot 任务日志",
+              subtitle: withSessionSubtitle(jobId || "unknown", activeSession),
+              body
+            }
+          }),
+          importedFiles: [],
+          artifacts: [{
+            type: "bot-job-log",
+            jobId: bundle.jobId || jobId,
+            job: bundle.job || null,
+            log: bundle.log || null,
+            childJobs: Array.isArray(bundle.childJobs) ? bundle.childJobs : [],
+            agentTrace: bundle.agentTrace || null
           }]
         }
       };

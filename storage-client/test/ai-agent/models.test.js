@@ -71,6 +71,14 @@ test("model directive parser recognizes model commands and filters", () => {
     jobId: "botjob_demo",
     limit: 1
   });
+  assert.deepEqual(parseModelDirective("/log botjob_demo").command, {
+    type: "log",
+    jobId: "botjob_demo"
+  });
+  assert.deepEqual(parseModelDirective("/job log botjob_demo").command, {
+    type: "log",
+    jobId: "botjob_demo"
+  });
   assert.deepEqual(parseModelDirective("/model set DeepSeek V4 Pro").command, {
     type: "set",
     model: "DeepSeek V4 Pro"

@@ -138,6 +138,19 @@ export function parseModelDirective(rawPrompt = "") {
     };
   }
 
+  const jobLogCommand = prompt.match(/^\/(?:log\s+|job\s+log\s+)([A-Za-z0-9_-]+)\s*$/i);
+  if (jobLogCommand?.[1]) {
+    return {
+      prompt: "",
+      modelOverride: "",
+      inspectOnly: false,
+      command: {
+        type: "log",
+        jobId: String(jobLogCommand[1] || "").trim()
+      }
+    };
+  }
+
   const jobStatusCommand = prompt.match(/^\/job(?:\s+status)?\s+([A-Za-z0-9_-]+)\s*$/i);
   if (jobStatusCommand?.[1]) {
     return {

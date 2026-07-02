@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { BotJobStore } from "../../src/bot/jobStore.js";
 import {
+  formatBotJobLogReport,
   formatBotJobStatusReport,
   formatAgentTraceReport,
   handleAiChatCommandRoute
@@ -134,6 +135,42 @@ test("formatBotJobStatusReport summarizes jobs, child jobs, and recovery hints",
   assert.match(body, /@ai \/trace <jobId>/);
 });
 
+test("formatBotJobLogReport summarizes redacted log and child jobs", () => {
+  const body = formatBotJobLogReport({
+    jobId: "botjob_parent",
+    job: {
+      jobId: "botjob_parent",
+      botId: "ai.chat",
+      status: "failed",
+      phase: "failed",
+      progress: { label: "Failed", percent: 99 }
+    },
+    log: {
+      jobId: "botjob_parent",
+      content: "[2026-07-02T00:00:00.000Z] OPENAI_API_KEY=***\n[2026-07-02T00:00:01.000Z] failed\n",
+      truncated: false
+    },
+    childJobs: [{
+      jobId: "botjob_child",
+      botId: "video.analyze",
+      status: "failed",
+      phase: "failed"
+    }],
+    agentTrace: {
+      recoveryHint: {
+        nextAction: "修复模型后重试"
+      }
+    }
+  });
+
+  assert.match(body, /Bot 日志：botjob_parent/);
+  assert.match(body, /ai\.chat · botjob_parent · failed/);
+  assert.match(body, /video\.analyze · botjob_child · failed/);
+  assert.match(body, /OPENAI_API_KEY=\*\*\*/);
+  assert.match(body, /恢复建议：修复模型后重试/);
+  assert.match(body, /@ai \/job botjob_parent/);
+});
+
 test("trace command route publishes latest agent trace report", async () => {
   const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-trace-command-"));
   const jobId = "botjob_trace_command";
@@ -237,6 +274,89 @@ test("trace command route publishes latest agent trace report", async () => {
     assert.equal(result.result.artifacts[0].planSummary.rounds[0].plans[0].pendingTools[0].name, "read_agent_trace");
     assert.equal(result.result.artifacts[0].childJobCount, 1);
     assert.equal(result.result.artifacts[0].childJobs[0].jobId, "botjob_trace_child");
+  } finally {
+    await fs.rm(appDataRoot, { recursive: true, force: true });
+  }
+});
+
+test("log command route publishes redacted bot job log bundle", async () => {
+  const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-log-command-"));
+  try {
+    const store = new BotJobStore({ rootDir: appDataRoot });
+    await store.save({
+      jobId: "botjob_parent",
+      botId: "ai.chat",
+      status: "failed",
+      phase: "failed",
+      progress: { label: "Failed", percent: 99, details: null },
+      input: {},
+      options: {},
+      result: {},
+      audit: {},
+      createdAt: "2026-07-02T00:00:00.000Z",
+      updatedAt: "2026-07-02T00:00:01.000Z"
+    });
+    await store.save({
+      jobId: "botjob_child",
+      botId: "video.analyze",
+      status: "failed",
+      phase: "failed",
+      progress: { label: "Whisper failed", percent: 12, details: null },
+      input: {},
+      options: {
+        parentJobId: "botjob_parent",
+        delegatedBy: "ai.chat",
+        toolName: "invoke_video_analyze"
+      },
+      result: {},
+      audit: {},
+      error: { message: "WHISPER_MODEL_PATH missing" },
+      createdAt: "2026-07-02T00:00:02.000Z",
+      updatedAt: "2026-07-02T00:00:03.000Z"
+    });
+    await store.appendLog("botjob_parent", "OPENAI_API_KEY=sk-should-not-leak-1234567890");
+    await store.appendLog("botjob_parent", "video analyze failed");
+    await store.waitForPendingWrite("botjob_parent");
+    await store.waitForPendingWrite("botjob_child");
+    await store.waitForPendingLog("botjob_parent");
+
+    const replies = [];
+    const api = {
+      appDataRoot,
+      signal: null,
+      throwIfCancelled() {},
+      getJob: (jobId) => store.get(jobId),
+      async publishChatReply(payload) {
+        replies.push(payload);
+        return {
+          id: "reply_log",
+          text: payload.text,
+          card: payload.card
+        };
+      }
+    };
+
+    const result = await handleAiChatCommandRoute({
+      prepared: {
+        api,
+        modelDirective: {
+          command: {
+            type: "log",
+            jobId: "botjob_parent"
+          }
+        },
+        modelSettings: {}
+      }
+    });
+
+    assert.equal(replies[0].card.title, "Bot 任务日志");
+    assert.equal(replies[0].card.status, "succeeded");
+    assert.match(result.result.chatReply.text, /Bot 日志：botjob_parent/);
+    assert.match(result.result.chatReply.text, /OPENAI_API_KEY=\*\*\*/);
+    assert.doesNotMatch(result.result.chatReply.text, /sk-should-not-leak/);
+    assert.match(result.result.chatReply.text, /video\.analyze · botjob_child · failed/);
+    assert.equal(result.result.artifacts[0].type, "bot-job-log");
+    assert.equal(result.result.artifacts[0].childJobs[0].jobId, "botjob_child");
   } finally {
     await fs.rm(appDataRoot, { recursive: true, force: true });
   }
