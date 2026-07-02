@@ -376,6 +376,124 @@ test("models command refresh migrates display names to executable model refs", a
   }
 });
 
+test("model command rejects non-vision models for vision defaults", async () => {
+  const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-model-vision-command-"));
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => JSON.stringify({
+        data: [
+          {
+            id: "deepseek-v4-pro",
+            name: "DeepSeek V4 Pro",
+            capabilities: { supports: { tool_calls: false } }
+          },
+          {
+            id: "gpt-4.1-2025-04-14",
+            name: "GPT 4.1",
+            capabilities: { supports: { tool_calls: true, vision: true } }
+          }
+        ]
+      })
+    });
+    await withEnv({
+      AI_PROVIDER: "openai",
+      OPENAI_BASE_URL: "https://example.invalid/v1",
+      OPENAI_API_KEY: "sk-test",
+      OPENAI_MODEL: "deepseek-v4-pro"
+    }, async () => {
+      const api = {
+        appDataRoot,
+        signal: null,
+        throwIfCancelled() {},
+        async publishChatReply(payload) {
+          return {
+            id: "reply_model_settings",
+            text: payload.text,
+            card: payload.card
+          };
+        }
+      };
+      const modelSettings = {
+        textModel: "openai::deepseek-v4-pro",
+        multimodalModel: "",
+        lastListedModels: [
+          {
+            id: "openai::deepseek-v4-pro",
+            modelId: "deepseek-v4-pro",
+            provider: "openai",
+            name: "DeepSeek V4 Pro",
+            toolCalls: false,
+            vision: false
+          },
+          {
+            id: "openai::gpt-4.1-2025-04-14",
+            modelId: "gpt-4.1-2025-04-14",
+            provider: "openai",
+            name: "GPT 4.1",
+            toolCalls: true,
+            vision: true
+          }
+        ]
+      };
+
+      await assert.rejects(
+        () => handleAiChatCommandRoute({
+          prepared: {
+            api,
+            modelDirective: {
+              command: {
+                type: "set-vision",
+                model: "DeepSeek V4 Pro"
+              }
+            },
+            modelSettings
+          }
+        }),
+        /无法设置看图模型：openai::deepseek-v4-pro 未声明 vision 能力/
+      );
+
+      await assert.rejects(
+        () => handleAiChatCommandRoute({
+          prepared: {
+            api,
+            modelDirective: {
+              command: {
+                type: "set-all",
+                model: "DeepSeek V4 Pro"
+              }
+            },
+            modelSettings
+          }
+        }),
+        /无法设置文本和看图模型：openai::deepseek-v4-pro 未声明 vision 能力/
+      );
+
+      await handleAiChatCommandRoute({
+        prepared: {
+          api,
+          modelDirective: {
+            command: {
+              type: "set-vision",
+              model: "GPT 4.1"
+            }
+          },
+          modelSettings
+        }
+      });
+      const settings = await readAiModelSettings(appDataRoot);
+      assert.equal(settings.textModel, "openai::deepseek-v4-pro");
+      assert.equal(settings.multimodalModel, "openai::gpt-4.1-2025-04-14");
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(appDataRoot, { recursive: true, force: true });
+  }
+});
+
 test("health command route publishes status badges", async () => {
   const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-health-command-"));
   const storageRoot = path.join(appDataRoot, "storage");

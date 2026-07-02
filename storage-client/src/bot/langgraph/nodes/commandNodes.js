@@ -680,8 +680,14 @@ async function resolveModelForSettings(rawModel = "", modelSettings = {}, api = 
     cachedModels: Array.isArray(modelSettings.lastListedModels) ? modelSettings.lastListedModels : [],
     signal: api.signal
   });
+  const purposeLabel = purpose === "vision"
+    ? "看图"
+    : (purpose === "all" ? "文本和看图" : "文本");
   if (!result.ok) {
-    throw new Error(`无法设置${purpose === "vision" ? "看图" : "文本"}模型：${result.reason}`);
+    throw new Error(`无法设置${purposeLabel}模型：${result.reason}`);
+  }
+  if ((purpose === "vision" || purpose === "all") && result.model?.vision !== true) {
+    throw new Error(`无法设置${purposeLabel}模型：${result.modelRef} 未声明 vision 能力。请先执行 @ai /models vision 查看可用看图模型，或使用 @ai /model set <模型名> 仅更新文本模型。`);
   }
   return {
     ...result.model,
@@ -1035,7 +1041,7 @@ export async function handleAiChatCommandRoute(state = {}) {
       const model = await resolveModelForSettings(modelDirective.command.model, modelSettings, api, "vision");
       nextSettings.multimodalModel = model.id;
     } else if (modelDirective.command.type === "set-all") {
-      const model = await resolveModelForSettings(modelDirective.command.model, modelSettings, api, "text");
+      const model = await resolveModelForSettings(modelDirective.command.model, modelSettings, api, "all");
       nextSettings.textModel = model.id;
       nextSettings.multimodalModel = model.id;
     } else if (modelDirective.command.type === "reset") {
