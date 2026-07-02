@@ -19,6 +19,7 @@ import {
 } from "../../src/bot/plugins/ai-chat/parsers/modelDirectives.js";
 import {
   encodeModelRef,
+  invokeTextModelStream,
   parseModelRef,
   resolveModelReference
 } from "../../src/bot/tools/llmClient.js";
@@ -43,6 +44,29 @@ const cachedModels = [
     vision: true
   }
 ];
+
+async function withEnv(vars, fn) {
+  const previous = new Map();
+  for (const [key, value] of Object.entries(vars)) {
+    previous.set(key, Object.prototype.hasOwnProperty.call(process.env, key) ? process.env[key] : undefined);
+    if (value === undefined || value === null) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of previous.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
 
 test("model directive parser recognizes model commands and filters", () => {
   assert.deepEqual(parseModelDirective("/model use 2").command, {
@@ -186,4 +210,44 @@ test("model capability filters separate tool-call and vision models", () => {
     "openai::gpt-4.1-2025-04-14"
   ]);
   assert.equal(filterModelsByCapability(cachedModels, "all").length, 2);
+});
+
+test("stream model errors include actionable model repair hints", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 400,
+    statusText: "Bad Request",
+    body: null,
+    text: async () => JSON.stringify({
+      error: {
+        message: "Model DeepSeek V4 Pro is not supported"
+      }
+    })
+  });
+  try {
+    await withEnv({
+      AI_PROVIDER: "openai",
+      OPENAI_BASE_URL: "https://example.invalid/v1",
+      OPENAI_API_KEY: "sk-test",
+      OPENAI_MODEL: "DeepSeek V4 Pro"
+    }, async () => {
+      await assert.rejects(
+        () => invokeTextModelStream({
+          model: "openai::DeepSeek V4 Pro",
+          messages: [{ role: "user", content: "hello" }]
+        }),
+        (error) => {
+          const message = String(error?.message || "");
+          assert.match(message, /AI model stream failed/);
+          assert.match(message, /当前请求模型=openai::DeepSeek V4 Pro/);
+          assert.match(message, /@ai \/models/);
+          assert.match(message, /@ai \/model use <序号>/);
+          return true;
+        }
+      );
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

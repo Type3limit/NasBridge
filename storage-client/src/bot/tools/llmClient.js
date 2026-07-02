@@ -882,6 +882,7 @@ async function invokeChatCompletion(body = {}) {
 
 async function invokeChatCompletionStream(body = {}, handlers = {}) {
   const { _provider = "", _mode = "text", ...requestBody } = body;
+  const requestedModel = String(requestBody.model || "").trim();
   const resolved = resolveProviderAndModel(requestBody.model || "", _mode);
   requestBody.model = resolved.modelId;
 
@@ -902,7 +903,13 @@ async function invokeChatCompletionStream(body = {}, handlers = {}) {
   }
   if (!response.ok || !response.body) {
     const rawText = await response.text().catch(() => "");
-    throw new Error(`AI model stream failed: ${rawText || `${response.status} ${response.statusText}`}`.trim());
+    let payload = null;
+    try {
+      payload = rawText ? JSON.parse(rawText) : null;
+    } catch {
+    }
+    const detail = String(payload?.error?.message || rawText || `${response.status} ${response.statusText}`).trim();
+    throw new Error(`AI model stream failed: ${detail}${buildModelRequestFailureHint(detail, resolved, requestedModel)}`);
   }
 
   const reader = response.body.getReader();
