@@ -767,25 +767,31 @@ function buildTimelineLabel(event = {}) {
 }
 
 function buildTraceTimeline(events = []) {
-  return (Array.isArray(events) ? events : []).map((event, index) => ({
-    index: index + 1,
-    sequence: Number.isFinite(Number(event.sequence)) ? Number(event.sequence) : null,
-    at: String(event.at || "").trim(),
-    kind: String(event.kind || "").trim(),
-    label: buildTimelineLabel(event),
-    status: String(event.status || "").trim(),
-    round: Number.isFinite(Number(event.round)) ? Number(event.round) : null,
-    node: String(event.node || "").trim(),
-    agentPhase: String(event.agentPhase || "").trim(),
-    phase: String(event.phase || "").trim(),
-    tool: String(event.tool || "").trim(),
-    durationMs: Number.isFinite(Number(event.durationMs)) ? Number(event.durationMs) : null,
-    detailSummary: String(event.kind || "").trim() === "agent" ? compactTraceAgentDetail(event.detail) : null,
-    outputPreview: String(event.outputPreview || "").trim().slice(0, 300),
-    inputSummary: event.inputSummary && typeof event.inputSummary === "object" ? redactValue(event.inputSummary) : null,
-    resultSummary: compactTraceResultSummary(event.resultSummary),
-    errorSummary: compactTraceErrorSummary(event.errorSummary)
-  })).filter((item) => item.kind || item.label);
+  return (Array.isArray(events) ? events : []).map((event, index) => {
+    const step = index + 1;
+    return {
+      step,
+      index: step,
+      sequence: Number.isFinite(Number(event.sequence)) ? Number(event.sequence) : null,
+      at: String(event.at || "").trim(),
+      startedAt: String(event.startedAt || "").trim(),
+      finishedAt: String(event.finishedAt || "").trim(),
+      kind: String(event.kind || "").trim(),
+      label: buildTimelineLabel(event),
+      status: String(event.status || "").trim(),
+      round: Number.isFinite(Number(event.round)) ? Number(event.round) : null,
+      node: String(event.node || "").trim(),
+      agentPhase: String(event.agentPhase || "").trim(),
+      phase: String(event.phase || "").trim(),
+      tool: String(event.tool || "").trim(),
+      durationMs: Number.isFinite(Number(event.durationMs)) ? Number(event.durationMs) : null,
+      detailSummary: String(event.kind || "").trim() === "agent" ? compactTraceAgentDetail(event.detail) : null,
+      outputPreview: String(event.outputPreview || "").trim().slice(0, 300),
+      inputSummary: event.inputSummary && typeof event.inputSummary === "object" ? redactValue(event.inputSummary) : null,
+      resultSummary: compactTraceResultSummary(event.resultSummary),
+      errorSummary: compactTraceErrorSummary(event.errorSummary)
+    };
+  }).filter((item) => item.kind || item.label);
 }
 
 function compactTraceErrorSummary(errorSummary = null) {

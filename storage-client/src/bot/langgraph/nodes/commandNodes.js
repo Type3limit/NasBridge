@@ -510,7 +510,7 @@ function formatTraceTimelineItem(item = {}) {
   const nextAction = String(resultSummary.nextAction || "").trim();
   const blockedReason = String(resultSummary.blockedReason || "").trim();
   return [
-    `- ${item.index || "?"}. ${label}${suffixes.length ? ` · ${suffixes.join(" · ")}` : ""}`,
+    `- ${item.step || item.index || "?"}. ${label}${suffixes.length ? ` · ${suffixes.join(" · ")}` : ""}`,
     input ? `  input: ${input}` : "",
     capability ? `  capability: ${capability}` : "",
     access ? `  access: ${access}` : "",

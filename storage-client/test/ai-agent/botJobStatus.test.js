@@ -171,6 +171,10 @@ test("bot job log bundle includes redacted log, agent trace, and delegated child
   assert.equal(bundle.agentTrace.events[0].resultSummary.jobId, "botjob_child");
   assert.equal(bundle.agentTrace.events[0].resultSummary.jobRefs[0].botId, "video.analyze");
   assert.equal(bundle.agentTrace.timeline[0].label, "invoke_video_analyze (succeeded)");
+  assert.equal(bundle.agentTrace.timeline[0].step, 1);
+  assert.equal(bundle.agentTrace.timeline[0].index, 1);
+  assert.equal(bundle.agentTrace.timeline[0].startedAt, "2026-07-02T00:00:02.000Z");
+  assert.equal(bundle.agentTrace.timeline[0].finishedAt, "2026-07-02T00:00:03.250Z");
   assert.equal(bundle.agentTrace.timeline[0].durationMs, 1250);
   assert.deepEqual(bundle.agentTrace.timeline[0].inputSummary.identifiers, ["file_1"]);
   assert.equal(bundle.agentTrace.timeline[0].resultSummary.jobRefs[0].jobId, "botjob_child");
