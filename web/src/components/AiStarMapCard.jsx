@@ -76,6 +76,85 @@ function getNodeStatus(nodeId, gs) {
   return "pending";
 }
 
+function compactHudText(value, maxLength = 120) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  return text.length > maxLength ? `${text.slice(0, Math.max(0, maxLength - 1))}…` : text;
+}
+
+function compactList(value, maxItems = 3) {
+  const items = (Array.isArray(value) ? value : [])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+  if (!items.length) return "";
+  const visible = items.slice(0, maxItems).join(", ");
+  return items.length > maxItems ? `${visible} +${items.length - maxItems}` : visible;
+}
+
+function buildStructuredHudDetail(gs) {
+  const details = gs?.details && typeof gs.details === "object" ? gs.details : null;
+  if (!details) return "";
+
+  const toolRound = Number.isFinite(Number(details.toolRound || gs.toolRound))
+    ? Number(details.toolRound || gs.toolRound)
+    : 0;
+  const roundSuffix = toolRound > 0 ? ` · R${toolRound}` : "";
+  const plannedTools = compactList(details.tools);
+  if (plannedTools) return compactHudText(`准备调用: ${plannedTools}${roundSuffix}`);
+
+  const executedTools = compactList(details.executedTools);
+  if (executedTools) return compactHudText(`已执行: ${executedTools}${roundSuffix}`);
+
+  if (details.delegated) return compactHudText(`委派目标: ${details.delegated}`);
+  if (details.intent) return compactHudText(`意图: ${details.intent}`);
+  if (details.route) return compactHudText(`路由: ${details.route}`);
+  if (details.model) return compactHudText(`模型: ${details.model}`);
+  if (typeof details.historyCount === "number") return `上下文: ${details.historyCount} 条历史消息`;
+  return "";
+}
+
+function buildBodyHudDetail(detailBody) {
+  if (!detailBody || typeof detailBody !== "string") return "";
+  const lines = detailBody.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return "";
+
+  const toolIntent = lines.find((l) => /^Intent[：:].*(工具调用|已执行)/i.test(l));
+  if (toolIntent) return compactHudText(toolIntent.replace(/^Intent[：:]\s*/i, ""));
+
+  const stageLine = lines.find((l) => /^当前阶段[：:]/.test(l));
+  const routeLine = lines.find((l) => /^路由决策[：:]/.test(l));
+  if (stageLine && routeLine) {
+    return compactHudText(`${stageLine.replace(/^当前阶段[：:]\s*/, "")} · ${routeLine.replace(/^路由决策[：:]\s*/, "")}`);
+  }
+  if (stageLine) return compactHudText(stageLine);
+
+  const modelLine = lines.find((l) => /^模型[：:]/.test(l));
+  if (modelLine) return compactHudText(modelLine);
+
+  const intentLine = lines.find((l) => /^Intent[：:]/.test(l));
+  if (intentLine) return compactHudText(intentLine);
+
+  const termsIdx = lines.findIndex((l) => /search\s*terms/i.test(l));
+  if (termsIdx >= 0) {
+    const terms = [];
+    for (let i = termsIdx + 1; i < lines.length && lines[i].startsWith("- "); i++) {
+      terms.push(lines[i].slice(2).trim());
+    }
+    if (terms.length) return compactHudText(`检索词: ${terms.join(" | ")}`);
+  }
+
+  const execIdx = lines.findIndex((l) => /已执行检索/.test(l));
+  if (execIdx >= 0) {
+    const qs = [];
+    for (let i = execIdx + 1; i < lines.length && lines[i].startsWith("- "); i++) {
+      qs.push(lines[i].slice(2).trim());
+    }
+    if (qs.length) return compactHudText(`已检索: ${qs.join(" | ")}`);
+  }
+
+  return compactHudText(lines[1] || lines[0] || "");
+}
+
 function nodeRadius(status) {
   return status === "active" ? R_ACTIVE : status === "done" ? R_DONE : R_PEND;
 }
@@ -1850,34 +1929,10 @@ export function AiStarMapCard({ graphState, elapsedText, subtitle, detailBody })
   const seed = useMemo(() => (Math.random() * 2147483647) | 0, []);
   const worldNodes = useMemo(() => computeWorldLayout(route, seed), [route, seed]);
 
-  /* 从 detailBody 提取关键细节（搜索词、检索阶段等） */
+  /* 从结构化 graphState 和 detailBody 提取关键细节（工具、搜索词、检索阶段等） */
   const hudDetail = useMemo(() => {
-    if (!detailBody || typeof detailBody !== "string") return "";
-    const lines = detailBody.split("\n").map((l) => l.trim()).filter(Boolean);
-    /* 提取 Search Terms 行 */
-    const termsIdx = lines.findIndex((l) => /search\s*terms/i.test(l));
-    if (termsIdx >= 0) {
-      const terms = [];
-      for (let i = termsIdx + 1; i < lines.length && lines[i].startsWith("- "); i++) {
-        terms.push(lines[i].slice(2).trim());
-      }
-      if (terms.length) return `检索词: ${terms.join(" | ")}`;
-    }
-    /* 提取已执行检索 */
-    const execIdx = lines.findIndex((l) => /已执行检索/.test(l));
-    if (execIdx >= 0) {
-      const qs = [];
-      for (let i = execIdx + 1; i < lines.length && lines[i].startsWith("- "); i++) {
-        qs.push(lines[i].slice(2).trim());
-      }
-      if (qs.length) return `已检索: ${qs.join(" | ")}`;
-    }
-    /* 提取 Intent */
-    const intentLine = lines.find((l) => /^Intent[：:]/.test(l));
-    if (intentLine) return intentLine;
-    /* fallback: 第二行（跳过阶段行） */
-    return lines[1] || "";
-  }, [detailBody]);
+    return buildStructuredHudDetail(gs) || buildBodyHudDetail(detailBody);
+  }, [gs, detailBody]);
 
   useEffect(() => {
     const el = containerRef.current;

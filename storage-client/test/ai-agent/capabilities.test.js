@@ -304,6 +304,7 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
   }, { maxItems: 16 });
 
   assert.match(summary, /search_library_files/);
+  assert.match(summary, /explain_file_access/);
   assert.match(summary, /organize_files/);
   assert.match(summary, /\[local-path\]/);
   assert.doesNotMatch(summary, /C:\\Secret/);

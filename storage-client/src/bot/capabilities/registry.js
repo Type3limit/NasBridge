@@ -117,6 +117,7 @@ const CAPABILITY_EXAMPLES = {
   search_library_files: ["找最近下载的视频", "查 Movies 目录里没有摘要的 mp4"],
   read_text_excerpt: ["读取这个 PDF 的前 2000 字"],
   analyze_file_content: ["分析这个 NAS 文件", "总结这个 PDF 文档"],
+  explain_file_access: ["我能访问哪些 NAS 文件", "说明你的文件访问边界"],
   invoke_video_analyze: ["总结这个视频并保存摘要"],
   analyze_storage_video: ["总结这个视频"],
   invoke_video_tag: ["给这个视频生成标签"],
@@ -134,6 +135,7 @@ const CAPABILITY_EXAMPLES = {
 
 const PROMPT_CORE_CAPABILITY_IDS = [
   "search_library_files",
+  "explain_file_access",
   "analyze_file_content",
   "invoke_video_analyze",
   "analyze_storage_video",

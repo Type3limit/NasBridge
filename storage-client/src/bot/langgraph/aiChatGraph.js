@@ -150,6 +150,7 @@ function createTrackedNode(nodeName, handlerName) {
       route: state?.route,
       status: "running"
     });
+    const enterDetails = buildNodeExitDetails(nodeName, state, null);
     try {
       await api?.emitProgress?.({
         phase: String(state?.phase || "running"),
@@ -159,8 +160,10 @@ function createTrackedNode(nodeName, handlerName) {
           activeNode: nodeName,
           route: String(state?.route || "text").trim(),
           nodeHistory: Array.isArray(state?.trace) ? state.trace : [],
-          toolRound: Number.isInteger(state?.toolRound) ? state.toolRound : 0
-        }
+          toolRound: Number.isInteger(state?.toolRound) ? state.toolRound : 0,
+          details: enterDetails
+        },
+        details: enterDetails
       });
     } catch {
       // emitProgress 失败不中断节点执行
@@ -190,6 +193,7 @@ function createTrackedNode(nodeName, handlerName) {
       // graphState update to the same messageId would overwrite the ai-answer card with the star map.
       if (!ANSWER_NODE_NAMES.has(nodeName)) {
         try {
+          const exitDetails = buildNodeExitDetails(nodeName, state, update);
           await api?.emitProgress?.({
             phase: nodeName,
             label: String(state?.progress?.label || nodeName),
@@ -198,9 +202,10 @@ function createTrackedNode(nodeName, handlerName) {
               activeNode: nodeName,
               route: String(nextRoute || "text").trim(),
               nodeHistory: nextTrace,
-              toolRound: Number.isInteger(update?.toolRound) ? update.toolRound : Number.isInteger(state?.toolRound) ? state.toolRound : 0
+              toolRound: Number.isInteger(update?.toolRound) ? update.toolRound : Number.isInteger(state?.toolRound) ? state.toolRound : 0,
+              details: exitDetails
             },
-            details: buildNodeExitDetails(nodeName, state, update)
+            details: exitDetails
           });
         } catch {
           // non-critical
