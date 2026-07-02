@@ -7,6 +7,7 @@ import path from "node:path";
 
 import {
   buildCapabilityDescriptors,
+  formatCapabilityReport,
   formatCapabilityPromptSummary
 } from "../../src/bot/capabilities/registry.js";
 import {
@@ -341,15 +342,31 @@ test("capability descriptors expose core NAS tools, risk, and redacted prompt he
         id: "storage-root",
         label: "NAS",
         status: "warn",
-        detail: "C:\\Secret\\nas-data is read only"
+        detail: "C:\\Secret\\nas-data is read only",
+        repairHint: "检查 C:\\Secret\\nas-data 的读写权限"
       }
     ]
   }, { maxItems: 16 });
+  const report = formatCapabilityReport(descriptors, {
+    overall: "warn",
+    checks: [
+      {
+        id: "whisper",
+        label: "Whisper",
+        status: "warn",
+        detail: "WHISPER_MODEL_PATH 未配置",
+        repairHint: "配置 WHISPER_CPP_PATH 和 WHISPER_MODEL_PATH 后重启 storage-client"
+      }
+    ]
+  });
 
   assert.match(summary, /search_library_files/);
   assert.match(summary, /diagnose_file_access/);
   assert.match(summary, /explain_file_access/);
   assert.match(summary, /organize_files/);
+  assert.match(summary, /fix=检查 \[local-path\] 的读写权限/);
   assert.match(summary, /\[local-path\]/);
   assert.doesNotMatch(summary, /C:\\Secret/);
+  assert.match(report, /video\.analyze/);
+  assert.match(report, /建议\(Whisper\): 配置 WHISPER_CPP_PATH 和 WHISPER_MODEL_PATH/);
 });

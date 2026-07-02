@@ -211,14 +211,19 @@ function summarizeCheckForPrompt(check = {}) {
   const label = String(check?.label || check?.id || "unknown").trim();
   const status = String(check?.status || "unknown").trim();
   const detail = String(check?.detail || "").trim();
+  const repairHint = String(check?.repairHint || "").trim();
   if (!detail) {
-    return `${label}=${status}`;
+    return repairHint ? `${label}=${status} fix=${repairHint.slice(0, 120)}` : `${label}=${status}`;
   }
   const compactDetail = detail
     .replace(/[A-Za-z]:[\\/][^\s；,，]+/g, "[local-path]")
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted]")
     .slice(0, 120);
-  return `${label}=${status} (${compactDetail})`;
+  const compactHint = repairHint
+    .replace(/[A-Za-z]:[\\/][^\s；,，]+/g, "[local-path]")
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted]")
+    .slice(0, 120);
+  return `${label}=${status} (${compactDetail})${compactHint ? ` fix=${compactHint}` : ""}`;
 }
 
 export function summarizeCapabilityAvailability(descriptor = {}, health = {}) {
@@ -226,18 +231,25 @@ export function summarizeCapabilityAvailability(descriptor = {}, health = {}) {
   const related = (Array.isArray(descriptor.healthChecks) ? descriptor.healthChecks : [])
     .map((id) => checks.get(id))
     .filter(Boolean);
+  const repairHints = related
+    .filter((check) => check.status && check.status !== "ok" && String(check.repairHint || "").trim())
+    .map((check) => ({
+      id: String(check.id || "").trim(),
+      label: String(check.label || check.id || "").trim(),
+      hint: String(check.repairHint || "").trim()
+    }));
   if (!related.length) {
-    return { status: "unknown", detail: "未绑定健康检查" };
+    return { status: "unknown", detail: "未绑定健康检查", repairHints: [] };
   }
   const failing = related.find((check) => check.status === "error");
   if (failing) {
-    return { status: "error", detail: `${failing.label}: ${failing.detail}` };
+    return { status: "error", detail: `${failing.label}: ${failing.detail}`, repairHints };
   }
   const warning = related.find((check) => check.status === "warn");
   if (warning) {
-    return { status: "warn", detail: `${warning.label}: ${warning.detail}` };
+    return { status: "warn", detail: `${warning.label}: ${warning.detail}`, repairHints };
   }
-  return { status: "ok", detail: "依赖就绪" };
+  return { status: "ok", detail: "依赖就绪", repairHints: [] };
 }
 
 export function summarizeCapabilityExecutionReadiness(descriptor = {}, health = {}) {
@@ -285,6 +297,9 @@ export function formatCapabilityReport(descriptors = [], health = {}) {
       lines.push(`- [${statusLabel[availability.status] || availability.status}] ${item.id} · ${item.displayName || item.id} · risk=${item.riskLevel} · mode=${item.executionMode}${caps}`);
       if (availability.status !== "ok") {
         lines.push(`  - ${availability.detail}`);
+        for (const hint of (Array.isArray(availability.repairHints) ? availability.repairHints : []).slice(0, 3)) {
+          lines.push(`  - 建议(${hint.label || hint.id}): ${hint.hint}`);
+        }
       }
     }
   }
