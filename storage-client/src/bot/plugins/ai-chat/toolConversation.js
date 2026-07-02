@@ -1050,6 +1050,7 @@ async function invokeJsonFallbackPlanningRound({
   });
   let parsed = parseJsonToolPlan(result.text || "", tools, { allowToolCalls: allowMoreToolCalls, round });
   for (let attempt = 0; !parsed.ok && attempt < JSON_FALLBACK_REPAIR_ATTEMPTS; attempt += 1) {
+    await api.appendLog(`json-tool-fallback repair round=${round} attempt=${attempt + 1} error=${String(parsed.error || "unknown").slice(0, 240)}`);
     fallbackMessages = fallbackMessages.concat([
       createJsonFallbackAssistantMessage(result),
       {

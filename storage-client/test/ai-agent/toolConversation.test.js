@@ -237,6 +237,74 @@ test("native tool-call unsupported errors recover into JSON fallback", async () 
   assert.match(api.logs.join("\n"), /json-tool-fallback round=0/);
 });
 
+test("JSON fallback repairs schema-invalid tool arguments once", async () => {
+  const api = createFakeApi();
+  const modelSettings = {
+    textModel: "openai::deepseek-v4-pro",
+    lastListedModels: [
+      {
+        id: "openai::deepseek-v4-pro",
+        modelId: "deepseek-v4-pro",
+        provider: "openai",
+        name: "DeepSeek V4 Pro",
+        toolCalls: false
+      }
+    ]
+  };
+  const messages = createToolAwarePlanningMessages({
+    systemPrompt: "You are a NAS assistant.",
+    effectivePrompt: "Search the web.",
+    historyMessages: []
+  });
+  const modelOutputs = [
+    JSON.stringify({
+      action: "call_tool",
+      tool: "search_web",
+      arguments: { preferredSource: "official" },
+      reason: "Need current external information."
+    }),
+    JSON.stringify({
+      action: "call_tool",
+      tool: "search_web",
+      arguments: { query: "NasBridge GitHub", preferredSource: "github" },
+      reason: "Need current external information."
+    })
+  ];
+  const modelCalls = [];
+  const modelInvoker = async (request) => {
+    modelCalls.push(request);
+    return {
+      text: modelOutputs.shift(),
+      model: request.model,
+      finishReason: "stop"
+    };
+  };
+
+  const planned = await invokeToolAwarePlanningRound({
+    messages,
+    recentMessages: [],
+    context: { chat: {}, attachments: [] },
+    api,
+    defaultTextModel: "openai::deepseek-v4-pro",
+    modelSettings,
+    modelInvoker,
+    round: 0,
+    maxToolRounds: 4
+  });
+
+  assert.equal(modelCalls.length, 2);
+  assert.match(modelCalls[1].messages.at(-1).content, /arguments\.query is required/);
+  assert.equal(planned.result.fallback, "json-plan");
+  assert.equal(planned.pendingToolCalls.length, 1);
+  assert.equal(planned.pendingToolCalls[0].name, "search_web");
+  assert.deepEqual(planned.pendingToolCalls[0].input, {
+    query: "NasBridge GitHub",
+    preferredSource: "github"
+  });
+  assert.match(api.logs.join("\n"), /json-tool-fallback repair round=0 attempt=1/);
+  assert.match(api.logs.join("\n"), /arguments\.query is required/);
+});
+
 test("tool execution preflight blocks unavailable hard dependencies without creating child jobs", async () => {
   const api = createFakeApi();
   let invoked = false;
