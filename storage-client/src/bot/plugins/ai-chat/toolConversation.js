@@ -172,6 +172,8 @@ function buildJsonFallbackSystemPrompt(tools = [], allowToolCalls = true) {
       : "当前已达到工具轮数上限，只能输出 final_answer。",
     "如果已经能回答用户，输出 {\"action\":\"final_answer\",\"answer\":\"...\"}。",
     "arguments 必须是 JSON object，字段必须符合工具 inputSchema。一次只调用一个工具。",
+    "安全规则：不要在 JSON plan 中自行设置 confirmed=true 来执行写入、移动、重命名、覆盖或批量修改；必须先 dryRun/预览影响范围，或用 final_answer 请求用户明确确认。",
+    "读取 NAS 文件时只使用 fileId 或相对路径；不要编造或输出本机绝对路径。遇到文件访问不确定，先调用 diagnose_file_access。",
     "可用工具：",
     JSON.stringify(toolCatalog, null, 2),
     "示例：",

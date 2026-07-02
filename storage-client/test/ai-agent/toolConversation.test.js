@@ -148,6 +148,11 @@ test("JSON fallback plans, executes, observes, and finishes through tool message
   assert.equal(planned.pendingToolCalls.length, 1);
   assert.equal(planned.pendingToolCalls[0].name, "search_library_files");
   assert.equal(planned.pendingToolCalls[0].fallbackJsonPlan, true);
+  const fallbackPrompt = modelCalls[0].messages.map((message) => message.content).join("\n");
+  assert.match(fallbackPrompt, /不要在 JSON plan 中自行设置 confirmed=true/);
+  assert.match(fallbackPrompt, /dryRun\/预览影响范围/);
+  assert.match(fallbackPrompt, /只使用 fileId 或相对路径/);
+  assert.match(fallbackPrompt, /diagnose_file_access/);
 
   const observedMessages = await executePendingToolCallsRound({
     pendingToolCalls: planned.pendingToolCalls,
