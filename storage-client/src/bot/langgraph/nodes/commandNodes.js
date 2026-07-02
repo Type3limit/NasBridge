@@ -108,6 +108,9 @@ function formatTraceTimelineItem(item = {}) {
   const label = String(item.label || item.tool || item.phase || item.node || "event").trim();
   const suffixes = [
     item.durationMs != null ? formatDurationMs(item.durationMs) : "",
+    item.detailSummary?.pendingTools?.length
+      ? `tools=${item.detailSummary.pendingTools.map((tool) => tool.name).filter(Boolean).join(",")}`
+      : "",
     item.resultSummary?.jobRefs?.length
       ? `job=${item.resultSummary.jobRefs.map((ref) => `${ref.botId || "bot"}:${ref.jobId}`).join(",")}`
       : "",
@@ -118,6 +121,45 @@ function formatTraceTimelineItem(item = {}) {
     `- ${item.index || "?"}. ${label}${suffixes.length ? ` · ${suffixes.join(" · ")}` : ""}`,
     input ? `  input: ${input}` : ""
   ].filter(Boolean).join("\n");
+}
+
+function formatAgentPlanSummary(planSummary = {}) {
+  const rounds = Array.isArray(planSummary.rounds) ? planSummary.rounds.slice(-5) : [];
+  if (!rounds.length) {
+    return "";
+  }
+  const lines = ["Agent 计划:"];
+  for (const round of rounds) {
+    const prefix = `- round ${Number.isFinite(Number(round.round)) ? Number(round.round) : "?"}`;
+    if (Array.isArray(round.plans) && round.plans.length) {
+      for (const plan of round.plans.slice(-2)) {
+        const tools = Array.isArray(plan.pendingTools) && plan.pendingTools.length
+          ? `tools=${plan.pendingTools.map((tool) => `${tool.name}${tool.reason ? `(${tool.reason})` : ""}`).join(", ")}`
+          : "final-answer";
+        const details = [
+          plan.status || "",
+          plan.fallback ? `fallback=${plan.fallback}` : "",
+          plan.model ? `model=${plan.model}` : "",
+          plan.retryReason ? `retry=${plan.retryReason}` : "",
+          plan.parseError ? `parseError=${plan.parseError}` : "",
+          tools
+        ].filter(Boolean).join(" · ");
+        lines.push(`${prefix} plan: ${details}`);
+      }
+    }
+    if (Array.isArray(round.observations) && round.observations.length) {
+      for (const observation of round.observations.slice(-2)) {
+        const details = [
+          observation.status || "",
+          observation.tool ? `tool=${observation.tool}` : "",
+          observation.fallback ? `fallback=${observation.fallback}` : "",
+          observation.observationLength != null ? `chars=${observation.observationLength}` : ""
+        ].filter(Boolean).join(" · ");
+        lines.push(`${prefix} observe: ${details}`);
+      }
+    }
+  }
+  return lines.join("\n");
 }
 
 export function formatAgentTraceReport(trace = {}) {
@@ -162,6 +204,8 @@ export function formatAgentTraceReport(trace = {}) {
       ].join("\n")
     : "";
 
+  const plan = formatAgentPlanSummary(trace.planSummary || {});
+
   const toolStats = trace.toolStats || {};
   const toolRows = Array.isArray(toolStats.tools)
     ? toolStats.tools.slice(0, 6).map((tool) => {
@@ -184,7 +228,7 @@ export function formatAgentTraceReport(trace = {}) {
     ? ["最近步骤:", ...timelineItems.map(formatTraceTimelineItem)].join("\n")
     : "最近步骤: trace 里没有可展示的事件。";
 
-  return [header, pending, recovery, tools, timeline].filter(Boolean).join("\n\n");
+  return [header, pending, recovery, plan, tools, timeline].filter(Boolean).join("\n\n");
 }
 
 async function resolveModelForSettings(rawModel = "", modelSettings = {}, api = {}, purpose = "text") {
@@ -355,6 +399,7 @@ export async function handleAiChatCommandRoute(state = {}) {
             jobId: trace.jobId || "",
             latest: trace.latest === true,
             missing: trace.missing === true,
+            planSummary: trace.planSummary || null,
             recoveryHint: trace.recoveryHint || null,
             toolStats: trace.toolStats || null
           }]

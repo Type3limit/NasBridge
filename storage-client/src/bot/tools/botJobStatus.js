@@ -338,6 +338,39 @@ function compactTraceResultSummary(summary = null) {
   };
 }
 
+function compactTraceAgentDetail(detail = null) {
+  if (!detail || typeof detail !== "object") {
+    return null;
+  }
+  const pendingTools = Array.isArray(detail.pendingTools)
+    ? detail.pendingTools.map((item) => ({
+        id: String(item?.id || "").trim(),
+        name: String(item?.name || "").trim(),
+        fallbackJsonPlan: item?.fallbackJsonPlan === true,
+        reason: redactSensitiveText(String(item?.reason || "").trim()).slice(0, 180)
+      })).filter((item) => item.name).slice(0, 8)
+    : [];
+  const summary = {
+    model: String(detail.model || "").trim(),
+    fallback: String(detail.fallback || "").trim(),
+    finishReason: String(detail.finishReason || "").trim(),
+    pendingTools,
+    parseError: redactSensitiveText(String(detail.parseError || "").trim()).slice(0, 240),
+    retryReason: redactSensitiveText(String(detail.retryReason || "").trim()).slice(0, 240),
+    tool: String(detail.tool || "").trim(),
+    observationLength: Number.isFinite(Number(detail.observationLength)) ? Number(detail.observationLength) : null
+  };
+  return Object.fromEntries(Object.entries(summary).filter(([, value]) => {
+    if (value === null || value === "") {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    return true;
+  }));
+}
+
 function buildTimelineLabel(event = {}) {
   const kind = String(event.kind || "").trim();
   if (kind === "tool") {
@@ -371,6 +404,8 @@ function buildTraceTimeline(events = []) {
     phase: String(event.phase || "").trim(),
     tool: String(event.tool || "").trim(),
     durationMs: Number.isFinite(Number(event.durationMs)) ? Number(event.durationMs) : null,
+    detailSummary: String(event.kind || "").trim() === "agent" ? compactTraceAgentDetail(event.detail) : null,
+    outputPreview: String(event.outputPreview || "").trim().slice(0, 300),
     inputSummary: event.inputSummary && typeof event.inputSummary === "object" ? redactValue(event.inputSummary) : null,
     resultSummary: compactTraceResultSummary(event.resultSummary),
     errorSummary: event.errorSummary && typeof event.errorSummary === "object"
@@ -440,6 +475,90 @@ function buildTraceToolStats(events = []) {
     averageDurationMs: timedCallCount ? Math.round(totalDurationMs / timedCallCount) : null,
     tools,
     slowestTools: tools.filter((item) => item.timedCallCount > 0).slice(0, 3)
+  };
+}
+
+function getTraceRoundKey(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? String(Math.max(0, Math.floor(numeric))) : "0";
+}
+
+function ensurePlanRound(rounds, roundValue) {
+  const key = getTraceRoundKey(roundValue);
+  if (!rounds.has(key)) {
+    rounds.set(key, {
+      round: Number(key),
+      plans: [],
+      observations: []
+    });
+  }
+  return rounds.get(key);
+}
+
+function compactAgentPreview(value = "", limit = 280) {
+  const text = redactSensitiveText(String(value || "").replace(/\s+/g, " ").trim());
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+}
+
+function buildTracePlanSummary(events = []) {
+  const rounds = new Map();
+  let count = 0;
+  let latest = null;
+  for (const event of Array.isArray(events) ? events : []) {
+    if (String(event?.kind || "").trim() !== "agent") {
+      continue;
+    }
+    const phase = String(event.phase || "").trim();
+    if (phase !== "plan_next_step" && phase !== "observe_result") {
+      continue;
+    }
+    count += 1;
+    const round = ensurePlanRound(rounds, event.round);
+    const detail = compactTraceAgentDetail(event.detail) || {};
+    if (phase === "plan_next_step") {
+      const plan = {
+        status: String(event.status || "").trim(),
+        model: detail.model || "",
+        fallback: detail.fallback || "",
+        finishReason: detail.finishReason || "",
+        pendingTools: Array.isArray(detail.pendingTools) ? detail.pendingTools : [],
+        parseError: detail.parseError || "",
+        retryReason: detail.retryReason || "",
+        outputPreview: compactAgentPreview(event.outputPreview || "")
+      };
+      round.plans.push(Object.fromEntries(Object.entries(plan).filter(([, value]) => {
+        if (value === null || value === "") {
+          return false;
+        }
+        if (Array.isArray(value)) {
+          return value.length > 0;
+        }
+        return true;
+      })));
+      latest = { phase, round: round.round, status: plan.status, pendingTools: plan.pendingTools };
+    } else {
+      const observation = {
+        status: String(event.status || "").trim(),
+        tool: detail.tool || "",
+        fallback: detail.fallback || "",
+        observationLength: detail.observationLength ?? null,
+        outputPreview: compactAgentPreview(event.outputPreview || "")
+      };
+      round.observations.push(Object.fromEntries(Object.entries(observation).filter(([, value]) => value !== null && value !== "")));
+      latest = { phase, round: round.round, status: observation.status, tool: observation.tool };
+    }
+  }
+  const normalizedRounds = [...rounds.values()].sort((left, right) => left.round - right.round);
+  const lastPlan = [...normalizedRounds].reverse()
+    .flatMap((round) => [...round.plans].reverse())
+    .find(Boolean) || null;
+  return {
+    count,
+    latest,
+    pendingToolNames: Array.isArray(lastPlan?.pendingTools)
+      ? lastPlan.pendingTools.map((item) => item.name).filter(Boolean)
+      : [],
+    rounds: normalizedRounds
   };
 }
 
@@ -631,6 +750,7 @@ export async function buildAgentTraceResult(api = {}, input = {}) {
       snapshot: null,
       events: [],
       timeline: [],
+      planSummary: buildTracePlanSummary([]),
       toolStats: buildTraceToolStats([]),
       missing: true
     };
@@ -647,6 +767,7 @@ export async function buildAgentTraceResult(api = {}, input = {}) {
     pendingConfirmation: pendingConfirmation ? redactValue(pendingConfirmation) : null,
     recoveryHint: buildTraceRecoveryHint(snapshot, pendingConfirmation),
     timeline: buildTraceTimeline(events),
+    planSummary: buildTracePlanSummary(events),
     toolStats: buildTraceToolStats(events),
     events
   };

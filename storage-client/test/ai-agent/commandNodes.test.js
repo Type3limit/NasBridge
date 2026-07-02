@@ -25,6 +25,26 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
       mode: "text-retry-tools",
       nextAction: "直接重试未完成的只读工具：read_media_summary"
     },
+    planSummary: {
+      count: 2,
+      rounds: [{
+        round: 0,
+        plans: [{
+          status: "tool-requested",
+          model: "openai::deepseek-v4-pro",
+          fallback: "json-plan",
+          pendingTools: [{
+            name: "invoke_video_analyze",
+            reason: "需要生成视频摘要"
+          }]
+        }],
+        observations: [{
+          status: "observed",
+          tool: "invoke_video_analyze",
+          observationLength: 256
+        }]
+      }]
+    },
     toolStats: {
       count: 1,
       statusCounts: { succeeded: 1 },
@@ -49,6 +69,8 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
 
   assert.match(body, /Agent job: botjob_parent/);
   assert.match(body, /恢复建议/);
+  assert.match(body, /Agent 计划/);
+  assert.match(body, /tools=invoke_video_analyze/);
   assert.match(body, /invoke_video_analyze: 1 次/);
   assert.match(body, /video\.analyze:botjob_child/);
   assert.match(body, /最近步骤/);
@@ -79,6 +101,16 @@ test("trace command route publishes latest agent trace report", async () => {
       }
     }), "utf8");
     await fs.writeFile(path.join(graphRoot, "traces", `${jobId}.jsonl`), `${JSON.stringify({
+      kind: "agent",
+      phase: "plan_next_step",
+      round: 0,
+      status: "tool-requested",
+      detail: {
+        model: "openai::deepseek-v4-pro",
+        pendingTools: [{ id: "call_trace", name: "read_agent_trace", reason: "用户要求查看 trace" }]
+      },
+      outputPreview: "call read_agent_trace"
+    })}\n${JSON.stringify({
       kind: "tool",
       tool: "read_agent_trace",
       status: "succeeded",
@@ -118,8 +150,10 @@ test("trace command route publishes latest agent trace report", async () => {
     assert.equal(replies[0].card.title, "AI Agent Trace");
     assert.equal(replies[0].card.status, "succeeded");
     assert.match(result.result.chatReply.text, /read_agent_trace/);
+    assert.match(result.result.chatReply.text, /Agent 计划/);
     assert.equal(result.result.artifacts[0].type, "agent-trace");
     assert.equal(result.result.artifacts[0].jobId, jobId);
+    assert.equal(result.result.artifacts[0].planSummary.rounds[0].plans[0].pendingTools[0].name, "read_agent_trace");
   } finally {
     await fs.rm(appDataRoot, { recursive: true, force: true });
   }

@@ -178,6 +178,62 @@ test("bot job status includes delegated child jobs for an explicit parent job", 
   assert.equal(status.jobs[0].childJobs[0].progress.label, "Whisper transcribing");
 });
 
+test("agent trace result summarizes plan and observation events", async () => {
+  const appDataRoot = await createTempAppDataRoot();
+  const jobId = "botjob_plan_summary";
+  const graphRoot = path.join(appDataRoot, "ai-chat-graph");
+  await fs.mkdir(path.join(graphRoot, "traces"), { recursive: true });
+  await fs.writeFile(
+    path.join(graphRoot, "traces", `${jobId}.jsonl`),
+    [
+      JSON.stringify({
+        kind: "agent",
+        phase: "plan_next_step",
+        round: 0,
+        status: "tool-requested",
+        detail: {
+          model: "openai::deepseek-v4-pro",
+          fallback: "json-plan",
+          pendingTools: [
+            {
+              id: "call_search",
+              name: "search_library_files",
+              fallbackJsonPlan: true,
+              reason: "需要先定位 NAS 文件，apiKey=sk-should-not-leak-1234567890"
+            }
+          ]
+        },
+        outputPreview: "{\"action\":\"call_tool\"}"
+      }),
+      JSON.stringify({
+        kind: "agent",
+        phase: "observe_result",
+        round: 0,
+        status: "observed",
+        detail: {
+          tool: "search_library_files",
+          fallback: "json-plan",
+          observationLength: 512
+        },
+        outputPreview: "工具返回 demo.mp4"
+      })
+    ].join("\n"),
+    "utf8"
+  );
+
+  const trace = await buildAgentTraceResult({ appDataRoot }, { jobId });
+
+  assert.equal(trace.planSummary.count, 2);
+  assert.equal(trace.planSummary.rounds[0].round, 0);
+  assert.equal(trace.planSummary.rounds[0].plans[0].fallback, "json-plan");
+  assert.equal(trace.planSummary.rounds[0].plans[0].pendingTools[0].name, "search_library_files");
+  assert.doesNotMatch(trace.planSummary.rounds[0].plans[0].pendingTools[0].reason, /sk-should-not-leak/);
+  assert.equal(trace.planSummary.rounds[0].observations[0].tool, "search_library_files");
+  assert.equal(trace.planSummary.rounds[0].observations[0].observationLength, 512);
+  assert.equal(trace.timeline[0].detailSummary.pendingTools[0].name, "search_library_files");
+  assert.equal(trace.timeline[1].detailSummary.tool, "search_library_files");
+});
+
 test("agent trace result exposes pending confirmation summary", async () => {
   const appDataRoot = await createTempAppDataRoot();
   const jobId = "botjob_pending_confirmation";
