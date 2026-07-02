@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { BotJobStore } from "../jobStore.js";
-import { readExecutionSnapshot } from "../langgraph/checkpoints/aiSessionCheckpointer.js";
+import { readExecutionPendingConfirmation, readExecutionSnapshot } from "../langgraph/checkpoints/aiSessionCheckpointer.js";
 
 export const MAX_JOB_STATUS_LIMIT = 12;
 export const MAX_AGENT_TRACE_EVENTS = 80;
@@ -374,12 +374,14 @@ export async function buildAgentTraceResult(api = {}, input = {}) {
   }
   const snapshot = await readExecutionSnapshot(appDataRoot, jobId);
   const events = await readTraceEvents(appDataRoot, jobId, clampInteger(input.maxEvents || 40, 1, MAX_AGENT_TRACE_EVENTS));
+  const pendingConfirmation = await readExecutionPendingConfirmation(appDataRoot, jobId);
   return {
     generatedAt: new Date().toISOString(),
     jobId,
     latest: !requestedJobId,
     missing: !snapshot && !events.length,
     snapshot: summarizeTraceSnapshot(snapshot),
+    pendingConfirmation: pendingConfirmation ? redactValue(pendingConfirmation) : null,
     events
   };
 }

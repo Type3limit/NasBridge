@@ -302,14 +302,18 @@ function extractPendingConfirmation(traceEvents = []) {
   return null;
 }
 
+export async function readExecutionPendingConfirmation(appDataRoot = "", jobId = "") {
+  const traceEvents = await readExecutionTraceEvents(appDataRoot, jobId);
+  return extractPendingConfirmation(traceEvents);
+}
+
 export async function readAiSessionCheckpoint(appDataRoot = "", sessionId = 0) {
   const checkpoint = await readJsonFile(getSessionCheckpointPath(appDataRoot, sessionId));
   if (!checkpoint?.latestExecution?.jobId) {
     return checkpoint;
   }
   const latestSnapshot = await readExecutionSnapshot(appDataRoot, checkpoint.latestExecution.jobId);
-  const latestTraceEvents = await readExecutionTraceEvents(appDataRoot, checkpoint.latestExecution.jobId);
-  const pendingConfirmation = extractPendingConfirmation(latestTraceEvents);
+  const pendingConfirmation = await readExecutionPendingConfirmation(appDataRoot, checkpoint.latestExecution.jobId);
   return {
     ...checkpoint,
     latestSnapshot: latestSnapshot
