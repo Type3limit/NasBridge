@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
+import { BotJobStore } from "../../src/bot/jobStore.js";
 import {
   createToolAwarePlanningMessages,
   executePendingToolCallsRound,
@@ -46,6 +50,32 @@ function createFakeApi() {
       recordAgentEvent: async (event) => agentEvents.push(event),
       recordToolEvent: async (event) => toolEvents.push(event)
     }
+  };
+}
+
+async function createTempAppDataRoot() {
+  return fs.mkdtemp(path.join(os.tmpdir(), "nas-agent-tool-conversation-"));
+}
+
+function createJob(jobId, overrides = {}) {
+  return {
+    jobId,
+    botId: overrides.botId || "ai.chat",
+    status: overrides.status || "running",
+    phase: overrides.phase || "running",
+    progress: overrides.progress || { label: "Running", percent: 25, details: null },
+    requester: { userId: "u1", displayName: "Tester", role: "admin" },
+    chat: {},
+    input: { triggerType: "chat-mention", rawText: "@ai do work", parsedArgs: {} },
+    attachments: [],
+    options: overrides.options || {},
+    result: { replyMessageId: "", importedFiles: [], artifacts: [] },
+    error: overrides.error || null,
+    audit: { permissionsUsed: [], toolCalls: [] },
+    createdAt: "2026-07-02T00:00:00.000Z",
+    startedAt: "2026-07-02T00:00:01.000Z",
+    finishedAt: "",
+    updatedAt: "2026-07-02T00:00:01.000Z"
   };
 }
 
@@ -324,6 +354,126 @@ test("delegated tool results write structured job refs into tool trace events", 
     }
   ]);
   assert.equal(api.toolEvents[0].resultSummary.file.path, "Videos/demo.mp4");
+});
+
+test("tool trace summarizes NAS file access diagnostics without storage root", async () => {
+  const api = createFakeApi();
+
+  const observedMessages = await executePendingToolCallsRound({
+    pendingToolCalls: [
+      {
+        id: "call_access",
+        name: "diagnose_file_access",
+        input: { fileId: "client:Videos/demo.mp4" }
+      }
+    ],
+    planningMessages: [
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call_access",
+            type: "function",
+            function: {
+              name: "diagnose_file_access",
+              arguments: JSON.stringify({ fileId: "client:Videos/demo.mp4" })
+            }
+          }
+        ]
+      }
+    ],
+    recentMessages: [],
+    context: { chat: {}, attachments: [] },
+    api,
+    round: 0
+  });
+
+  const observation = observedMessages.at(-1);
+  assert.equal(observation.role, "tool");
+  assert.match(observation.content, /"found": true/);
+  assert.equal(api.toolEvents[0].inputSummary.tool, "diagnose_file_access");
+  assert.deepEqual(api.toolEvents[0].inputSummary.identifiers, ["client:Videos/demo.mp4"]);
+  assert.equal(api.toolEvents[0].resultSummary.file.path, "Videos/demo.mp4");
+  assert.equal(api.toolEvents[0].resultSummary.fileAccess.found, true);
+  assert.equal(api.toolEvents[0].resultSummary.fileAccess.safety.binaryRawContentAllowed, false);
+  assert.ok(api.toolEvents[0].resultSummary.fileAccess.layers.some((layer) => layer.id === "metadata"));
+  assert.ok(api.toolEvents[0].resultSummary.fileAccess.blockers.some((blocker) => blocker.id === "no-direct-text-layer"));
+  assert.doesNotMatch(JSON.stringify(api.toolEvents[0].resultSummary), /D:[/\\]NAS/);
+});
+
+test("tool trace summarizes bot job log bundles", async () => {
+  const appDataRoot = await createTempAppDataRoot();
+  const store = new BotJobStore({ rootDir: appDataRoot });
+  await store.save(createJob("botjob_parent", {
+    status: "failed",
+    phase: "failed",
+    error: { message: "WHISPER_MODEL_PATH missing" }
+  }));
+  await store.save(createJob("botjob_child", {
+    botId: "video.analyze",
+    status: "failed",
+    phase: "failed",
+    options: {
+      delegatedBy: "ai.chat",
+      parentJobId: "botjob_parent",
+      toolName: "invoke_video_analyze"
+    }
+  }));
+  await store.appendLog("botjob_parent", "OPENAI_API_KEY=sk-should-not-leak-1234567890");
+  await store.waitForPendingWrite("botjob_parent");
+  await store.waitForPendingWrite("botjob_child");
+
+  const api = {
+    ...createFakeApi(),
+    appDataRoot,
+    getJob: (jobId) => store.get(jobId)
+  };
+
+  const observedMessages = await executePendingToolCallsRound({
+    pendingToolCalls: [
+      {
+        id: "call_log",
+        name: "read_bot_job_log",
+        input: { jobId: "botjob_parent", includeTrace: false, includeChildJobs: true }
+      }
+    ],
+    planningMessages: [
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call_log",
+            type: "function",
+            function: {
+              name: "read_bot_job_log",
+              arguments: JSON.stringify({ jobId: "botjob_parent", includeTrace: false, includeChildJobs: true })
+            }
+          }
+        ]
+      }
+    ],
+    recentMessages: [],
+    context: { chat: {}, attachments: [] },
+    api,
+    round: 0
+  });
+
+  const observation = observedMessages.at(-1);
+  assert.equal(observation.role, "tool");
+  assert.match(observation.content, /OPENAI_API_KEY=\*\*\*/);
+  assert.doesNotMatch(observation.content, /sk-should-not-leak/);
+  assert.equal(api.progress[0].phase, "tool-read-bot-job-log");
+  assert.equal(api.toolEvents[0].inputSummary.tool, "read_bot_job_log");
+  assert.deepEqual(api.toolEvents[0].inputSummary.identifiers, ["botjob_parent"]);
+  assert.equal(api.toolEvents[0].resultSummary.jobId, "botjob_parent");
+  assert.equal(api.toolEvents[0].resultSummary.botId, "ai.chat");
+  assert.equal(api.toolEvents[0].resultSummary.status, "failed");
+  assert.equal(api.toolEvents[0].resultSummary.log.jobId, "botjob_parent");
+  assert.ok(api.toolEvents[0].resultSummary.log.length > 0);
+  assert.equal(api.toolEvents[0].resultSummary.childJobCount, 1);
+  assert.deepEqual(api.toolEvents[0].resultSummary.jobRefs.map((ref) => ref.jobId), ["botjob_parent", "botjob_child"]);
 });
 
 test("tool trace records structured confirmation previews", async () => {

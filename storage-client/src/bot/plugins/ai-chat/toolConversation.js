@@ -225,6 +225,8 @@ function buildToolInputSummary(toolCall = {}) {
   const input = normalizeToolInput(toolCall.input);
   const keys = Object.keys(input).filter((key) => !String(key || "").startsWith("__")).sort();
   const identifiers = [
+    ...summarizeStringList(input.jobId),
+    ...summarizeStringList(input.jobIds),
     ...summarizeStringList(input.fileId),
     ...summarizeStringList(input.fileIds),
     ...summarizeStringList(input.path),
@@ -238,12 +240,12 @@ function buildToolInputSummary(toolCall = {}) {
     }
   }
   const options = {};
-  for (const key of ["batch", "force", "forceAnalyze", "waitForCompletion", "dryRun", "confirmed", "includeSummary", "includeSubtitle", "includeTranscriptExcerpt"]) {
+  for (const key of ["batch", "force", "forceAnalyze", "waitForCompletion", "dryRun", "confirmed", "includeSummary", "includeSubtitle", "includeTranscriptExcerpt", "includeTrace", "includeChildJobs"]) {
     if (typeof input[key] === "boolean") {
       options[key] = input[key];
     }
   }
-  for (const key of ["limit", "maxResults", "timeoutSeconds", "maxChars"]) {
+  for (const key of ["limit", "maxResults", "timeoutSeconds", "maxChars", "logMaxBytes", "maxTraceEvents", "childJobLimit"]) {
     if (Number.isFinite(Number(input[key]))) {
       options[key] = Number(input[key]);
     }
@@ -413,22 +415,183 @@ function summarizeConfirmationForTrace(confirmation = null) {
   };
 }
 
+function summarizeJobRefForTrace(job = null, fallback = {}) {
+  if (!job || typeof job !== "object") {
+    return null;
+  }
+  const jobId = String(job.jobId || job.id || fallback.jobId || "").trim();
+  if (!jobId) {
+    return null;
+  }
+  return {
+    jobId,
+    botId: String(job.botId || fallback.botId || "").trim(),
+    status: String(job.status || fallback.status || "").trim(),
+    delegated: job.delegated === true || fallback.delegated === true
+  };
+}
+
+function summarizeLogForTrace(log = null) {
+  if (!log || typeof log !== "object") {
+    return null;
+  }
+  return {
+    jobId: String(log.jobId || "").trim(),
+    truncated: log.truncated === true,
+    length: String(log.content || "").length
+  };
+}
+
+function summarizeAccessLayerForTrace(layer = null) {
+  if (!layer || typeof layer !== "object") {
+    return null;
+  }
+  return Object.fromEntries(Object.entries({
+    id: String(layer.id || "").trim(),
+    label: String(layer.label || "").trim(),
+    available: layer.available === true,
+    riskLevel: String(layer.riskLevel || "").trim(),
+    tools: Array.isArray(layer.tools) ? layer.tools.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 6) : [],
+    requires: Array.isArray(layer.requires) ? layer.requires.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 6) : [],
+    reason: String(layer.reason || "").trim().slice(0, 240)
+  }).filter(([, value]) => {
+    if (value === "" || value === null || value === undefined) {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    return true;
+  }));
+}
+
+function summarizeAccessBlockerForTrace(blocker = null) {
+  if (!blocker || typeof blocker !== "object") {
+    return null;
+  }
+  return Object.fromEntries(Object.entries({
+    id: String(blocker.id || "").trim(),
+    severity: String(blocker.severity || blocker.status || "").trim(),
+    message: String(blocker.message || blocker.detail || "").trim().slice(0, 240),
+    repairHint: String(blocker.repairHint || "").trim().slice(0, 240),
+    requires: Array.isArray(blocker.requires) ? blocker.requires.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 6) : []
+  }).filter(([, value]) => {
+    if (value === "" || value === null || value === undefined) {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    return true;
+  }));
+}
+
+function summarizeFileAccessForTrace(parsed = {}) {
+  const hasFileAccessShape = Object.prototype.hasOwnProperty.call(parsed, "found")
+    || parsed.policy
+    || parsed.safety
+    || parsed.contentAccess
+    || Array.isArray(parsed.layers)
+    || Array.isArray(parsed.blockers)
+    || Array.isArray(parsed.readableLayers)
+    || Array.isArray(parsed.blockedLayers);
+  if (!hasFileAccessShape) {
+    return null;
+  }
+  const policy = parsed.policy && typeof parsed.policy === "object" ? parsed.policy : {};
+  const safety = parsed.safety && typeof parsed.safety === "object" ? parsed.safety : {};
+  const contentAccess = parsed.contentAccess && typeof parsed.contentAccess === "object" ? parsed.contentAccess : {};
+  const countsByKind = parsed.countsByKind && typeof parsed.countsByKind === "object" ? parsed.countsByKind : null;
+  return Object.fromEntries(Object.entries({
+    found: typeof parsed.found === "boolean" ? parsed.found : null,
+    visibleFiles: Number.isFinite(Number(parsed.visibleFiles)) ? Number(parsed.visibleFiles) : null,
+    visibleDirectories: Number.isFinite(Number(parsed.visibleDirectories)) ? Number(parsed.visibleDirectories) : null,
+    countsByKind,
+    policy: Object.fromEntries(Object.entries({
+      storageRootOnly: policy.storageRootOnly === true,
+      allowRawTextRead: policy.allowRawTextRead === true,
+      allowBinaryRead: policy.allowBinaryRead === true,
+      writeRequiresConfirmation: policy.writeRequiresConfirmation === true,
+      maxInlineTextChars: Number.isFinite(Number(policy.maxInlineTextChars)) ? Number(policy.maxInlineTextChars) : null,
+      maxBatchFiles: Number.isFinite(Number(policy.maxBatchFiles)) ? Number(policy.maxBatchFiles) : null
+    }).filter(([, value]) => value !== null && value !== "")),
+    safety: Object.fromEntries(Object.entries({
+      storageRootOnly: safety.storageRootOnly === true,
+      pathSafe: typeof safety.pathSafe === "boolean" ? safety.pathSafe : null,
+      hiddenDirectory: safety.hiddenDirectory === true,
+      absolutePathExposed: safety.absolutePathExposed === true,
+      binaryRawContentAllowed: safety.binaryRawContentAllowed === true,
+      writeRequiresConfirmation: safety.writeRequiresConfirmation === true
+    }).filter(([, value]) => value !== null && value !== "")),
+    contentAccess: Object.fromEntries(Object.entries({
+      analyzeMode: String(contentAccess.analyzeMode || "").trim(),
+      textReadable: contentAccess.textReadable === true,
+      subtitleAvailable: contentAccess.subtitleAvailable === true,
+      aiSummaryAvailable: contentAccess.aiSummaryAvailable === true,
+      media: contentAccess.media === true,
+      videoOrAudio: contentAccess.videoOrAudio === true,
+      image: contentAccess.image === true,
+      recommendedTools: Array.isArray(contentAccess.recommendedTools) ? contentAccess.recommendedTools.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 8) : []
+    }).filter(([, value]) => {
+      if (value === "" || value === null) {
+        return false;
+      }
+      if (Array.isArray(value)) {
+        return value.length > 0;
+      }
+      return true;
+    })),
+    layers: Array.isArray(parsed.layers) ? parsed.layers.map(summarizeAccessLayerForTrace).filter(Boolean).slice(0, 8) : [],
+    blockers: Array.isArray(parsed.blockers) ? parsed.blockers.map(summarizeAccessBlockerForTrace).filter(Boolean).slice(0, 8) : [],
+    readableLayers: Array.isArray(parsed.readableLayers) ? parsed.readableLayers.map((item) => truncateTraceText(item, 160)).filter(Boolean).slice(0, 8) : [],
+    blockedLayers: Array.isArray(parsed.blockedLayers) ? parsed.blockedLayers.map((item) => truncateTraceText(item, 160)).filter(Boolean).slice(0, 8) : [],
+    recommendedTools: Array.isArray(parsed.recommendedTools) ? parsed.recommendedTools.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 8) : [],
+    nextActions: Array.isArray(parsed.nextActions) ? parsed.nextActions.map((item) => truncateTraceText(item, 180)).filter(Boolean).slice(0, 5) : []
+  }).filter(([, value]) => {
+    if (value === null || value === "" || value === undefined) {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    if (value && typeof value === "object") {
+      return Object.keys(value).length > 0;
+    }
+    return true;
+  }));
+}
+
 function summarizeToolResultForTrace(toolResult = "") {
   const parsed = parseToolResultJson(toolResult);
   if (!parsed) {
     return null;
   }
   const jobRefs = [];
-  const status = String(parsed.status || "").trim();
-  const botId = String(parsed.botId || "").trim();
-  const jobId = String(parsed.jobId || "").trim();
+  const seenJobRefs = new Set();
+  const pushJobRef = (job, fallback = {}) => {
+    const ref = summarizeJobRefForTrace(job, fallback);
+    if (!ref || seenJobRefs.has(ref.jobId)) {
+      return;
+    }
+    seenJobRefs.add(ref.jobId);
+    jobRefs.push(ref);
+  };
+  const primaryJob = parsed.job && typeof parsed.job === "object" ? parsed.job : null;
+  const status = String(parsed.status || primaryJob?.status || "").trim();
+  const botId = String(parsed.botId || primaryJob?.botId || "").trim();
+  const jobId = String(parsed.jobId || primaryJob?.jobId || "").trim();
   if (jobId) {
-    jobRefs.push({
-      jobId,
-      botId,
-      status,
-      delegated: parsed.delegated === true
-    });
+    pushJobRef({ jobId, botId, status, delegated: parsed.delegated === true });
+  }
+  if (Array.isArray(parsed.jobs)) {
+    for (const job of parsed.jobs.slice(0, 8)) {
+      pushJobRef(job);
+    }
+  }
+  if (Array.isArray(parsed.childJobs)) {
+    for (const job of parsed.childJobs.slice(0, 8)) {
+      pushJobRef(job, { delegated: true });
+    }
   }
   const files = Array.isArray(parsed.files)
     ? parsed.files.map(summarizeToolFileRef).filter((item) => item?.fileId || item?.path).slice(0, 5)
@@ -446,6 +609,15 @@ function summarizeToolResultForTrace(toolResult = "") {
       total: Number.isFinite(parsed.total) ? Number(parsed.total) : null,
       missing: Array.isArray(parsed.missing) ? parsed.missing.length : null
     },
+    log: summarizeLogForTrace(parsed.log),
+    childJobCount: Array.isArray(parsed.childJobs) ? parsed.childJobs.length : null,
+    agentTrace: parsed.agentTrace && typeof parsed.agentTrace === "object"
+      ? {
+          eventCount: Number.isFinite(Number(parsed.agentTrace.eventCount ?? parsed.agentTrace.events?.length)) ? Number(parsed.agentTrace.eventCount ?? parsed.agentTrace.events?.length) : null,
+          childJobCount: Number.isFinite(Number(parsed.agentTrace.childJobCount)) ? Number(parsed.agentTrace.childJobCount) : null
+        }
+      : null,
+    fileAccess: summarizeFileAccessForTrace(parsed),
     requiresConfirmation: parsed.requiresConfirmation === true,
     blocked: parsed.blocked === true,
     blockedReason: String(parsed.blockedReason || "").trim(),
@@ -517,6 +689,13 @@ export function getAiToolProgress(toolName = "", round = 0) {
     return {
       phase: "tool-read-agent-trace",
       label: safeRound > 0 ? `继续读取 agent trace（第 ${safeRound + 1} 轮）` : "读取 AI agent trace",
+      percent: 42 + offset
+    };
+  }
+  if (normalized === "read_bot_job_log") {
+    return {
+      phase: "tool-read-bot-job-log",
+      label: safeRound > 0 ? `继续读取 bot 任务日志（第 ${safeRound + 1} 轮）` : "读取 bot 任务日志",
       percent: 42 + offset
     };
   }
