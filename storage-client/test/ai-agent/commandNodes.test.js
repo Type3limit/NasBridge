@@ -50,7 +50,21 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
     },
     recoveryHint: {
       mode: "text-retry-tools",
-      nextAction: "直接重试未完成的只读工具：read_media_summary"
+      nextAction: "直接重试未完成的只读工具：read_media_summary",
+      suggestedAction: {
+        tool: "read_media_summary",
+        reason: "已有媒体派生信息可读取。"
+      },
+      suggestedActions: [
+        {
+          tool: "read_media_summary",
+          reason: "已有媒体派生信息可读取。"
+        },
+        {
+          tool: "invoke_video_analyze",
+          riskLevel: "medium"
+        }
+      ]
     },
     planSummary: {
       count: 2,
@@ -140,6 +154,8 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
 
   assert.match(body, /Agent job: botjob_parent/);
   assert.match(body, /恢复建议/);
+  assert.match(body, /suggested tools: read_media_summary, invoke_video_analyze/);
+  assert.match(body, /suggested reason: 已有媒体派生信息可读取。/);
   assert.match(body, /Agent 计划/);
   assert.match(body, /tools=invoke_video_analyze/);
   assert.match(body, /子任务: failed 1/);

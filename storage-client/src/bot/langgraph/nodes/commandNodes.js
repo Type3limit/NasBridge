@@ -378,7 +378,19 @@ export function formatAgentTraceReport(trace = {}) {
     ? [
         "恢复建议:",
         `- mode: ${trace.recoveryHint.mode || "unknown"}`,
-        `- next: ${trace.recoveryHint.nextAction}`
+        `- next: ${trace.recoveryHint.nextAction}`,
+        Array.isArray(trace.recoveryHint.suggestedActions) && trace.recoveryHint.suggestedActions.length
+          ? `- suggested tools: ${trace.recoveryHint.suggestedActions.map((action) => action.tool || action.id).filter(Boolean).join(", ")}`
+          : "",
+        trace.recoveryHint.suggestedAction?.reason ? `- suggested reason: ${trace.recoveryHint.suggestedAction.reason}` : ""
+      ].filter(Boolean).join("\n")
+    : "";
+
+  const suggestedOnly = !recovery && Array.isArray(trace.recoveryHint?.suggestedActions) && trace.recoveryHint.suggestedActions.length
+    ? [
+        "文件访问建议:",
+        `- tools: ${trace.recoveryHint.suggestedActions.map((action) => action.tool || action.id).filter(Boolean).join(", ")}`,
+        trace.recoveryHint.suggestedAction?.reason ? `- reason: ${trace.recoveryHint.suggestedAction.reason}` : ""
       ].join("\n")
     : "";
 
@@ -407,7 +419,7 @@ export function formatAgentTraceReport(trace = {}) {
     ? ["最近步骤:", ...timelineItems.map(formatTraceTimelineItem)].join("\n")
     : "最近步骤: trace 里没有可展示的事件。";
 
-  return [header, pending, recovery, plan, childJobs, tools, timeline].filter(Boolean).join("\n\n");
+  return [header, pending, recovery, suggestedOnly, plan, childJobs, tools, timeline].filter(Boolean).join("\n\n");
 }
 
 async function resolveModelForSettings(rawModel = "", modelSettings = {}, api = {}, purpose = "text") {

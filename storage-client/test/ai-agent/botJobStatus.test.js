@@ -446,3 +446,83 @@ test("agent trace result includes direct retry recovery hints for read-only tool
   assert.deepEqual(trace.recoveryHint.retryPolicy.blockedRetryToolNames, []);
   assert.match(trace.recoveryHint.nextAction, /直接重试/);
 });
+
+test("agent trace result surfaces file access suggested actions from tool traces", async () => {
+  const appDataRoot = await createTempAppDataRoot();
+  const jobId = "botjob_file_access_actions";
+  const graphRoot = path.join(appDataRoot, "ai-chat-graph");
+  await fs.mkdir(path.join(graphRoot, "executions"), { recursive: true });
+  await fs.mkdir(path.join(graphRoot, "traces"), { recursive: true });
+  await fs.writeFile(
+    path.join(graphRoot, "executions", `${jobId}.json`),
+    `${JSON.stringify({
+      savedAt: "2026-07-02T00:00:00.000Z",
+      jobId,
+      botId: "ai.chat",
+      status: "failed",
+      route: "text",
+      traceSummary: {
+        count: 3,
+        nodes: ["prepareInput", "prepareContext", "textAnswer"],
+        lastNode: "textAnswer",
+        lastStatus: "failed",
+        lastAt: "2026-07-02T00:00:00.000Z"
+      }
+    }, null, 2)}\n`,
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(graphRoot, "traces", `${jobId}.jsonl`),
+    `${JSON.stringify({
+      sequence: 1,
+      at: "2026-07-02T00:00:00.000Z",
+      kind: "tool",
+      tool: "diagnose_file_access",
+      round: 0,
+      status: "succeeded",
+      resultSummary: {
+        fileAccess: {
+          found: true,
+          contentAccess: { analyzeMode: "media" },
+          layers: [{ id: "metadata", available: true }],
+          actionPlan: [
+            {
+              id: "read-media-summary",
+              tool: "read_media_summary",
+              contentLayer: "derived-media",
+              riskLevel: "low",
+              reason: "已有派生信息，先读取媒体摘要。"
+            },
+            {
+              id: "write-metadata-if-requested",
+              tool: "update_file_metadata",
+              contentLayer: "write-metadata",
+              riskLevel: "medium",
+              requiresConfirmation: true,
+              reason: "只有用户要求写标签时才执行。"
+            },
+            {
+              id: "repair-analysis-dependencies",
+              tool: "diagnose_file_access",
+              blocked: true,
+              blockerIds: ["dependency-whisper"],
+              reason: "Whisper 未就绪。"
+            }
+          ],
+          nextActions: ["调用 read_media_summary 读取已有摘要。"]
+        }
+      }
+    })}\n`,
+    "utf8"
+  );
+
+  const trace = await buildAgentTraceResult({ appDataRoot }, { jobId });
+
+  assert.equal(trace.recoveryHint.mode, "answer-rebuild");
+  assert.equal(trace.recoveryHint.suggestedAction.tool, "read_media_summary");
+  assert.deepEqual(trace.recoveryHint.suggestedActions.map((action) => action.tool), ["read_media_summary", "update_file_metadata"]);
+  assert.equal(trace.recoveryHint.suggestedActions[1].requiresConfirmation, true);
+  assert.match(trace.recoveryHint.suggestedNextAction, /read_media_summary/);
+  assert.equal(trace.timeline[0].resultSummary.fileAccess.actionPlan[0].tool, "read_media_summary");
+  assert.equal(trace.timeline[0].resultSummary.fileAccess.actionPlan[2].blocked, true);
+});

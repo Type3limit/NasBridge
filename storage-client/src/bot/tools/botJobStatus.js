@@ -313,6 +313,7 @@ function compactTraceResultSummary(summary = null) {
   if (!summary || typeof summary !== "object") {
     return null;
   }
+  const fileAccess = summary.fileAccess && typeof summary.fileAccess === "object" ? summary.fileAccess : null;
   return {
     status: String(summary.status || "").trim(),
     delegated: summary.delegated === true,
@@ -334,8 +335,92 @@ function compactTraceResultSummary(summary = null) {
           status: String(summary.blocker.status || "").trim()
         }
       : null,
-    nextAction: String(summary.nextAction || "").trim()
+    nextAction: String(summary.nextAction || "").trim(),
+    fileAccess: fileAccess
+      ? compactTraceFileAccessSummary(fileAccess)
+      : null
   };
+}
+
+function compactTraceAccessAction(action = null) {
+  if (!action || typeof action !== "object") {
+    return null;
+  }
+  return Object.fromEntries(Object.entries({
+    id: String(action.id || "").trim(),
+    tool: String(action.tool || "").trim(),
+    contentLayer: String(action.contentLayer || "").trim(),
+    riskLevel: String(action.riskLevel || "").trim(),
+    requiresConfirmation: action.requiresConfirmation === true,
+    blocked: action.blocked === true,
+    blockerIds: Array.isArray(action.blockerIds) ? action.blockerIds.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 6) : [],
+    reason: redactSensitiveText(String(action.reason || "").trim()).slice(0, 180)
+  }).filter(([, value]) => {
+    if (value === "" || value === null || value === undefined) {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    return true;
+  }));
+}
+
+function compactTraceAccessLayer(layer = null) {
+  if (!layer || typeof layer !== "object") {
+    return null;
+  }
+  return Object.fromEntries(Object.entries({
+    id: String(layer.id || "").trim(),
+    label: String(layer.label || "").trim(),
+    available: layer.available === true,
+    riskLevel: String(layer.riskLevel || "").trim()
+  }).filter(([, value]) => value !== "" && value !== null && value !== undefined));
+}
+
+function compactTraceAccessBlocker(blocker = null) {
+  if (!blocker || typeof blocker !== "object") {
+    return null;
+  }
+  return Object.fromEntries(Object.entries({
+    id: String(blocker.id || "").trim(),
+    severity: String(blocker.severity || blocker.status || "").trim(),
+    message: redactSensitiveText(String(blocker.message || blocker.detail || "").trim()).slice(0, 180)
+  }).filter(([, value]) => value !== "" && value !== null && value !== undefined));
+}
+
+function compactTraceFileAccessSummary(fileAccess = null) {
+  if (!fileAccess || typeof fileAccess !== "object") {
+    return null;
+  }
+  const contentAccess = fileAccess.contentAccess && typeof fileAccess.contentAccess === "object" ? fileAccess.contentAccess : {};
+  return Object.fromEntries(Object.entries({
+    found: typeof fileAccess.found === "boolean" ? fileAccess.found : null,
+    contentAccess: Object.fromEntries(Object.entries({
+      analyzeMode: String(contentAccess.analyzeMode || "").trim(),
+      textReadable: contentAccess.textReadable === true,
+      subtitleAvailable: contentAccess.subtitleAvailable === true,
+      aiSummaryAvailable: contentAccess.aiSummaryAvailable === true,
+      media: contentAccess.media === true,
+      videoOrAudio: contentAccess.videoOrAudio === true,
+      image: contentAccess.image === true
+    }).filter(([, value]) => value !== "" && value !== null)),
+    layers: Array.isArray(fileAccess.layers) ? fileAccess.layers.map(compactTraceAccessLayer).filter(Boolean).slice(0, 8) : [],
+    blockers: Array.isArray(fileAccess.blockers) ? fileAccess.blockers.map(compactTraceAccessBlocker).filter(Boolean).slice(0, 8) : [],
+    actionPlan: Array.isArray(fileAccess.actionPlan) ? fileAccess.actionPlan.map(compactTraceAccessAction).filter(Boolean).slice(0, 8) : [],
+    nextActions: Array.isArray(fileAccess.nextActions) ? fileAccess.nextActions.map((item) => redactSensitiveText(String(item || "").trim()).slice(0, 180)).filter(Boolean).slice(0, 5) : []
+  }).filter(([, value]) => {
+    if (value === null || value === "" || value === undefined) {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    if (value && typeof value === "object") {
+      return Object.keys(value).length > 0;
+    }
+    return true;
+  }));
 }
 
 function compactTraceAgentDetail(detail = null) {
@@ -562,7 +647,55 @@ function buildTracePlanSummary(events = []) {
   };
 }
 
-function buildTraceRecoveryHint(snapshot = null, pendingConfirmation = null) {
+function buildSuggestedFileAccessActions(events = []) {
+  const result = [];
+  const seen = new Set();
+  const orderedEvents = [...(Array.isArray(events) ? events : [])].reverse();
+  for (const event of orderedEvents) {
+    if (String(event?.kind || "").trim() !== "tool") {
+      continue;
+    }
+    const actions = Array.isArray(event?.resultSummary?.fileAccess?.actionPlan)
+      ? event.resultSummary.fileAccess.actionPlan
+      : [];
+    for (const action of actions) {
+      const compact = compactTraceAccessAction(action);
+      const tool = String(compact?.tool || "").trim();
+      if (!tool || compact?.blocked === true) {
+        continue;
+      }
+      const key = `${tool}:${compact.contentLayer || ""}:${compact.riskLevel || ""}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      result.push(compact);
+      if (result.length >= 5) {
+        return result;
+      }
+    }
+  }
+  return result;
+}
+
+function decorateRecoveryHintWithSuggestedActions(hint = null, actions = []) {
+  if (!hint || typeof hint !== "object" || !Array.isArray(actions) || !actions.length) {
+    return hint;
+  }
+  const suggestedActions = actions.slice(0, 5);
+  const suggestedAction = suggestedActions[0] || null;
+  const toolNames = suggestedActions.map((action) => action.tool).filter(Boolean);
+  return {
+    ...hint,
+    suggestedAction,
+    suggestedActions,
+    suggestedNextAction: toolNames.length
+      ? `文件访问建议下一步：${toolNames.join("、")}`
+      : ""
+  };
+}
+
+function buildTraceRecoveryHint(snapshot = null, pendingConfirmation = null, events = []) {
   if (pendingConfirmation?.tool) {
     const confirmation = pendingConfirmation.confirmation && typeof pendingConfirmation.confirmation === "object"
       ? pendingConfirmation.confirmation
@@ -580,8 +713,19 @@ function buildTraceRecoveryHint(snapshot = null, pendingConfirmation = null) {
     };
   }
 
+  const suggestedActions = buildSuggestedFileAccessActions(events);
   if (!snapshot || typeof snapshot !== "object") {
-    return null;
+    return suggestedActions.length
+      ? {
+          mode: "file-access-suggested-actions",
+          route: "text",
+          canContinueDirectly: true,
+          requiresUserConfirmation: suggestedActions.some((action) => action.requiresConfirmation === true),
+          nextAction: `文件访问建议下一步：${suggestedActions.map((action) => action.tool).filter(Boolean).join("、")}`,
+          suggestedAction: suggestedActions[0],
+          suggestedActions
+        }
+      : null;
   }
 
   const status = String(snapshot.status || "unknown").trim() || "unknown";
@@ -599,16 +743,16 @@ function buildTraceRecoveryHint(snapshot = null, pendingConfirmation = null) {
   if (lastNode === "textTools") {
     const retryPolicy = resolveTextToolsRecoveryPolicy(snapshot.recoveryState || null);
     if (retryPolicy.directRetryAllowed) {
-      return {
+      return decorateRecoveryHintWithSuggestedActions({
         ...base,
         mode: "text-retry-tools",
         route: "textTools",
         canContinueDirectly: true,
         nextAction: `直接重试未完成的只读工具：${retryPolicy.retryableToolNames.join("、")}`,
         retryPolicy
-      };
+      }, suggestedActions);
     }
-    return {
+    return decorateRecoveryHintWithSuggestedActions({
       ...base,
       mode: "text-replan",
       route: "text",
@@ -616,50 +760,50 @@ function buildTraceRecoveryHint(snapshot = null, pendingConfirmation = null) {
         ? `重新规划，并避免直接重试这些工具：${retryPolicy.blockedRetryToolNames.join("、")}`
         : "重新规划文本链路。",
       retryPolicy
-    };
+    }, suggestedActions);
   }
 
   if (lastNode === "visionBuild") {
-    return {
+    return decorateRecoveryHintWithSuggestedActions({
       ...base,
       mode: "vision-require-attachment",
       route: "recovery",
       requiresAttachment: true,
       nextAction: "请用户重新上传图片后再继续。"
-    };
+    }, suggestedActions);
   }
 
   if (lastNode === "textAnswer" || lastNode === "visionAnswer") {
-    return {
+    return decorateRecoveryHintWithSuggestedActions({
       ...base,
       mode: "answer-rebuild",
       route: route === "vision" ? "vision" : "text",
       nextAction: "复用已有上下文并重建完整回答。"
-    };
+    }, suggestedActions);
   }
 
   if (status === "cancelled") {
-    return {
+    return decorateRecoveryHintWithSuggestedActions({
       ...base,
       mode: "cancelled-replan",
       nextAction: "按当前请求重新规划。"
-    };
+    }, suggestedActions);
   }
 
   if (status === "failed") {
-    return {
+    return decorateRecoveryHintWithSuggestedActions({
       ...base,
       mode: "failed-replan",
       nextAction: "结合失败节点重新规划。"
-    };
+    }, suggestedActions);
   }
 
-  return {
+  return decorateRecoveryHintWithSuggestedActions({
     ...base,
     mode: "resume-default",
     route: route === "vision" ? "vision" : "text",
     nextAction: "延续当前会话并重新组织上下文。"
-  };
+  }, suggestedActions);
 }
 
 async function readJob(api = {}, store, jobId = "") {
@@ -781,7 +925,7 @@ export async function buildAgentTraceResult(api = {}, input = {}) {
     missing: !snapshot && !events.length,
     snapshot: summarizeTraceSnapshot(snapshot),
     pendingConfirmation: pendingConfirmation ? redactValue(pendingConfirmation) : null,
-    recoveryHint: buildTraceRecoveryHint(snapshot, pendingConfirmation),
+    recoveryHint: buildTraceRecoveryHint(snapshot, pendingConfirmation, events),
     timeline: buildTraceTimeline(events),
     planSummary: buildTracePlanSummary(events),
     toolStats: buildTraceToolStats(events),
