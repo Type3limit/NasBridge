@@ -13,7 +13,7 @@ import {
   isConfirmationPrompt,
   isContinuationPrompt
 } from "../../src/bot/langgraph/nodes/recoveryNodes.js";
-import { createRecoveryArtifact, createRecoveryReplyText } from "../../src/bot/plugins/ai-chat/recovery.js";
+import { createRecoveryArtifact, createRecoveryCard, createRecoveryReplyText } from "../../src/bot/plugins/ai-chat/recovery.js";
 import { createAiSession } from "../../src/bot/plugins/ai-chat/services/aiSessions.js";
 
 async function withTempDir(fn) {
@@ -229,6 +229,8 @@ test("session checkpoint exposes pending confirmation from tool trace", async ()
     assert.equal(guidance.recoveryAction.mode, "awaiting-confirmation");
     assert.equal(guidance.recoveryAction.pendingConfirmation.tool, "invoke_video_tag");
     assert.match(guidance.strategy, /等待用户确认|明确确认/);
+    const card = createRecoveryCard(createRecoveryReplyText(guidance), guidance, { id: 1 });
+    assert.deepEqual(card.actions, []);
 
     assert.equal(isConfirmationPrompt("确认，继续执行"), true);
     const recovered = buildConfirmedToolRecoveryState(checkpoint.pendingConfirmation, "确认，继续执行");
@@ -270,6 +272,14 @@ test("session recovery guidance includes file access suggested actions from trac
     const artifact = createRecoveryArtifact(guidance, { id: 1 });
     assert.deepEqual(artifact.fileAccessSuggestedActions.map((action) => action.tool), ["read_media_summary", "invoke_video_analyze"]);
     assert.match(artifact.suggestedNextStep, /read_media_summary/);
+
+    const card = createRecoveryCard(reply, guidance, { id: 1, name: "file access recovery" });
+    assert.equal(card.actions.length, 1);
+    assert.equal(card.actions[0].type, "invoke-bot");
+    assert.equal(card.actions[0].botId, "ai.chat");
+    assert.equal(card.actions[0].label, "重试失败步骤");
+    assert.equal(card.actions[0].rawText, "#1 继续");
+    assert.equal(card.actions[0].parsedArgs.__chatReplyMode, "replace-chat-message");
 
     assert.equal(isContinuationPrompt("继续"), true);
     assert.equal(isContinuationPrompt("继续刚才的任务"), true);

@@ -53,6 +53,37 @@ function getRecoveryModeLabel(mode = "") {
   return "恢复流程";
 }
 
+function buildRecoveryContinueAction(label = "", session = null) {
+  const sessionId = session?.id ?? null;
+  const rawText = sessionId != null && sessionId !== ""
+    ? `#${sessionId} 继续`
+    : "继续";
+  return {
+    type: "invoke-bot",
+    label: String(label || "继续").trim(),
+    botId: "ai.chat",
+    rawText,
+    parsedArgs: {
+      __chatReplyMode: "replace-chat-message"
+    }
+  };
+}
+
+function buildRecoveryCardActions(recoveryAction = {}, session = null) {
+  if (recoveryAction?.requiresAttachment === true || recoveryAction?.requiresUserConfirmation === true || recoveryAction?.pendingConfirmation) {
+    return [];
+  }
+  const mode = String(recoveryAction?.mode || "").trim();
+  const hasFileAccessActions = Array.isArray(recoveryAction?.fileAccessSuggestedActions) && recoveryAction.fileAccessSuggestedActions.length > 0;
+  if (recoveryAction?.directRetryAllowed === true || mode === "file-access-retry-tools" || hasFileAccessActions) {
+    return [buildRecoveryContinueAction("重试失败步骤", session)];
+  }
+  if (["text-replan", "cancelled-replan", "failed-replan", "answer-rebuild"].includes(mode)) {
+    return [buildRecoveryContinueAction("重新规划", session)];
+  }
+  return [];
+}
+
 export function createRecoveryReplyText(recoveryGuidance = null) {
   const recoveryAction = recoveryGuidance?.recoveryAction || {};
   const lines = [String(recoveryAction.shortCircuitReply || recoveryGuidance?.strategy || "当前会话需要额外恢复信息后才能继续。").trim()];
@@ -75,7 +106,8 @@ export function createRecoveryCard(reply, recoveryGuidance = null, session = nul
     status: recoveryAction.requiresAttachment ? "needs-input" : "succeeded",
     title: "AI 会话恢复",
     subtitle: withSessionSubtitle(getRecoveryModeLabel(recoveryAction.mode || "resume-default"), session),
-    body: String(reply || "").slice(0, MAX_CARD_BODY_LENGTH)
+    body: String(reply || "").slice(0, MAX_CARD_BODY_LENGTH),
+    actions: buildRecoveryCardActions(recoveryAction, session)
   };
 }
 
