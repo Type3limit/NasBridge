@@ -260,6 +260,64 @@ test("tool execution preflight blocks unavailable hard dependencies without crea
   assert.match(api.logs.join("\n"), /tool-call-blocked invoke_video_analyze/);
 });
 
+test("delegated tool results write structured job refs into tool trace events", async () => {
+  const api = createFakeApi();
+  api.botId = "ai.chat";
+  api.jobId = "botjob_parent";
+  api.invokeBot = async (request) => {
+    assert.equal(request.botId, "video.analyze");
+    assert.equal(request.options.parentJobId, "botjob_parent");
+    return { jobId: "botjob_child", status: "queued" };
+  };
+
+  const observedMessages = await executePendingToolCallsRound({
+    pendingToolCalls: [
+      {
+        id: "call_2",
+        name: "invoke_video_analyze",
+        input: { fileId: "client:Videos/demo.mp4" }
+      }
+    ],
+    planningMessages: [
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call_2",
+            type: "function",
+            function: {
+              name: "invoke_video_analyze",
+              arguments: JSON.stringify({ fileId: "client:Videos/demo.mp4" })
+            }
+          }
+        ]
+      }
+    ],
+    recentMessages: [],
+    context: { chat: {}, attachments: [] },
+    api,
+    round: 0
+  });
+
+  const observation = observedMessages.at(-1);
+  assert.equal(observation.role, "tool");
+  assert.match(observation.content, /botjob_child/);
+  assert.equal(api.toolEvents[0].status, "completed");
+  assert.equal(api.toolEvents[0].resultSummary.jobId, "botjob_child");
+  assert.equal(api.toolEvents[0].resultSummary.botId, "video.analyze");
+  assert.equal(api.toolEvents[0].resultSummary.delegated, true);
+  assert.deepEqual(api.toolEvents[0].resultSummary.jobRefs, [
+    {
+      jobId: "botjob_child",
+      botId: "video.analyze",
+      status: "queued",
+      delegated: true
+    }
+  ]);
+  assert.equal(api.toolEvents[0].resultSummary.file.path, "Videos/demo.mp4");
+});
+
 test("parseJsonToolPlan rejects unknown tools and accepts final answers", () => {
   const tools = [{ name: "search_library_files", inputSchema: { type: "object" } }];
 

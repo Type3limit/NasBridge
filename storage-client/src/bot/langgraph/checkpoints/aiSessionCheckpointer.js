@@ -290,7 +290,7 @@ export function createAiSessionCheckpointer({ appDataRoot = "", jobId = "", botI
         status: String(status || "").trim()
       });
     },
-    async recordToolEvent({ name = "", round = 0, status = "", input = null, outputPreview = "" } = {}) {
+    async recordToolEvent({ name = "", round = 0, status = "", input = null, outputPreview = "", resultSummary = null, errorSummary = null } = {}) {
       await appendJsonLine(getExecutionTracePath(appDataRoot, normalizedJobId), {
         ...createBaseEvent(),
         kind: "tool",
@@ -298,7 +298,14 @@ export function createAiSessionCheckpointer({ appDataRoot = "", jobId = "", botI
         round: Number.isFinite(round) ? Number(round) : 0,
         status: String(status || "").trim(),
         input,
-        outputPreview: String(outputPreview || "").slice(0, 320)
+        outputPreview: String(outputPreview || "").slice(0, 320),
+        resultSummary: resultSummary && typeof resultSummary === "object" ? resultSummary : null,
+        errorSummary: errorSummary && typeof errorSummary === "object"
+          ? {
+              name: String(errorSummary.name || "Error").trim(),
+              message: String(errorSummary.message || "").slice(0, 500)
+            }
+          : null
       });
     },
     async recordAgentEvent({ phase = "", round = 0, status = "", detail = {}, outputPreview = "" } = {}) {

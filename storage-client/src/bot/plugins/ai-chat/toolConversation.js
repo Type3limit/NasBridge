@@ -308,6 +308,95 @@ function buildToolExecutionPreflightResult(toolCall = {}, api = {}, healthSnapsh
   };
 }
 
+function parseToolResultJson(value = "") {
+  const text = String(value || "").trim();
+  if (!text || !text.startsWith("{")) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function summarizeToolFileRef(file = null) {
+  if (!file || typeof file !== "object") {
+    return null;
+  }
+  return {
+    fileId: String(file.fileId || file.id || "").trim(),
+    path: String(file.path || file.relativePath || "").trim(),
+    name: String(file.name || "").trim(),
+    mimeType: String(file.mimeType || "").trim()
+  };
+}
+
+function summarizeToolResultForTrace(toolResult = "") {
+  const parsed = parseToolResultJson(toolResult);
+  if (!parsed) {
+    return null;
+  }
+  const jobRefs = [];
+  const status = String(parsed.status || "").trim();
+  const botId = String(parsed.botId || "").trim();
+  const jobId = String(parsed.jobId || "").trim();
+  if (jobId) {
+    jobRefs.push({
+      jobId,
+      botId,
+      status,
+      delegated: parsed.delegated === true
+    });
+  }
+  const files = Array.isArray(parsed.files)
+    ? parsed.files.map(summarizeToolFileRef).filter((item) => item?.fileId || item?.path).slice(0, 5)
+    : [];
+  const result = {
+    status,
+    delegated: parsed.delegated === true,
+    botId,
+    jobId,
+    jobRefs,
+    file: summarizeToolFileRef(parsed.file),
+    files,
+    counts: {
+      count: Number.isFinite(parsed.count) ? Number(parsed.count) : null,
+      total: Number.isFinite(parsed.total) ? Number(parsed.total) : null,
+      missing: Array.isArray(parsed.missing) ? parsed.missing.length : null
+    },
+    blocker: parsed.blocker && typeof parsed.blocker === "object"
+      ? {
+          id: String(parsed.blocker.id || "").trim(),
+          label: String(parsed.blocker.label || "").trim(),
+          status: String(parsed.blocker.status || "").trim()
+        }
+      : null,
+    nextAction: String(parsed.nextAction || "").trim(),
+    logHint: String(parsed.logHint || "").trim()
+  };
+  return Object.fromEntries(Object.entries(result).filter(([, value]) => {
+    if (value === null || value === "") {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    if (value && typeof value === "object") {
+      return Object.values(value).some((item) => item !== null && item !== "" && !(Array.isArray(item) && item.length === 0));
+    }
+    return true;
+  }));
+}
+
+function summarizeToolErrorForTrace(error = null) {
+  return {
+    name: String(error?.name || "Error").trim(),
+    message: String(error?.message || error || "unknown error").trim().slice(0, 500)
+  };
+}
+
 export function getAiToolProgress(toolName = "", round = 0) {
   const safeRound = Math.max(0, Number(round) || 0);
   const offset = Math.min(MAX_TOOL_ROUND_OFFSET, safeRound * 5);
@@ -672,7 +761,8 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
         round,
         status: "blocked",
         input: fallbackMode ? { ...(toolCall.input || {}), __fallback: fallbackMode } : (toolCall.input || {}),
-        outputPreview: toolResult
+        outputPreview: toolResult,
+        resultSummary: summarizeToolResultForTrace(toolResult)
       });
     } else {
       try {
@@ -682,7 +772,8 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
           round,
           status: "completed",
           input: fallbackMode ? { ...(toolCall.input || {}), __fallback: fallbackMode } : (toolCall.input || {}),
-          outputPreview: String(toolResult || "")
+          outputPreview: String(toolResult || ""),
+          resultSummary: summarizeToolResultForTrace(toolResult)
         });
       } catch (error) {
         const cancelled = error?.name === "AbortError" || /job cancelled/i.test(String(error?.message || ""));
@@ -691,7 +782,8 @@ export async function executePendingToolCallsRound({ pendingToolCalls, planningM
           round,
           status: cancelled ? "cancelled" : "failed",
           input: fallbackMode ? { ...(toolCall.input || {}), __fallback: fallbackMode } : (toolCall.input || {}),
-          outputPreview: String(error?.message || error || "")
+          outputPreview: String(error?.message || error || ""),
+          errorSummary: summarizeToolErrorForTrace(error)
         });
         throw error;
       }

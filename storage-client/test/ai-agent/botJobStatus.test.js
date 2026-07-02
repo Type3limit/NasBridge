@@ -79,7 +79,20 @@ test("bot job log bundle includes redacted log, agent trace, and delegated child
       tool: "invoke_video_analyze",
       status: "succeeded",
       input: { apiKey: "sk-should-not-leak-1234567890", fileId: "file_1" },
-      outputPreview: "jobId=botjob_child"
+      outputPreview: "jobId=botjob_child",
+      resultSummary: {
+        delegated: true,
+        botId: "video.analyze",
+        jobId: "botjob_child",
+        jobRefs: [
+          {
+            jobId: "botjob_child",
+            botId: "video.analyze",
+            status: "queued",
+            delegated: true
+          }
+        ]
+      }
     })}\n`,
     "utf8"
   );
@@ -103,4 +116,6 @@ test("bot job log bundle includes redacted log, agent trace, and delegated child
   assert.equal(bundle.agentTrace.events.length, 1);
   assert.equal(bundle.agentTrace.events[0].input.apiKey, "***");
   assert.equal(bundle.agentTrace.events[0].input.fileId, "file_1");
+  assert.equal(bundle.agentTrace.events[0].resultSummary.jobId, "botjob_child");
+  assert.equal(bundle.agentTrace.events[0].resultSummary.jobRefs[0].botId, "video.analyze");
 });
