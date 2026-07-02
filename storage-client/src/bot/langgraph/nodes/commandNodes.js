@@ -166,6 +166,7 @@ function formatTraceTimelineItem(item = {}) {
   const label = String(item.label || item.tool || item.phase || item.node || "event").trim();
   const resultSummary = item.resultSummary && typeof item.resultSummary === "object" ? item.resultSummary : {};
   const suffixes = [
+    item.agentPhase ? `phase=${item.agentPhase}` : "",
     item.durationMs != null ? formatDurationMs(item.durationMs) : "",
     item.detailSummary?.pendingTools?.length
       ? `tools=${item.detailSummary.pendingTools.map((tool) => tool.name).filter(Boolean).join(",")}`
@@ -380,6 +381,7 @@ export function formatAgentTraceReport(trace = {}) {
     snapshot.status ? `状态: ${snapshot.status}` : "",
     snapshot.route ? `路线: ${snapshot.route}` : "",
     traceSummary.lastNode ? `最后节点: ${traceSummary.lastNode}` : "",
+    traceSummary.lastAgentPhase ? `最后阶段: ${traceSummary.lastAgentPhase}` : "",
     snapshot.savedAt ? `保存时间: ${String(snapshot.savedAt).slice(0, 19).replace("T", " ")}` : ""
   ].filter(Boolean).join("\n");
 

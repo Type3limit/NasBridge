@@ -45,7 +45,8 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
       route: "textTools",
       savedAt: "2026-07-02T08:00:00.000Z",
       traceSummary: {
-        lastNode: "textTools"
+        lastNode: "textTools",
+        lastAgentPhase: "ToolExecute/Observe"
       }
     },
     recoveryHint: {
@@ -115,6 +116,7 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
     timeline: [{
       index: 1,
       label: "invoke_video_analyze (succeeded)",
+      agentPhase: "ToolExecute/Observe",
       durationMs: 1250,
       inputSummary: { tool: "invoke_video_analyze", fileId: "client:movie.mp4" },
       resultSummary: {
@@ -153,6 +155,7 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
   });
 
   assert.match(body, /Agent job: botjob_parent/);
+  assert.match(body, /最后阶段: ToolExecute\/Observe/);
   assert.match(body, /恢复建议/);
   assert.match(body, /suggested tools: read_media_summary, invoke_video_analyze/);
   assert.match(body, /suggested reason: 已有媒体派生信息可读取。/);
@@ -163,6 +166,7 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
   assert.match(body, /invoke_video_analyze: 1 次/);
   assert.match(body, /video\.analyze:botjob_child/);
   assert.match(body, /最近步骤/);
+  assert.match(body, /phase=ToolExecute\/Observe/);
   assert.match(body, /access: found=true · mode=media · layers=metadata · blockers=dependency-whisper · actions=read_file_metadata,invoke_video_analyze/);
   assert.match(body, /log: job=botjob_parent · chars=2048 · truncated/);
   assert.match(body, /trace: events=4 · childJobs=1/);

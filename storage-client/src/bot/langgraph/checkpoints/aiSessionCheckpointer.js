@@ -227,7 +227,9 @@ function buildTraceSummary(trace = []) {
     count: items.length,
     kinds: [...new Set(items.map((item) => String(item?.kind || "").trim()).filter(Boolean))],
     nodes: [...new Set(items.map((item) => String(item?.node || "").trim()).filter(Boolean))],
+    agentPhases: [...new Set(items.map((item) => String(item?.agentPhase || "").trim()).filter(Boolean))],
     lastNode: String(last?.node || "").trim(),
+    lastAgentPhase: String(last?.agentPhase || "").trim(),
     lastStatus: String(last?.status || "").trim(),
     lastAt: String(last?.at || "").trim()
   };

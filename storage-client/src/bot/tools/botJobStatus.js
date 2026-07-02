@@ -549,6 +549,7 @@ function buildTraceTimeline(events = []) {
     status: String(event.status || "").trim(),
     round: Number.isFinite(Number(event.round)) ? Number(event.round) : null,
     node: String(event.node || "").trim(),
+    agentPhase: String(event.agentPhase || "").trim(),
     phase: String(event.phase || "").trim(),
     tool: String(event.tool || "").trim(),
     durationMs: Number.isFinite(Number(event.durationMs)) ? Number(event.durationMs) : null,

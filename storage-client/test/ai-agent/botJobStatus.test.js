@@ -280,6 +280,13 @@ test("agent trace result summarizes plan and observation events", async () => {
     path.join(graphRoot, "traces", `${jobId}.jsonl`),
     [
       JSON.stringify({
+        kind: "node",
+        node: "textPlan",
+        agentPhase: "Plan",
+        event: "exit",
+        status: "completed"
+      }),
+      JSON.stringify({
         kind: "agent",
         phase: "plan_next_step",
         round: 0,
@@ -323,8 +330,10 @@ test("agent trace result summarizes plan and observation events", async () => {
   assert.doesNotMatch(trace.planSummary.rounds[0].plans[0].pendingTools[0].reason, /sk-should-not-leak/);
   assert.equal(trace.planSummary.rounds[0].observations[0].tool, "search_library_files");
   assert.equal(trace.planSummary.rounds[0].observations[0].observationLength, 512);
-  assert.equal(trace.timeline[0].detailSummary.pendingTools[0].name, "search_library_files");
-  assert.equal(trace.timeline[1].detailSummary.tool, "search_library_files");
+  assert.equal(trace.timeline[0].agentPhase, "Plan");
+  assert.equal(trace.timeline[0].label, "textPlan:exit");
+  assert.equal(trace.timeline[1].detailSummary.pendingTools[0].name, "search_library_files");
+  assert.equal(trace.timeline[2].detailSummary.tool, "search_library_files");
 });
 
 test("agent trace result exposes pending confirmation summary", async () => {

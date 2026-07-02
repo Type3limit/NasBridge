@@ -105,12 +105,28 @@ const ANSWER_NODE_NAMES = new Set(["textAnswer", "visionAnswer", "recovery", "co
 
 const TEXT_CONTINUATION_NAMES = new Set(["textTools", "textAnswer"]);
 
+const AGENT_PHASE_BY_NODE = {
+  prepareInput: "PrepareInput",
+  prepareContext: "PrepareContext",
+  textPlan: "Plan",
+  textTools: "ToolExecute/Observe",
+  textAnswer: "ContinueOrFinish",
+  visionCollect: "VisionCollect",
+  visionBuild: "VisionBuild",
+  visionAnswer: "VisionAnswer",
+  delegateResolve: "ToolSelect",
+  delegateExecute: "ToolExecute",
+  command: "Command",
+  recovery: "Recovery"
+};
+
 function createTraceEntry(state, node, status = "completed") {
   return [{
     jobId: String(state?.context?.jobId || "").trim(),
     sessionId: state?.prepared?.activeSession?.id ?? null,
     route: String(state?.route || "").trim(),
     node,
+    agentPhase: AGENT_PHASE_BY_NODE[node] || node,
     status,
     at: new Date().toISOString()
   }];
@@ -158,6 +174,7 @@ function createTrackedNode(nodeName, handlerName) {
         percent: Number.isFinite(state?.progress?.percent) ? state.progress.percent : undefined,
         graphState: {
           activeNode: nodeName,
+          agentPhase: AGENT_PHASE_BY_NODE[nodeName] || nodeName,
           route: String(state?.route || "text").trim(),
           nodeHistory: Array.isArray(state?.trace) ? state.trace : [],
           toolRound: Number.isInteger(state?.toolRound) ? state.toolRound : 0,
@@ -200,6 +217,7 @@ function createTrackedNode(nodeName, handlerName) {
             percent: Number.isFinite(state?.progress?.percent) ? state.progress.percent : undefined,
             graphState: {
               activeNode: nodeName,
+              agentPhase: AGENT_PHASE_BY_NODE[nodeName] || nodeName,
               route: String(nextRoute || "text").trim(),
               nodeHistory: nextTrace,
               toolRound: Number.isInteger(update?.toolRound) ? update.toolRound : Number.isInteger(state?.toolRound) ? state.toolRound : 0,
