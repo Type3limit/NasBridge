@@ -100,7 +100,20 @@ test("bot job log bundle includes redacted log, agent trace, and delegated child
             status: "queued",
             delegated: true
           }
-        ]
+        ],
+        capability: {
+          id: "invoke_video_analyze",
+          kind: "tool",
+          riskLevel: "medium",
+          executionMode: "async-job",
+          requiresConfirmation: false,
+          capabilities: ["media-analysis", "bot-delegation"],
+          permissions: ["bot:invoke", "ai:model:invoke", "storage:content:read", "storage:metadata:write"],
+          output: {
+            required: ["status", "botId", "jobId"],
+            fields: ["status", "phase", "botId", "jobId", "tracking"]
+          }
+        }
       }
     })}\n`,
     "utf8"
@@ -132,6 +145,11 @@ test("bot job log bundle includes redacted log, agent trace, and delegated child
   assert.equal(bundle.agentTrace.timeline[0].durationMs, 1250);
   assert.deepEqual(bundle.agentTrace.timeline[0].inputSummary.identifiers, ["file_1"]);
   assert.equal(bundle.agentTrace.timeline[0].resultSummary.jobRefs[0].jobId, "botjob_child");
+  assert.equal(bundle.agentTrace.timeline[0].resultSummary.capability.id, "invoke_video_analyze");
+  assert.equal(bundle.agentTrace.timeline[0].resultSummary.capability.riskLevel, "medium");
+  assert.equal(bundle.agentTrace.timeline[0].resultSummary.capability.executionMode, "async-job");
+  assert.ok(bundle.agentTrace.timeline[0].resultSummary.capability.permissions.includes("storage:metadata:write"));
+  assert.deepEqual(bundle.agentTrace.timeline[0].resultSummary.capability.output.required, ["status", "botId", "jobId"]);
   assert.equal(bundle.agentTrace.toolStats.count, 1);
   assert.equal(bundle.agentTrace.toolStats.totalDurationMs, 1250);
   assert.equal(bundle.agentTrace.toolStats.tools[0].tool, "invoke_video_analyze");
@@ -523,6 +541,18 @@ test("agent trace result surfaces file access suggested actions from tool traces
       round: 0,
       status: "succeeded",
       resultSummary: {
+        capability: {
+          id: "diagnose_file_access",
+          kind: "tool",
+          riskLevel: "low",
+          executionMode: "sync",
+          capabilities: ["file-access", "file-diagnostics"],
+          permissions: ["storage:metadata:read", "storage:content:read"],
+          output: {
+            required: ["found", "layers", "actionPlan"],
+            fields: ["found", "contentAccess", "layers", "blockers", "actionPlan", "nextActions"]
+          }
+        },
         fileAccess: {
           found: true,
           contentAccess: { analyzeMode: "media" },
@@ -571,7 +601,67 @@ test("agent trace result surfaces file access suggested actions from tool traces
   assert.deepEqual(trace.recoveryHint.suggestedActions.map((action) => action.tool), ["read_media_summary", "update_file_metadata"]);
   assert.equal(trace.recoveryHint.suggestedActions[1].requiresConfirmation, true);
   assert.match(trace.recoveryHint.suggestedNextAction, /read_media_summary/);
+  assert.equal(trace.timeline[0].resultSummary.capability.id, "diagnose_file_access");
+  assert.equal(trace.timeline[0].resultSummary.capability.riskLevel, "low");
+  assert.ok(trace.timeline[0].resultSummary.capability.permissions.includes("storage:content:read"));
+  assert.deepEqual(trace.timeline[0].resultSummary.capability.output.required, ["found", "layers", "actionPlan"]);
   assert.equal(trace.timeline[0].resultSummary.fileAccess.actionPlan[0].tool, "read_media_summary");
   assert.equal(trace.timeline[0].resultSummary.fileAccess.actionPlan[0].input.fileId, "client:movie.mp4");
   assert.equal(trace.timeline[0].resultSummary.fileAccess.actionPlan[2].blocked, true);
+});
+
+test("agent trace timeline preserves failed tool capability metadata", async () => {
+  const appDataRoot = await createTempAppDataRoot();
+  const jobId = "botjob_failed_capability";
+  const graphRoot = path.join(appDataRoot, "ai-chat-graph");
+  await fs.mkdir(path.join(graphRoot, "executions"), { recursive: true });
+  await fs.mkdir(path.join(graphRoot, "traces"), { recursive: true });
+  await fs.writeFile(
+    path.join(graphRoot, "executions", `${jobId}.json`),
+    `${JSON.stringify({
+      savedAt: "2026-07-02T00:00:00.000Z",
+      jobId,
+      botId: "ai.chat",
+      status: "failed",
+      route: "text"
+    }, null, 2)}\n`,
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(graphRoot, "traces", `${jobId}.jsonl`),
+    `${JSON.stringify({
+      sequence: 1,
+      at: "2026-07-02T00:00:00.000Z",
+      kind: "tool",
+      tool: "invoke_ytdlp_downloader",
+      round: 0,
+      status: "failed",
+      errorSummary: {
+        name: "Error",
+        message: "download failed: OPENAI_API_KEY=sk-should-not-leak-1234567890",
+        capability: {
+          id: "invoke_ytdlp_downloader",
+          kind: "tool",
+          riskLevel: "medium",
+          executionMode: "async-job",
+          capabilities: ["download", "bot-delegation"],
+          permissions: ["bot:invoke", "network:download", "storage:file:write"],
+          output: {
+            required: ["status", "botId", "jobId"],
+            fields: ["status", "botId", "jobId", "tracking"]
+          }
+        }
+      }
+    })}\n`,
+    "utf8"
+  );
+
+  const trace = await buildAgentTraceResult({ appDataRoot }, { jobId });
+
+  assert.equal(trace.timeline[0].errorSummary.message.includes("sk-should-not-leak"), false);
+  assert.match(trace.timeline[0].errorSummary.message, /OPENAI_API_KEY=\*\*\*/);
+  assert.equal(trace.timeline[0].errorSummary.capability.id, "invoke_ytdlp_downloader");
+  assert.equal(trace.timeline[0].errorSummary.capability.riskLevel, "medium");
+  assert.ok(trace.timeline[0].errorSummary.capability.permissions.includes("storage:file:write"));
+  assert.deepEqual(trace.timeline[0].errorSummary.capability.output.required, ["status", "botId", "jobId"]);
 });

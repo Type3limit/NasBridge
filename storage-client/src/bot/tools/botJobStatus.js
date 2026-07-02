@@ -350,10 +350,65 @@ function compactTraceResultSummary(summary = null) {
         }
       : null,
     nextAction: String(summary.nextAction || "").trim(),
+    capability: compactTraceCapabilitySummary(summary.capability),
     fileAccess: fileAccess
       ? compactTraceFileAccessSummary(fileAccess)
       : null
   };
+}
+
+function compactTraceStringList(items = [], limit = 8, maxLength = 120) {
+  const seen = new Set();
+  const result = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const value = redactSensitiveText(String(item || "").trim()).slice(0, maxLength);
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    result.push(value);
+    if (result.length >= limit) {
+      break;
+    }
+  }
+  return result;
+}
+
+function compactTraceOutputContract(output = null) {
+  if (!output || typeof output !== "object") {
+    return null;
+  }
+  return Object.fromEntries(Object.entries({
+    required: compactTraceStringList(output.required, 8, 80),
+    fields: compactTraceStringList(output.fields, 16, 80)
+  }).filter(([, value]) => Array.isArray(value) ? value.length > 0 : value != null && value !== ""));
+}
+
+function compactTraceCapabilitySummary(capability = null) {
+  if (!capability || typeof capability !== "object") {
+    return null;
+  }
+  return Object.fromEntries(Object.entries({
+    id: redactSensitiveText(String(capability.id || "").trim()).slice(0, 120),
+    kind: redactSensitiveText(String(capability.kind || "").trim()).slice(0, 80),
+    riskLevel: redactSensitiveText(String(capability.riskLevel || "").trim()).slice(0, 80),
+    executionMode: redactSensitiveText(String(capability.executionMode || "").trim()).slice(0, 80),
+    requiresConfirmation: capability.requiresConfirmation === true,
+    capabilities: compactTraceStringList(capability.capabilities, 10, 80),
+    permissions: compactTraceStringList(capability.permissions, 12, 100),
+    output: compactTraceOutputContract(capability.output)
+  }).filter(([, value]) => {
+    if (value === null || value === "" || value === undefined || value === false) {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    if (value && typeof value === "object") {
+      return Object.keys(value).length > 0;
+    }
+    return true;
+  }));
 }
 
 const SAFE_ACTION_INPUT_KEYS = new Set([
@@ -577,13 +632,27 @@ function buildTraceTimeline(events = []) {
     outputPreview: String(event.outputPreview || "").trim().slice(0, 300),
     inputSummary: event.inputSummary && typeof event.inputSummary === "object" ? redactValue(event.inputSummary) : null,
     resultSummary: compactTraceResultSummary(event.resultSummary),
-    errorSummary: event.errorSummary && typeof event.errorSummary === "object"
-      ? {
-          name: String(event.errorSummary.name || "Error").trim(),
-          message: redactSensitiveText(String(event.errorSummary.message || "").trim()).slice(0, 300)
-        }
-      : null
+    errorSummary: compactTraceErrorSummary(event.errorSummary)
   })).filter((item) => item.kind || item.label);
+}
+
+function compactTraceErrorSummary(errorSummary = null) {
+  if (!errorSummary || typeof errorSummary !== "object") {
+    return null;
+  }
+  return Object.fromEntries(Object.entries({
+    name: String(errorSummary.name || "Error").trim(),
+    message: redactSensitiveText(String(errorSummary.message || "").trim()).slice(0, 300),
+    capability: compactTraceCapabilitySummary(errorSummary.capability)
+  }).filter(([, value]) => {
+    if (value === null || value === "" || value === undefined) {
+      return false;
+    }
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return Object.keys(value).length > 0;
+    }
+    return true;
+  }));
 }
 
 function buildTraceToolStats(events = []) {

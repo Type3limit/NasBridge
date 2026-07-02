@@ -140,6 +140,27 @@ function summarizeTraceResultAccess(fileAccess = null) {
   return parts.join(" · ");
 }
 
+function summarizeTraceCapability(capability = null) {
+  if (!capability || typeof capability !== "object") {
+    return "";
+  }
+  const output = capability.output && typeof capability.output === "object" ? capability.output : {};
+  const returns = Array.isArray(output.required) && output.required.length
+    ? output.required
+    : (Array.isArray(output.fields) ? output.fields : []);
+  const permissions = Array.isArray(capability.permissions) ? capability.permissions.filter(Boolean) : [];
+  const caps = Array.isArray(capability.capabilities) ? capability.capabilities.filter(Boolean) : [];
+  return [
+    capability.id ? `id=${capability.id}` : "",
+    capability.riskLevel ? `risk=${capability.riskLevel}` : "",
+    capability.executionMode ? `mode=${capability.executionMode}` : "",
+    capability.requiresConfirmation === true ? "requires-confirmation" : "",
+    permissions.length ? `perms=${permissions.slice(0, 6).join(",")}` : "",
+    caps.length ? `caps=${caps.slice(0, 5).join(",")}` : "",
+    returns.length ? `returns=${returns.slice(0, 8).join(",")}` : ""
+  ].filter(Boolean).join(" · ");
+}
+
 function summarizeTraceResultLog(log = null) {
   if (!log || typeof log !== "object") {
     return "";
@@ -177,6 +198,7 @@ function formatTraceTimelineItem(item = {}) {
     item.errorSummary?.message ? `error=${item.errorSummary.message}` : ""
   ].filter(Boolean);
   const input = compactJsonInline(item.inputSummary, 140);
+  const capability = summarizeTraceCapability(resultSummary.capability || item.errorSummary?.capability);
   const access = summarizeTraceResultAccess(resultSummary.fileAccess);
   const log = summarizeTraceResultLog(resultSummary.log);
   const agentTrace = summarizeTraceResultAgentTrace(resultSummary.agentTrace);
@@ -185,6 +207,7 @@ function formatTraceTimelineItem(item = {}) {
   return [
     `- ${item.index || "?"}. ${label}${suffixes.length ? ` · ${suffixes.join(" · ")}` : ""}`,
     input ? `  input: ${input}` : "",
+    capability ? `  capability: ${capability}` : "",
     access ? `  access: ${access}` : "",
     log ? `  log: ${log}` : "",
     agentTrace ? `  trace: ${agentTrace}` : "",

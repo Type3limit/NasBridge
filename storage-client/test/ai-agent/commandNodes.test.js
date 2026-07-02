@@ -130,6 +130,17 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
       inputSummary: { tool: "invoke_video_analyze", fileId: "client:movie.mp4" },
       resultSummary: {
         jobRefs: [{ botId: "video.analyze", jobId: "botjob_child" }],
+        capability: {
+          id: "invoke_video_analyze",
+          riskLevel: "medium",
+          executionMode: "async-job",
+          capabilities: ["media-analysis", "bot-delegation"],
+          permissions: ["bot:invoke", "ai:model:invoke", "storage:content:read", "storage:metadata:write"],
+          output: {
+            required: ["status", "botId", "jobId"],
+            fields: ["status", "phase", "botId", "jobId", "tracking"]
+          }
+        },
         fileAccess: {
           found: true,
           contentAccess: {
@@ -180,6 +191,7 @@ test("formatAgentTraceReport summarizes trace timeline, recovery, and child jobs
   assert.match(body, /video\.analyze:botjob_child/);
   assert.match(body, /最近步骤/);
   assert.match(body, /phase=ToolExecute\/Observe/);
+  assert.match(body, /capability: id=invoke_video_analyze · risk=medium · mode=async-job · perms=bot:invoke,ai:model:invoke,storage:content:read,storage:metadata:write · caps=media-analysis,bot-delegation · returns=status,botId,jobId/);
   assert.match(body, /access: found=true · mode=media · layers=metadata · blockers=dependency-whisper · actions=read_file_metadata,invoke_video_analyze/);
   assert.match(body, /log: job=botjob_parent · chars=2048 · truncated/);
   assert.match(body, /trace: events=4 · childJobs=1/);
