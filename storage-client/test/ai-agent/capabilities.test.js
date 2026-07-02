@@ -186,6 +186,9 @@ test("health cache uses isolated local dependencies and caches the second snapsh
         assert.equal(checks.get("document-text").status, "ok");
         assert.match(checks.get("document-text").detail, /Office Open XML/);
         assert.equal(checks.get("qq-music-cookie").status, "ok");
+        assert.match(checks.get("qq-music-cookie").detail, /refreshed=\d{4}-\d{2}-\d{2}T/);
+        assert.match(checks.get("qq-music-cookie").detail, /age=\d+[smhd]/);
+        assert.doesNotMatch(checks.get("qq-music-cookie").detail, /uin=o123456|skey=fake/);
         assert.equal(checks.get("bilibili-auth").status, "ok");
         assert.equal(checks.get("bot-queue").status, "ok");
         assert.match(formatHealthReport(first), /AI Agent/);

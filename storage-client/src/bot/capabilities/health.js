@@ -138,6 +138,14 @@ function formatAgeMs(ms = 0) {
   return `${Math.round(value / (24 * 60 * 60_000))}d`;
 }
 
+function formatCookieRefreshDetail(stat = null) {
+  if (!stat) {
+    return "refreshed=env";
+  }
+  const ageMs = Date.now() - stat.mtimeMs;
+  return `refreshed=${stat.mtime.toISOString()} age=${formatAgeMs(ageMs)}`;
+}
+
 async function directoryAccess(dirPath = "") {
   const normalized = String(dirPath || "").trim();
   const result = { exists: false, readable: false, writable: false, detail: "" };
@@ -231,7 +239,7 @@ async function checkQqMusicCookie() {
         id: "qq-music-cookie",
         label: "QQ 音乐 Cookie",
         status: "warn",
-        detail: `已配置；来源=${source}；最近文件更新时间约 ${formatAgeMs(ageMs)} 前；autoRefresh=1 interval=${intervalMinutes}m`
+        detail: `已配置；来源=${source}；${formatCookieRefreshDetail(stat)}；autoRefresh=1 interval=${intervalMinutes}m`
       };
     }
   }
@@ -239,7 +247,7 @@ async function checkQqMusicCookie() {
     id: "qq-music-cookie",
     label: "QQ 音乐 Cookie",
     status: "ok",
-    detail: `已配置；来源=${source}；autoRefresh=${autoRefresh || "0"} interval=${intervalMinutes}m`
+    detail: `已配置；来源=${source}；${formatCookieRefreshDetail(stat)}；autoRefresh=${autoRefresh || "0"} interval=${intervalMinutes}m`
   };
 }
 
