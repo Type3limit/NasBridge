@@ -1,0 +1,106 @@
+{
+  "note": "Refined art set for NAS Bridge (draft, replaces the glossy 3D props). Direction: Arknights / Endfield official-site feel — big simple shapes, lots of negative space, few details. Generate with built-in image_gen, export to WebP (quality ~82), save under web/src/assets/ with the given file name. Equipment drawings are pure grayscale line art on white; the UI recolors them per theme with CSS (multiply on light, invert + screen on dark) and supplies the yellow itself, so the images must contain no color. No text, no logos, no people, no watermark.",
+  "style": {
+    "equipment": "Technical blueprint line drawing: thin uniform black ink strokes on a pure white background, flat orthographic or clean isometric view, no shading, no gradients, no textures, no color. At most about 40 major shapes; prefer large panels over small parts. A few dashed construction lines and one or two small dimension tick marks are allowed. Generous white margin around the object.",
+    "scene": "Minimal cinematic environment: few large simple masses, strong silhouette, at least half of the frame calm negative space, desaturated graphite and ash gray, at most one small safety-yellow element, soft haze. Not busy, no clusters of small lights."
+  },
+  "scenes": [
+    {
+      "name": "access-hero",
+      "file": "access-hero.webp",
+      "replaces": "relay-station.webp (AccessPage login hero)",
+      "size": "2560x1440, 16:9, <= 420 KB",
+      "usage": "Full-bleed login hero. Left 45% carries the huge NAS BRIDGE title and the login form.",
+      "mode": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: minimal cinematic hero background for the login page of a private storage network. Primary request: one colossal monolithic data relay tower standing on a flat ash-gray plain under a pale overcast sky, seen from far away at a low angle. The tower is a simple stack of large angular graphite and off-white slabs with one thin vertical safety-yellow stripe as the only color. A faint distant ring structure barely visible in the haze. Composition: ultra-wide 16:9, tower in the right third, left half almost empty sky and plain for typography, horizon low. Style: premium science-fiction game key art, large simple masses, very few details, strong silhouette, soft atmospheric haze, medium-low contrast so it works under both dark and light overlays. Constraints: no clusters of small lights, no cables, no machinery clutter, no UI, no text, no letters, no digits, no logos, no people, no watermark."
+    },
+    {
+      "name": "command-hero",
+      "file": "command-hero.webp",
+      "replaces": "machine-hall.webp in the command-center hero and fieldHall; tacticalArt.commandHero",
+      "size": "1920x1080, 16:9, <= 360 KB",
+      "usage": "Hero panel of the 指挥中心 home page. Left 45% sits under a dark scrim with the oversized page title.",
+      "mode": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: minimal cinematic hero image for the home page of a storage network command center. Primary request: a vast empty industrial hall interior in near darkness, defined only by a few enormous diagonal graphite bulkheads and one long beam of cold daylight falling across the floor from a high slit window. One large off-white structural block on the right with a single safety-yellow hazard band. Composition: wide 16:9, strong diagonal perspective, all structure in the right 55%, left 45% dark and almost empty. Style: premium science-fiction game key art, monumental scale, very few large shapes, clean surfaces, volumetric light, desaturated graphite and ash gray. Constraints: no small lights, no pipes or cable bundles, no consoles, no clutter, no UI, no text, no letters, no digits, no logos, no people, no watermark."
+    }
+  ],
+  "equipment": [
+    {
+      "name": "line-node",
+      "file": "line-node.webp",
+      "replaces": "node-rack.webp (equipmentArt.node)",
+      "size": "1200x1200, square, <= 90 KB",
+      "usage": "Storage node cards and node status hero.",
+      "mode": "built-in image_gen",
+      "prompt": "Technical blueprint line drawing of a storage server rack: a tall rectangular frame holding three identical horizontal drive bays, each bay a simple rectangle with a short row of vent lines, a slim angular support base. Clean isometric view. Thin uniform black ink strokes on pure white background, no shading, no gradients, no color, at most about 40 major shapes, large panels instead of small parts, a few dashed construction lines and two small dimension tick marks, generous white margin. No text, no letters, no digits, no logos, no watermark."
+    },
+    {
+      "name": "line-transfer",
+      "file": "line-transfer.webp",
+      "replaces": "transfer-conveyor.webp (equipmentArt.transfer)",
+      "size": "1600x700, wide, <= 90 KB",
+      "usage": "Transfer / sync status pages.",
+      "mode": "built-in image_gen",
+      "prompt": "Technical blueprint line drawing of a data transfer bridge: two simple rectangular towers connected by a straight segmented rail carrying three plain box-shaped capsules, side elevation view. Thin uniform black ink strokes on pure white background, no shading, no gradients, no color, at most about 40 major shapes, large panels instead of small parts, a few dashed construction lines and arrows indicating direction of motion, generous white margin. No text, no letters, no digits, no logos, no watermark."
+    },
+    {
+      "name": "line-vault",
+      "file": "line-vault.webp",
+      "replaces": "exchange-vault.webp (equipmentArt.share)",
+      "size": "1200x1200, square, <= 90 KB",
+      "usage": "Share links and shared files.",
+      "mode": "built-in image_gen",
+      "prompt": "Technical blueprint line drawing of a secure data vault: a solid cube with a heavy lid hinged open at forty-five degrees, inside a neat grid of slim rectangular cartridge slots, two simple latches on the front. Clean isometric view. Thin uniform black ink strokes on pure white background, no shading, no gradients, no color, at most about 40 major shapes, large panels instead of small parts, a few dashed construction lines showing the lid's swing arc, generous white margin. No text, no letters, no digits, no logos, no watermark."
+    },
+    {
+      "name": "line-projector",
+      "file": "line-projector.webp",
+      "replaces": "media-projector.webp (equipmentArt.media)",
+      "size": "1400x1000, landscape, <= 90 KB",
+      "usage": "Media library, video and music pages.",
+      "mode": "built-in image_gen",
+      "prompt": "Technical blueprint line drawing of a media playback unit: a low angular box body with two large circular reels on top, each reel a plain circle with four spokes, and one cylindrical lens at the front. Side three-quarter view. Thin uniform black ink strokes on pure white background, no shading, no gradients, no color, at most about 40 major shapes, large panels instead of small parts, a few dashed construction lines and a dashed cone in front of the lens, generous white margin. No text, no letters, no digits, no logos, no watermark."
+    },
+    {
+      "name": "line-console",
+      "file": "line-console.webp",
+      "replaces": "signal-console.webp (equipmentArt.chat)",
+      "size": "1400x1000, landscape, <= 90 KB",
+      "usage": "Chat room and AI assistant entry.",
+      "mode": "built-in image_gen",
+      "prompt": "Technical blueprint line drawing of a communications desk: an angular desk with two tilted blank rectangular screens and one short antenna mast with a small dish, simple panel lines only. Clean isometric view. Thin uniform black ink strokes on pure white background, no shading, no gradients, no color, at most about 40 major shapes, large panels instead of small parts, a few dashed construction lines and concentric dashed arcs from the antenna, generous white margin. Screens empty. No text, no letters, no digits, no logos, no watermark."
+    },
+    {
+      "name": "line-archive",
+      "file": "line-archive.webp",
+      "replaces": "archive-drive.webp (equipmentArt.archive, default placeholder)",
+      "size": "1200x1200, square, <= 80 KB",
+      "usage": "File cards and empty-state placeholders, often shown small.",
+      "mode": "built-in image_gen",
+      "prompt": "Technical blueprint line drawing of a single storage cartridge: a chunky rectangular block with one row of vent slits and a connector edge, half inserted into a simple open holder. Clean isometric view. Thin uniform black ink strokes on pure white background, no shading, no gradients, no color, at most about 25 major shapes, very bold simple silhouette that stays readable at small sizes, two dashed construction lines, generous white margin. No text, no letters, no digits, no logos, no watermark."
+    },
+    {
+      "name": "line-broadcast",
+      "file": "line-broadcast.webp",
+      "replaces": "tacticalArt.broadcastTile (TV 直播 tile)",
+      "size": "1400x1000, landscape, <= 90 KB",
+      "usage": "TV broadcast tile on the command-center grid.",
+      "mode": "built-in image_gen",
+      "prompt": "Technical blueprint line drawing of a broadcast transmitter: a low square base and a tall triangular lattice mast with three small dish emitters at different heights. Side three-quarter view. Thin uniform black ink strokes on pure white background, no shading, no gradients, no color, at most about 40 major shapes, large panels instead of small parts, concentric dashed arcs radiating from the top, generous white margin. No text, no letters, no digits, no logos, no watermark."
+    },
+    {
+      "name": "line-anime",
+      "file": "line-anime.webp",
+      "replaces": "tacticalArt.animeTile (番剧 tile)",
+      "size": "1400x1000, landscape, <= 90 KB",
+      "usage": "Anime tile on the command-center grid; must read differently from the projector and broadcast drawings.",
+      "mode": "built-in image_gen",
+      "prompt": "Technical blueprint line drawing of an episode archive carousel: a tall cabinet frame holding a vertical spindle with a ring of slim cartridges fanned around it, and a simple two-segment robotic arm lifting one cartridge out. Clean isometric view. Thin uniform black ink strokes on pure white background, no shading, no gradients, no color, at most about 40 major shapes, large panels instead of small parts, a few dashed construction lines and a dashed rotation arrow, generous white margin. No text, no letters, no digits, no logos, no watermark."
+    }
+  ],
+  "dropped": [
+    { "name": "tactical-backdrop", "reason": "Full-screen background becomes CSS only: base color + grid + scan lines." },
+    { "name": "relay-core / relay-assembly", "reason": "Floating hero machine with HUD rings removed; the command hero uses one big scene image instead." },
+    { "name": "hazard-tape", "reason": "CSS stripes are enough; only the scrolling warning ticker keeps them." }
+  ]
+}

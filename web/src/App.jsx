@@ -1309,7 +1309,8 @@ export default function App() {
     return <OperationsOverview onlineCount={onlineCount} clients={clients} files={files.length} shares={shares.length}
       uploads={visibleUploadJobs.length} downloads={downloadingCount} wsState={diagnostics.wsState}
       lastRefresh={formatRelativeTime(lastRefreshAt)} onUpload={() => setUploadOpen(true)}
-      onDiagnostics={() => setDiagnosticsOpen(true)} onRefresh={() => refreshAll()} onNavigate={handleWorkspaceTabSelect} />;
+      onDiagnostics={() => setDiagnosticsOpen(true)} onRefresh={() => refreshAll()} onNavigate={handleWorkspaceTabSelect}
+      moduleIndex={Object.fromEntries(workspaceTabs.map((tab, index) => [tab.id, String(index + 1).padStart(2, "0")]))} />;
   }
 
   function renderTerminalsPage() {
@@ -1382,11 +1383,7 @@ export default function App() {
                 <EquipmentVisual kind="share" className="shareManagerArtwork" />
                 <div className="miniListMain shareMiniMain shareManagerMain">
                   <div className="shareManagerTitleRow">
-                    <span
-                      className={`shareStatusDot ${isShareValid(share.status) ? "valid" : "invalid"}`}
-                      title={isShareValid(share.status) ? "有效" : "无效"}
-                      aria-label={isShareValid(share.status) ? "有效" : "无效"}
-                    />
+                    <span className={`tacTag${isShareValid(share.status) ? " ok" : ""}`}>{isShareValid(share.status) ? "有效" : "失效"}</span>
                     <Text className="miniListTitle shareManagerTitle">{getShareFileName(share)}</Text>
                   </div>
                   <Caption1 className="shareManagerPath">{getShareFilePath(share) || "路径不可用"}</Caption1>
@@ -5023,7 +5020,7 @@ export default function App() {
   function renderMobileLayout() {
     const activeBadge = visibleUploadJobs.length + downloadingCount;
     return (
-      <div className="page">
+      <div className="page tacPage">
         {renderToastViewport()}
         {/* GlobalMusicPlayer 保持挂载以维持音频实例，CSS 隐藏悬浮 UI */}
         <GlobalMusicPlayer p2p={p2p} clients={clients} user={user} onToast={setMessage} />
@@ -5181,10 +5178,6 @@ export default function App() {
               </div>
             </div>
           </div>
-          <div className="tacReadout" key={activeTab.id}>
-            <span className="tacReadoutIndex">{activeTabNumber}</span>
-            <span className="tacReadoutText"><strong>{activeTab.label}</strong><small>MODULE // {activeTab.code}</small></span>
-          </div>
           <HudTicker items={tickerItems} />
           <HudClock />
           <div className="topbarActions">
@@ -5255,7 +5248,7 @@ export default function App() {
           </aside>
 
           <main className="mainCanvas">
-            <TacticalStage key={activeTab.id} index={activeTabNumber} code={activeTab.code}>
+            <TacticalStage key={activeTab.id} index={activeTabNumber} code={activeTab.code} label={activeTab.label}>
               {renderActiveWorkspacePage()}
             </TacticalStage>
           </main>

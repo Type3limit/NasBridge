@@ -42,3 +42,12 @@
 }
 html, body, #root { background: var(--page-bg); }
 body { font-family: var(--tac-font-display); }
+
+/* Equipment art is grayscale line art (black strokes on white). Light theme
+   multiplies the white away; dark theme inverts it to light strokes and
+   screens the black away. Yellow always comes from the layout, never the art. */
+.equipmentVisual, .tacTileArt { mix-blend-mode: multiply; filter: none !important; }
+:root[data-theme="dark"] .equipmentVisual, :root[data-theme="dark"] .tacTileArt { filter: invert(1) brightness(.78) !important; mix-blend-mode: screen; }
+/* Stand-in scene photos (old colour art) are desaturated until the refined
+   scenes arrive; tacticalArt.js only tags the placeholders. */
+.tacScenePlaceholder { filter: grayscale(.9) contrast(.82) brightness(.85); }
