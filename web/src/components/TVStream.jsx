@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
+import { EquipmentVisual } from "../ui/OperationsDisplay";
 import { Spinner } from "@fluentui/react-components";
 import {
   AddRegular,
@@ -468,6 +469,7 @@ export default function TVStream({ authToken, setMessage }) {
 
   // ── Render ──────────────────────────────────────────────────
   return (
+    <section className="workspacePage tvWorkspacePage"><header className="moduleHeading"><div><span className="industrialEyebrow">07 / LIVE SIGNAL</span><h2>TV 直播</h2><p>选择信号，打开你的实时视界。</p></div><span className="monoLabel">LIVE BROADCAST TERMINAL</span></header>
     <div className="tvStreamRoot">
       {/* Sidebar */}
       <aside className={`tvSidebar${sidebarCollapsed ? " tvSidebarCollapsed" : ""}`}>
@@ -673,8 +675,8 @@ export default function TVStream({ authToken, setMessage }) {
       <div className="tvPlayerArea">
         {!selectedChannel ? (
           <div className="tvEmptyState">
-            <span className="tvEmptyIcon">📺</span>
-            <span>从左侧选择频道开始观看</span>
+            <EquipmentVisual kind="media" className="tvStandbyArtwork"/>
+            <span>选择频道开始观看</span>
           </div>
         ) : (
           <div className="tvPlayerWrapper">
@@ -710,5 +712,6 @@ export default function TVStream({ authToken, setMessage }) {
         )}
       </div>
     </div>
+    </section>
   );
 }

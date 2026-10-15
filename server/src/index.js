@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import express from "express";
+import { frontendMiddleware } from "./frontend.js";
 
 // ─── Global error handlers: prevent the process from crashing on stray errors ──
 process.on("uncaughtException", (err) => {
@@ -2640,7 +2641,7 @@ app.get("/api/anime/mikan", requireAuth, async (req, res) => {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const webDist = path.resolve(__dirname, "..", "..", "web", "dist");
-app.use(express.static(webDist));
+app.use(frontendMiddleware(webDist));
 app.get("*", (req, res, next) => {
   if (req.path.startsWith("/api/")) {
     return next();

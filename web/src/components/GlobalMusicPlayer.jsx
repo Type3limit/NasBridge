@@ -12,8 +12,8 @@ import {
 export const MusicPlayerContext = createContext(null);
 
 const QUEUE_PAGE_SIZE = 20;
-const FLOATING_PLAYER_STORAGE_KEY = "nas-global-music-player-position";
-const FLOATING_BUTTON_SIZE = 72;
+const FLOATING_PLAYER_STORAGE_KEY = "nas-global-music-player-position-v2";
+const FLOATING_BUTTON_SIZE = 56;
 const FLOATING_EDGE_MARGIN = 16;
 const FLOATING_SNAP_DISTANCE = 40;
 const FLOATING_CARD_TRANSITION_MS = 280;
@@ -525,7 +525,7 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
     }
     const stored = loadFloatingPosition();
     const defaultPosition = clampFloatingPosition(
-      stored || { x: window.innerWidth - FLOATING_BUTTON_SIZE - FLOATING_EDGE_MARGIN, y: 92 },
+      stored || { x: FLOATING_EDGE_MARGIN, y: window.innerHeight - FLOATING_BUTTON_SIZE - 76 },
       window.innerWidth,
       window.innerHeight
     );

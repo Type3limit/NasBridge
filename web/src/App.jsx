@@ -43,7 +43,6 @@ import {
 import { apiRequest } from "./api";
 import { P2PBridgePool } from "./webrtc";
 import AvatarFace from "./components/AvatarFace";
-import ChatRoom from "./components/ChatRoom";
 import GlobalMusicPlayer from "./components/GlobalMusicPlayer";
 import ProfileDialog from "./components/ProfileDialog";
 import { useIsMobile } from "./hooks/useIsMobile";
@@ -53,11 +52,20 @@ import MobileFilterSheet from "./components/mobile/MobileFilterSheet";
 import MiniMusicBar from "./components/mobile/MiniMusicBar";
 import VideoHoverPreview from "./components/VideoHoverPreview";
 import ReactMarkdown from "react-markdown";
+import AccessPage from "./ui/AccessPage";
+import { OperationsOverview, NodeTopology, TransferDisplay, FieldArtwork, FileTypeVisual, EquipmentVisual } from "./ui/OperationsDisplay";
+import { ThemeSwitch } from "./ui/ThemeProvider";
+import { BridgeMark, RegistryFooter } from "./ui/IndustrialChrome";
 import remarkGfm from "remark-gfm";
 
 const PreviewModal = lazy(() => import("./components/PreviewModal"));
 const TVStream = lazy(() => import("./components/TVStream"));
 const AnimePage = lazy(() => import("./components/AnimePage"));
+const LazyChatRoom = lazy(() => import("./components/ChatRoom"));
+
+function ChatRoom(props) {
+  return <Suspense fallback={<Spinner size="large" />}><LazyChatRoom {...props} /></Suspense>;
+}
 
 const THUMB_CACHE_STORAGE_KEY = "nas_thumb_cache_v1";
 const THUMB_CACHE_MAX_BLOB_SIZE = 450 * 1024;
@@ -1111,6 +1119,7 @@ export default function App() {
 
   useEffect(() => {
     const allowedTabs = new Set(["explorer", "chat", "overview", "terminals", "transfers", "shares", "tv", "anime"]);
+    if (isMobile) allowedTabs.add("more");
     if (user?.role === "admin") {
       allowedTabs.add("admin-users");
       allowedTabs.add("admin-clients");
@@ -1118,7 +1127,7 @@ export default function App() {
     if (!allowedTabs.has(activeWorkspaceTab)) {
       setActiveWorkspaceTab("explorer");
     }
-  }, [activeWorkspaceTab, user?.role]);
+  }, [activeWorkspaceTab, user?.role, isMobile]);
 
   const detailItemHeight = 96;
   const detailOverscan = 6;
@@ -1287,65 +1296,17 @@ export default function App() {
   }
 
   function renderOverviewPage() {
-    return (
-      <section className="workspacePage">
-        <div className="workspacePageCard commandCard">
-          <div className="workspacePageHeader">
-            <div className="workspacePageTitleBlock">
-              <Subtitle1>系统概览</Subtitle1>
-              <Caption1>集中查看同步状态、快速操作和当前工作负载。</Caption1>
-            </div>
-            <div className="workspacePageActions">
-              <Button appearance="primary" onClick={() => setUploadOpen(true)}>发起上传</Button>
-              <Button onClick={() => setDiagnosticsOpen(true)}>打开诊断</Button>
-              <Button onClick={() => refreshAll()}>{loading ? <Spinner size="tiny" /> : "同步索引"}</Button>
-              <Button onClick={() => setViewMode((prev) => prev === "grid" ? "details" : "grid")}>{viewMode === "grid" ? "切到详情" : "切到卡片"}</Button>
-            </div>
-          </div>
-
-          <div className="workspaceMetricsGrid overviewMetricsGrid">
-            <div className="railMetric">
-              <Caption1>信令状态</Caption1>
-              <Text>{diagnostics.wsState || "idle"}</Text>
-            </div>
-            <div className="railMetric">
-              <Caption1>最近刷新</Caption1>
-              <Text>{formatRelativeTime(lastRefreshAt)}</Text>
-            </div>
-            <div className="railMetric">
-              <Caption1>轮询更新</Caption1>
-              <Text>{formatRelativeTime(lastPollAt)}</Text>
-            </div>
-            <div className="railMetric">
-              <Caption1>在线终端</Caption1>
-              <Text>{onlineCount}</Text>
-            </div>
-            <div className="railMetric">
-              <Caption1>当前筛选</Caption1>
-              <Text>{activeFilterCount ? `${activeFilterCount} 项` : "无"}</Text>
-            </div>
-            <div className="railMetric">
-              <Caption1>上传队列</Caption1>
-              <Text>{visibleUploadJobs.length} 项</Text>
-            </div>
-            <div className="railMetric">
-              <Caption1>下载队列</Caption1>
-              <Text>{downloadingCount} 项</Text>
-            </div>
-            <div className="railMetric">
-              <Caption1>分享链接</Caption1>
-              <Text>{shares.length} 条</Text>
-            </div>
-          </div>
-        </div>
-      </section>
-    );
+    return <OperationsOverview onlineCount={onlineCount} clients={clients} files={files.length} shares={shares.length}
+      uploads={visibleUploadJobs.length} downloads={downloadingCount} wsState={diagnostics.wsState}
+      lastRefresh={formatRelativeTime(lastRefreshAt)} onUpload={() => setUploadOpen(true)}
+      onDiagnostics={() => setDiagnosticsOpen(true)} onRefresh={() => refreshAll()} onNavigate={handleWorkspaceTabSelect} />;
   }
 
   function renderTerminalsPage() {
     return (
       <section className="workspacePage">
-        <div className="workspacePageCard">
+        <div className="workspacePageCard illustratedPage" data-chapter="02" data-code="NODE NETWORK">
+          <FieldArtwork label="NODE NETWORK / CONNECTION GRID" compact kind="node" />
           <div className="workspacePageHeader">
             <div className="workspacePageTitleBlock">
               <Subtitle1>终端状态</Subtitle1>
@@ -1357,23 +1318,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="miniList workspaceList">
-            {clients.map((client) => (
-              <div key={client.id} className="miniListRow terminalRow workspaceTerminalRow">
-                <div className="miniListMain">
-                  <Text className="miniListTitle">{getClientDisplayName(client.id)}</Text>
-                  <Caption1>ID: {client.id}</Caption1>
-                  <Caption1>{client.lastHeartbeatAt ? `心跳 ${formatRelativeTime(client.lastHeartbeatAt)}` : "无心跳"}</Caption1>
-                  <Caption1>{formatPeerRoleSummary(diagnostics.clients[client.id] || {}) || "暂无角色连接"}</Caption1>
-                </div>
-                <div className="miniListBadges">
-                  <Badge appearance="outline" color={getClientStatusColor(client.status)}>{client.status || "unknown"}</Badge>
-                  <Badge appearance="outline" color={(diagnostics.clients[client.id]?.route || "unknown") === "relay" ? "warning" : "informative"}>{diagnostics.clients[client.id]?.route || "unknown"}</Badge>
-                </div>
-              </div>
-            ))}
-            {!clients.length && <Caption1>暂无终端数据</Caption1>}
-          </div>
+          <NodeTopology clients={clients} diagnostics={diagnostics.clients} />
         </div>
       </section>
     );
@@ -1382,7 +1327,8 @@ export default function App() {
   function renderTransfersPage() {
     return (
       <section className="workspacePage">
-        <div className="workspacePageCard">
+        <div className="workspacePageCard illustratedPage" data-chapter="03" data-code="TRANSFER LINE">
+          <FieldArtwork label="TRANSPORT SYSTEM / DATA LINE" compact kind="transfer" />
           <div className="workspacePageHeader">
             <div className="workspacePageTitleBlock">
               <Subtitle1>传输队列</Subtitle1>
@@ -1394,6 +1340,7 @@ export default function App() {
             </div>
           </div>
 
+          <TransferDisplay uploads={visibleUploadJobs.length} downloads={downloadJobs.length} />
           <div className="miniList workspaceList">
             {downloadJobs.map((job) => renderTransferQueueRow(job, "download"))}
             {visibleUploadJobs.map((job) => renderTransferQueueRow(job, "upload"))}
@@ -1407,7 +1354,8 @@ export default function App() {
   function renderSharesPage() {
     return (
       <section className="workspacePage">
-        <div className="workspacePageCard">
+        <div className="workspacePageCard illustratedPage" data-chapter="04" data-code="FILE EXCHANGE">
+          <FieldArtwork label="FILE EXCHANGE / OPEN CONNECTION" compact kind="share" />
           <div className="workspacePageHeader">
             <div className="workspacePageTitleBlock">
               <Subtitle1>分享管理</Subtitle1>
@@ -1421,6 +1369,7 @@ export default function App() {
           <div className="miniList shareMiniList workspaceList">
             {shares.map((share) => (
               <div key={share.id} className="miniListRow shareMiniRow shareManagerRow">
+                <EquipmentVisual kind="share" className="shareManagerArtwork" />
                 <div className="miniListMain shareMiniMain shareManagerMain">
                   <div className="shareManagerTitleRow">
                     <span
@@ -1477,7 +1426,8 @@ export default function App() {
   function renderAdminUsersPage() {
     return (
       <section className="workspacePage">
-        <div className="workspacePageCard">
+        <div className="workspacePageCard illustratedPage" data-chapter="05" data-code="ACCESS CONTROL">
+          <FieldArtwork label="ACCESS CONTROL / AUTHORIZED PERSONNEL" compact />
           <div className="workspacePageHeader">
             <div className="workspacePageTitleBlock">
               <Subtitle1>后台管理 - 用户</Subtitle1>
@@ -1506,7 +1456,8 @@ export default function App() {
   function renderAdminClientsPage() {
     return (
       <section className="workspacePage">
-        <div className="workspacePageCard">
+        <div className="workspacePageCard illustratedPage" data-chapter="06" data-code="NODE CONTROL">
+          <FieldArtwork label="NODE CONTROL / RELAY STATION" compact kind="node" />
           <div className="workspacePageHeader">
             <div className="workspacePageTitleBlock">
               <Subtitle1>后台管理 - 存储终端</Subtitle1>
@@ -1519,7 +1470,8 @@ export default function App() {
           <div className="adminList workspaceList">
             <SyncGroupsPanel token={token} clients={clients} />
             {clients.map((item) => (
-              <div key={item.id} className="simpleRow withActions">
+              <div key={item.id} className="simpleRow withActions terminalAdminCard">
+                <EquipmentVisual kind="node" className="terminalAdminArtwork" />
                 <div>
                   <div className="fileName">{item.name || item.id}</div>
                   <div className="fileSub">ID: {item.id}</div>
@@ -1545,7 +1497,7 @@ export default function App() {
   function renderExplorerPage() {
     return (
       <section className="workspacePage filePanel explorerPanel">
-        <div className="explorerShell workspacePageCard">
+        <div className="explorerShell workspacePageCard" data-chapter="01" data-code="FILE ARCHIVE">
           <div className="explorerTop">
             <div className="explorerTitleBlock">
               <Subtitle1>资源浏览器</Subtitle1>
@@ -1841,7 +1793,7 @@ export default function App() {
                       <VideoHoverPreview file={entry.file} p2p={p2p} enabled={isVideoMime(entry.file.mimeType)}>
                         <div className="thumbShell">
                           <button className="thumbButton" onClick={() => preview(entry.file)}>
-                            {thumbMap[getThumbKey(entry.file)]?.url ? <img src={thumbMap[getThumbKey(entry.file)].url} className="thumbImg" /> : <div className="thumbFallback">{isUploadingFile(entry.file) ? "上传中" : isImageMime(entry.file.mimeType) ? "图片" : isVideoMime(entry.file.mimeType) ? "视频" : "文件"}</div>}
+                            {thumbMap[getThumbKey(entry.file)]?.url ? <img src={thumbMap[getThumbKey(entry.file)].url} className="thumbImg" /> : <FileTypeVisual mime={entry.file.mimeType} label={isUploadingFile(entry.file) ? "上传中" : isImageMime(entry.file.mimeType) ? "图片" : isVideoMime(entry.file.mimeType) ? "视频" : "文件"} />}
                           </button>
                           {renderSelectionToggle(entry.file)}
                           {(entry.file.tags || []).length > 0 && (
@@ -1913,7 +1865,7 @@ export default function App() {
                   <div key={entry.key} className="gridItem">
                     <VideoHoverPreview file={entry.file} p2p={p2p} enabled={isVideoMime(entry.file.mimeType)} className="fileVisualShell">
                       <button className="gridThumb" onClick={() => preview(entry.file)}>
-                        {thumbMap[getThumbKey(entry.file)]?.url ? <img src={thumbMap[getThumbKey(entry.file)].url} className="thumbImg" /> : <div className="thumbFallback">{isUploadingFile(entry.file) ? "上传中" : isImageMime(entry.file.mimeType) ? "图片" : isVideoMime(entry.file.mimeType) ? "视频" : "文件"}</div>}
+                        {thumbMap[getThumbKey(entry.file)]?.url ? <img src={thumbMap[getThumbKey(entry.file)].url} className="thumbImg" /> : <FileTypeVisual mime={entry.file.mimeType} label={isUploadingFile(entry.file) ? "上传中" : isImageMime(entry.file.mimeType) ? "图片" : isVideoMime(entry.file.mimeType) ? "视频" : "文件"} />}
                       </button>
                       {renderSelectionToggle(entry.file)}
                       {(entry.file.tags || []).length > 0 && (
@@ -1963,7 +1915,7 @@ export default function App() {
 
   function handleWorkspaceTabSelect(tabId) {
     setActiveWorkspaceTab(tabId);
-    setNavExpanded(false);
+    if (isMobile) setNavExpanded(false);
   }
 
   function closeWorkspaceNav() {
@@ -3185,6 +3137,11 @@ export default function App() {
       previewFirstFrameRef.current = false;
       previewModeRef.current = "";
       clearPreview();
+      setPreviewName(file.name);
+      setPreviewMime(file.mimeType);
+      setPreviewPath(file.path);
+      setPreviewClientId(file.clientId);
+      setPreviewStage("连接终端");
 
       let url = "";
       let mimeType = file.mimeType;
@@ -4197,176 +4154,9 @@ export default function App() {
   }, [activeWorkspaceTab, isMobile]);
 
   if (!token || !user) {
-    return (
-      <div className="page authPage" style={{ background: "transparent" }}>
-        {renderToastViewport()}
-        <div className="authLayout authExperience">
-          <section className="surfaceCard authShowcase">
-            <div className="authShowcaseCopy">
-              <div className="authShowcaseTop">
-                <Badge appearance="outline" color="informative">NAS Bridge</Badge>
-                <div className="authShowcasePulse">
-                  <span className="authShowcasePulseDot" />
-                  <Caption1>Private cloud relay console</Caption1>
-                </div>
-              </div>
-
-              <div className="authShowcaseHeadline">
-                <Title3>一个入口，接管所有远端存储节点。</Title3>
-                <Text>
-                  登录后直接进入文件工作台，处理预览、上传、批量操作和多终端连接，不再把这些动作拆在不同页面里。
-                </Text>
-              </div>
-
-              <div className="authShowcaseMetrics">
-                <div className="authMetricCard primary">
-                  <Caption1>连接层</Caption1>
-                  <Text>03 条链路</Text>
-                </div>
-                <div className="authMetricCard">
-                  <Caption1>操作面</Caption1>
-                  <Text>04 类动作</Text>
-                </div>
-                <div className="authMetricCard">
-                  <Caption1>控制台</Caption1>
-                  <Text>01 个入口</Text>
-                </div>
-              </div>
-
-              <div className="authFeatureRail">
-                <div className="authFeatureBlock">
-                  <Caption1>P2P First</Caption1>
-                  <Text>直连优先</Text>
-                </div>
-                <div className="authFeatureBlock">
-                  <Caption1>Relay Ready</Caption1>
-                  <Text>中继兜底</Text>
-                </div>
-                <div className="authFeatureBlock">
-                  <Caption1>Media Stack</Caption1>
-                  <Text>预览可切换</Text>
-                </div>
-              </div>
-            </div>
-
-            <div className="authShowcaseVisual" aria-hidden="true">
-              <div className="authVisualHalo haloA" />
-              <div className="authVisualHalo haloB" />
-              <div className="authVisualCard authVisualPrimary">
-                <div className="authVisualHeader">
-                  <span className="authVisualWindowDot red" />
-                  <span className="authVisualWindowDot amber" />
-                  <span className="authVisualWindowDot green" />
-                </div>
-                <div className="authVisualBody">
-                  <div className="authVisualRow">
-                    <span>node/home</span>
-                    <strong>online</strong>
-                  </div>
-                  <div className="authVisualBars">
-                    <span style={{ width: "84%" }} />
-                    <span style={{ width: "66%" }} />
-                    <span style={{ width: "92%" }} />
-                  </div>
-                  <div className="authVisualTerminal">
-                    <span>preview channel ready</span>
-                    <span>upload queue synced</span>
-                    <span>relay fallback standby</span>
-                  </div>
-                </div>
-              </div>
-              <div className="authVisualStack">
-                <div className="authVisualCard authVisualMini">
-                  <Caption1>PREVIEW</Caption1>
-                  <Text>HLS / Stream / Blob</Text>
-                </div>
-                <div className="authVisualCard authVisualMini alt">
-                  <Caption1>NODES</Caption1>
-                  <Text>Live routes synced</Text>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <Card className="surfaceCard authPanel authPanelElevated">
-            <div className="authPanelHeader">
-              <div className="authPanelBrand">
-                <div className="brandLogo authPanelLogo" aria-hidden="true">
-                  <span className="brandLogoCore" />
-                  <span className="brandLogoOrbit orbitA" />
-                  <span className="brandLogoOrbit orbitB" />
-                </div>
-                <div>
-                  <Caption1>NAS Bridge Access</Caption1>
-                </div>
-              </div>
-              <div>
-                <Title3>{authMode === "login" ? "进入文件工作台" : "创建访问入口"}</Title3>
-                <Caption1>{authMode === "login" ? "Sign in to the bridge console" : "Create account and enter the console"}</Caption1>
-              </div>
-              <div className="authModeSwitch">
-                <Button appearance={authMode === "login" ? "primary" : "secondary"} onClick={() => setAuthMode("login")}>登录</Button>
-                <Button appearance={authMode === "register" ? "primary" : "secondary"} onClick={() => setAuthMode("register")}>注册</Button>
-              </div>
-            </div>
-
-            <div className="authForm">
-              <Field label="邮箱">
-                <Input value={email} placeholder="name@example.com" onChange={(_, data) => setEmail(data.value)} />
-              </Field>
-              <Field label="密码">
-                <Input
-                  type="password"
-                  value={password}
-                  placeholder="输入登录密码"
-                  onChange={(_, data) => setPassword(data.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      if (authMode === "login") {
-                        login();
-                      } else {
-                        register();
-                      }
-                    }
-                  }}
-                />
-              </Field>
-              {authMode === "register" && (
-                <Field label="显示名">
-                  <Input value={displayName} placeholder="例如：家用 NAS" onChange={(_, data) => setDisplayName(data.value)} />
-                </Field>
-              )}
-              <div className="authActions">
-                <Button appearance="primary" onClick={authMode === "login" ? login : register}>
-                  {authMode === "login" ? "进入控制台" : "创建并进入"}
-                </Button>
-                <Button onClick={() => setAuthMode(authMode === "login" ? "register" : "login")}>
-                  {authMode === "login" ? "没有账号？去注册" : "已有账号？去登录"}
-                </Button>
-              </div>
-              <div className="authPanelFooterNote">
-                <Caption1>
-                  {authMode === "login"
-                    ? "登录后直接进入文件、终端和任务视图。"
-                    : "显示名会立即用于终端归属与上传记录展示。"}
-                </Caption1>
-              </div>
-            </div>
-          </Card>
-        </div>
-        <div style={{position:"fixed",bottom:0,left:0,right:0,textAlign:"center",padding:"3px 0",fontSize:"12px",color:"rgba(255,255,255,0.4)",background:"rgba(0,0,0,0.35)",backdropFilter:"blur(4px)",zIndex:9999,pointerEvents:"none",display:"flex",justifyContent:"center",alignItems:"center",gap:"16px"}}>
-          <a href="https://beian.miit.gov.cn/" rel="noreferrer" target="_blank"
-             style={{color:"rgba(255,255,255,0.4)",textDecoration:"none",pointerEvents:"auto"}}>
-            ICP备30177262049410112号
-          </a>
-          <a href="https://beian.mps.gov.cn/#/query/webSearch?code=51015602001732" rel="noreferrer" target="_blank"
-             style={{display:"inline-flex",alignItems:"center",gap:"4px",color:"rgba(255,255,255,0.4)",textDecoration:"none",pointerEvents:"auto"}}>
-            <img src="https://beian.mps.gov.cn/img/logo01.dd7ff50e.png" style={{height:"14px",verticalAlign:"middle"}} alt="公安备案图标" />
-            川公网安备51015602001732号
-          </a>
-        </div>
-      </div>
-    );
+    return <AccessPage mode={authMode} setMode={setAuthMode} email={email} setEmail={setEmail}
+      password={password} setPassword={setPassword} displayName={displayName} setDisplayName={setDisplayName}
+      onSubmit={authMode === "login" ? login : register} toast={renderToastViewport()} />;
   }
 
   function handleMobileTabChange(id) {
@@ -5095,6 +4885,7 @@ export default function App() {
         {tabId === "terminals"     && renderTerminalsPage()}
         {tabId === "admin-users"   && renderAdminUsersPage()}
         {tabId === "admin-clients" && renderAdminClientsPage()}
+        {tabId === "anime" && <Suspense fallback={<Spinner size="large" />}><AnimePage authToken={token} p2p={p2p} clients={clients} /></Suspense>}
       </div>
     );
   }
@@ -5110,9 +4901,10 @@ export default function App() {
           {/* 顶栏 */}
           <header className="mobileTopbar">
             <div className="mobileTopbarBrand">
-              <Title3>NAS Console</Title3>
+              <BridgeMark /><Title3>NAS BRIDGE</Title3>
             </div>
             <div className="mobileTopbarActions">
+              <ThemeSwitch compact />
               <button
                 type="button"
                 className="iconActionButton mobileTopbarAvatarButton"
@@ -5238,12 +5030,14 @@ export default function App() {
             </button>
             <div className="brandBlock">
               <div className="brandIdentity compact">
-                <Title3>NAS Console</Title3>
+                <BridgeMark /><Title3>NAS BRIDGE</Title3>
                 <GlobalMusicPlayer p2p={p2p} clients={clients} user={user} onToast={setMessage} />
               </div>
             </div>
           </div>
+          <div className="consoleBreadcrumb"><span>CONTROL /</span><strong>{workspaceTabs.find(tab => tab.id === activeWorkspaceTab)?.label || "工作台"}</strong></div>
           <div className="topbarActions">
+            <ThemeSwitch compact />
             <button type="button" className="profileTrigger" onClick={() => setProfileOpen(true)}>
               <AvatarFace
                 className="profileTriggerAvatar"
@@ -5278,8 +5072,8 @@ export default function App() {
           <aside className={`controlRail navRail${navExpanded ? " expanded" : ""}`}>
             <Card className="surfaceCard panelCard workspaceNavCard">
               <div className="workspaceNavHeader">
-                <Subtitle1>工作区导航</Subtitle1>
-                <Caption1>左侧切换模块，右侧展示对应页面内容。</Caption1>
+                <Subtitle1>工作区 / MODULES</Subtitle1>
+                <Caption1>PRIVATE STORAGE NETWORK</Caption1>
               </div>
               <div className="workspaceNavList" role="tablist" aria-orientation="vertical">
                 {workspaceTabs.map((tab) => (
@@ -5302,6 +5096,7 @@ export default function App() {
                   </button>
                 ))}
               </div>
+              <div className="navRailFooter"><span>● {onlineCount} NODES ONLINE</span><span>NAS BRIDGE / NB—01</span></div>
             </Card>
           </aside>
 
@@ -5313,17 +5108,7 @@ export default function App() {
         {renderDialogs()}
 
       </div>
-      <div style={{position:"fixed",bottom:0,left:0,right:0,textAlign:"center",padding:"3px 0",fontSize:"12px",color:"#888",background:"rgba(0,0,0,0.6)",backdropFilter:"blur(4px)",zIndex:9999,pointerEvents:"none",display:"flex",justifyContent:"center",alignItems:"center",gap:"16px"}}>
-        <a href="https://beian.miit.gov.cn/" rel="noreferrer" target="_blank"
-           style={{color:"#888",textDecoration:"none",pointerEvents:"auto"}}>
-          ICP备30177262049410112号
-        </a>
-        <a href="https://beian.mps.gov.cn/#/query/webSearch?code=51015602001732" rel="noreferrer" target="_blank"
-           style={{display:"inline-flex",alignItems:"center",gap:"4px",color:"#888",textDecoration:"none",pointerEvents:"auto"}}>
-          <img src="https://beian.mps.gov.cn/img/logo01.dd7ff50e.png" style={{height:"14px",verticalAlign:"middle"}} alt="公安备案图标" />
-          川公网安备51015602001732号
-        </a>
-      </div>
+      <RegistryFooter />
     </div>
   );
 }

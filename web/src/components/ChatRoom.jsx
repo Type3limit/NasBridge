@@ -1,14 +1,16 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Badge, Button, Caption1, Spinner, Subtitle1, Text } from "@fluentui/react-components";
 import { ArrowClockwiseRegular, ArrowUploadRegular, CopyRegular, DismissRegular, DocumentRegular, FolderOpenRegular, ImageRegular, MusicNote2Regular, SendRegular, VideoRegular } from "@fluentui/react-icons";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AvatarFace from "./AvatarFace";
-import { AiStarMapCard } from "./AiStarMapCard";
 import { useResolvedP2PAssetUrl } from "./p2pAsset";
 import { InlineVideoPlayer } from "./VideoViewportSurface";
 import { apiRequest, toWsUrl } from "../api";
+import { EquipmentVisual } from "../ui/OperationsDisplay";
+
+const AiStarMapCard = lazy(() => import("./AiStarMapCard").then(module => ({ default: module.AiStarMapCard })));
 
 const CHAT_ROOM_DIR_NAME = ".nas-chat-room";
 const CHAT_HISTORY_PREFIX = `${CHAT_ROOM_DIR_NAME}/history`;
@@ -2255,7 +2257,7 @@ export default function ChatRoom({
               </div>
             ) : null}
             {showStarMap
-              ? <AiStarMapCard graphState={message.card.graphState} elapsedText={elapsedText} subtitle={message.card.subtitle} detailBody={cardBody} />
+              ? <Suspense fallback={<Caption1>{elapsedText}</Caption1>}><AiStarMapCard graphState={message.card.graphState} elapsedText={elapsedText} subtitle={message.card.subtitle} detailBody={cardBody} /></Suspense>
               : cardBody ? <MarkdownBlock className="chatMarkdownBlock chatDynamicMarkdown" text={cardBody} /> : null}
           </div>
         </div>
@@ -3292,6 +3294,15 @@ export default function ChatRoom({
               })}
             </div>
           </div>
+          <aside className="chatSignalPanel" aria-label="聊天室连接概况">
+            <span className="industrialEyebrow">LINK / STATUS</span>
+            <h3>协作信号</h3>
+            <div className="chatSignalReadout"><span>聊天链路</span><strong>{chatConnectionState === "connected" ? "已连接" : "重连中"}</strong></div>
+            <div className="chatSignalReadout"><span>今日消息</span><strong>{String(todayMessageCount).padStart(2, "0")}</strong></div>
+            <div className="chatSignalReadout"><span>工作助手</span><strong>{String(botCatalog.length).padStart(2, "0")}</strong></div>
+            <div className="chatSignalHost"><span className="monoLabel">STORAGE NODE</span><span>{hostClientId ? getClientDisplayName(hostClientId) : "等待存储节点"}</span></div>
+            <div className="chatSignalArtwork"><EquipmentVisual kind="chat"/></div>
+          </aside>
         </div>
 
         <div

@@ -1,14 +1,15 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { FluentProvider, webDarkTheme } from "@fluentui/react-components";
+import { ThemeProvider } from "./ui/ThemeProvider";
 import LivingRoomPage from "./LivingRoomPage.jsx";
 import "./player-controls.css";
 import "./living-room.css";
+import "./industrial.css";
 
 createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <FluentProvider theme={webDarkTheme}>
+    <ThemeProvider>
       <LivingRoomPage />
-    </FluentProvider>
+    </ThemeProvider>
   </React.StrictMode>
 );

@@ -10,6 +10,7 @@ import {
   StarFilled,
 } from "@fluentui/react-icons";
 import Hls from "hls.js";
+import { EquipmentVisual } from "../ui/OperationsDisplay";
 import { apiRequest } from "../api";
 import VideoPlayerControls, { VideoDanmakuComposer } from "./VideoPlayerControls";
 import VideoViewportSurface from "./VideoViewportSurface";
@@ -147,11 +148,11 @@ async function fetchEpisodes(id, limit = 100) {
 // ─── Small helpers ────────────────────────────────────────────────────────────
 
 function scoreColor(score) {
-  if (!score) return "#94a3b8";
-  if (score >= 8) return "#16a34a";
-  if (score >= 7) return "#2563eb";
-  if (score >= 6) return "#d97706";
-  return "#dc2626";
+  if (!score) return "var(--text-faint)";
+  if (score >= 8) return "var(--success)";
+  if (score >= 7) return "var(--accent)";
+  if (score >= 6) return "var(--warning)";
+  return "var(--danger)";
 }
 
 function subjectImage(item, size = "medium") {
@@ -176,7 +177,7 @@ function AnimeCard({ item, onClick }) {
       <div className="animeCardPoster">
         {img
           ? <img src={img} alt={name} loading="lazy" className="animeCardImg" />
-          : <div className="animeCardImgPlaceholder" />
+          : <div className="animeCardImgPlaceholder"><EquipmentVisual kind="media" /></div>
         }
         {score > 0 && (
           <span className="animeCardScore" style={{ color: scoreColor(score) }}>
@@ -1798,6 +1799,7 @@ export default function AnimePage({ authToken, p2p, clients }) {
   return (
     <div className={`animePage${selectedSubjectId ? " hasDetail" : ""}`}>
       <div className="animeMain">
+        <header className="moduleHeading"><div><span className="industrialEyebrow">08 / MEDIA FRONTIER</span><h2>番剧</h2><p>探索放送日历，发现下一段故事。</p></div><span className="monoLabel">ENTERTAINMENT ARCHIVE</span></header>
         <div className="animePageTabBar">
           {TABS.map((tab) => (
             <button

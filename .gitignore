@@ -7,3 +7,6 @@ web/dist
 storage-client/data
 *.log
 .local
+
+# Local UI previews, diagnostic captures and deployment archives.
+/local/

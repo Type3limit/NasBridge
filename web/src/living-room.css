@@ -1,3 +1,4 @@
+@layer legacy {
 ﻿/* ===================================================================
    NAS Bridge — 大屏纯享页主题
    独立深色主题，不继承控制台亮色样式
@@ -1119,4 +1120,6 @@ html, body, #root {
 }
 .lrAnimeContent .animeSearchBar input::placeholder {
   color: var(--lr-text-muted);
+}
+
 }

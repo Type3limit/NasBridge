@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { apiRequest } from "./api.js";
+import { ThemeSwitch } from "./ui/ThemeProvider";
+import { PageMasthead } from "./ui/IndustrialChrome";
+import { EquipmentVisual } from "./ui/OperationsDisplay";
 import { P2PBridgePool } from "./webrtc.js";
 import VideoPlayerControls, { VideoDanmakuComposer } from "./components/VideoPlayerControls";
 import AnimePage from "./components/AnimePage";
@@ -261,7 +264,6 @@ function createP2PHlsLoaderClass(p2pInstance) {
 // 子组件：MediaCard
 // ────────────────────────────────────────────────────────────
 function MediaCard({ file, thumbUrl, continueRecord, focused, onClick, onKeyDown, onHover, onRefreshThumb }) {
-  const icon = getFileTypeIcon(file);
   const progress = continueRecord && continueRecord.duration > 0
     ? Math.min(100, (continueRecord.currentTime / continueRecord.duration) * 100)
     : 0;
@@ -279,7 +281,7 @@ function MediaCard({ file, thumbUrl, continueRecord, focused, onClick, onKeyDown
       <div className="lrCardThumb">
         {thumbUrl
           ? <img src={thumbUrl} alt="" />
-          : <div className="lrCardThumbFallback">{icon}</div>
+          : <div className="lrCardThumbFallback"><EquipmentVisual kind="media" /></div>
         }
         {onRefreshThumb && (
           <button
@@ -1819,6 +1821,7 @@ export default function LivingRoomPage() {
   if (pageState === "share-player" && !playingFile) {
     return (
       <div className="lrBoot" role="status" aria-live="polite">
+        <PageMasthead section="MEDIA TERMINAL / 大屏媒体库" />
         <div className="lrBootSpinner" />
         <div className="lrBootTitle">正在启动大屏播放…</div>
         <div className="lrBootSub">{shareMode?.file?.name || "加载中"}</div>
@@ -1830,6 +1833,7 @@ export default function LivingRoomPage() {
   if (pageState === "booting" || pageState === "loading-library") {
     return (
       <div className="lrBoot" role="status" aria-live="polite">
+        <PageMasthead section="MEDIA TERMINAL / 大屏媒体库" />
         <div className="lrBootSpinner" />
         <div className="lrBootTitle">
           {pageState === "booting" ? "正在连接…" : "正在加载媒体库…"}
@@ -1843,6 +1847,7 @@ export default function LivingRoomPage() {
   if (pageState === "error") {
     return (
       <div className="lrBoot">
+        <PageMasthead section="MEDIA TERMINAL / 大屏媒体库" />
         <div style={{ fontSize: "2rem" }}>⚠</div>
         <div className="lrBootTitle">加载失败</div>
         <div className="lrBootSub">请检查网络或重新登录</div>
@@ -1862,6 +1867,7 @@ export default function LivingRoomPage() {
   if (pageState === "login") {
     return (
       <div className="lrLogin">
+        <PageMasthead section="MEDIA TERMINAL / 大屏媒体库" />
         <div className="lrLoginCard">
           <div>
             <div className="lrLoginTitle">NAS Bridge</div>
@@ -2148,6 +2154,7 @@ export default function LivingRoomPage() {
       <div className="lrBrowse" ref={browseDivRef} aria-hidden={showPlayer}>
         {/* TopBar */}
         <header className="lrTopBar">
+          <ThemeSwitch compact />
           <span className="lrTopBarLogo">▶ NAS</span>
           <div className="lrTopBarCenter">
             <div className="lrContentToggle" role="tablist">

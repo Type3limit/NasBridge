@@ -6,6 +6,7 @@ import {
   DesktopRegular,
   EditRegular,
   ShareRegular,
+  VideoRegular,
 } from "@fluentui/react-icons";
 
 export default function MobileMoreSheet({
@@ -70,6 +71,10 @@ export default function MobileMoreSheet({
       >
         <div className="mobileMoreSheetHandle" aria-hidden="true" />
         <div className="mobileMoreSheetContent">
+          <button type="button" className="mobileMoreSheetRow" onClick={() => nav("anime")}>
+            <span className="mobileMoreSheetRowIcon"><VideoRegular /></span>
+            <span className="mobileMoreSheetRowLabel">番剧</span>
+          </button>
           <button
             type="button"
             className="mobileMoreSheetRow"

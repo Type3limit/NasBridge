@@ -2,6 +2,8 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Badge, Button, Caption1, Spinner, Text, Title3 } from "@fluentui/react-components";
 import { ArrowDownloadRegular, ArrowLeftRegular, StreamRegular } from "@fluentui/react-icons";
 import { apiRequest } from "./api";
+import { PageMasthead } from "./ui/IndustrialChrome";
+import { EquipmentVisual } from "./ui/OperationsDisplay";
 import { P2PBridgePool } from "./webrtc";
 
 const PreviewModal = lazy(() => import("./components/PreviewModal"));
@@ -597,6 +599,7 @@ export default function SharePage() {
   if (loading) {
     return (
       <div className="page sharePage">
+      <PageMasthead section="PUBLIC FILE EXCHANGE / 公开分享" />
         <div className="shareStandaloneShell">
           <div className="surfaceCard panelCard commandCard shareLoadingCard">
             <Spinner label="正在加载分享文件..." />
@@ -609,6 +612,7 @@ export default function SharePage() {
   if (errorText || !file) {
     return (
       <div className="page sharePage">
+      <PageMasthead section="PUBLIC FILE EXCHANGE / 公开分享" />
         <div className="shareStandaloneShell">
           <div className="surfaceCard panelCard commandCard shareHeroPanel">
             <Badge appearance="outline" color="danger">分享不可用</Badge>
@@ -622,6 +626,7 @@ export default function SharePage() {
 
   return (
     <div className="page sharePage">
+      <PageMasthead section="PUBLIC FILE EXCHANGE / 公开分享" />
       <div className="shareStandaloneShell">
         <div className="surfaceCard panelCard commandCard shareHeroPanel">
           <div className="shareHeroTop">
@@ -632,7 +637,7 @@ export default function SharePage() {
               </div>
               <div className="shareHeroHeadline">
                 <Title3>{file.name}</Title3>
-                <Text>该页面收敛到主工作台同一套卡片层级与排版节奏，无需登录即可预览和下载，不开放上传、编辑、删除等写操作。</Text>
+                <Text>来自私人存储网络的共享文件。直接预览、下载，让内容自由抵达。</Text>
               </div>
               <div className="shareHeroFacts">
                 <div className="summaryPill">
@@ -666,6 +671,7 @@ export default function SharePage() {
                 {thumbUrl ? <img src={thumbUrl} alt={file.name} className="shareStandaloneThumb" /> : null}
                 {!thumbUrl && (
                   <div className="shareStandaloneThumbFallback">
+                    <EquipmentVisual kind={isVideoMime(file.mimeType) || isAudioMime(file.mimeType) ? "media" : "share"} />
                     <Text>{thumbLoading ? "正在生成缩略图" : (isImageMime(file.mimeType) ? "图片" : isVideoMime(file.mimeType) ? "视频" : "文件")}</Text>
                   </div>
                 )}
@@ -707,7 +713,7 @@ export default function SharePage() {
             <div className="sectionHeaderCompact">
               <div>
                 <Caption1>文件与分享信息</Caption1>
-                <Text>按主工作台的双列指标卡组织核心元数据。</Text>
+              <Text>查看文件属性与分享期限。</Text>
               </div>
               <Badge appearance="outline" color={getShareStatusColor(share?.status)}>{getShareStatusLabel(share?.status)}</Badge>
             </div>

@@ -1,0 +1,58 @@
+{
+  "note": "Original artwork for NAS Bridge. Generated with built-in image_gen; exported to WebP without changing artwork. Projector background extraction attempted with image_gen; final media artwork is used as a framed image.",
+  "assets": [
+    {
+      "name": "relay-station",
+      "mode": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: cinematic panoramic background for the login hero of a personal NAS storage console. Primary request: original futuristic heavy-industrial data relay station on a harsh remote planet, premium science-fiction game environmental concept art, hard-surface white concrete and graphite metal modules, angular gantry cranes, tall antenna arrays, stacked data center blocks and one massive geometric relay ring in the mid-distance. Rugged dusty rock terrain, tiny industrial safety-yellow lights and caution accents, dramatic atmospheric distance and fog, restrained monochrome graphite, ash gray, off-white and industrial yellow palette. Composition: ultra-wide 16:9 landscape, no people, major station and relay structure placed on the right half; left half is quieter foggy negative space suitable for typography. Lighting: soft bright overcast sky with darker foreground and directional light cutting through dust; medium contrast so the same artwork can work under either a dark or pale CSS overlay. Detailed manufactured machinery, believable scale, sophisticated high-end game cinematic still. Constraints: background artwork only, no UI, no text, no letters, no logos, no copyrighted characters, no watermark. Output a high-quality landscape raster image."
+    },
+    {
+      "name": "relay-assembly",
+      "mode": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: transparent-background industrial equipment illustration for decorative empty space in a NAS storage dashboard. Primary request: one original heavy industrial futuristic data relay assembly, intricate modular server blocks mounted around a large mechanical circular dish, exposed steel ribs, stacked graphite equipment pods, white ceramic armor panels, cable bundles, angular gantry arms and glowing safety-yellow status slits. Premium realistic 3D game prop concept art, engineering plausibility, manufactured machinery, restrained worn surface details, desaturated steel gray, white, graphite black and sharp industrial yellow. Isometric three-quarter perspective, entire isolated prop fully visible including mechanical base with small scale-brackets but no ground plane; composition balanced, transparent background. Soft studio lighting, visible material differences, enough edge contrast to sit on both charcoal and ivory interfaces. Compact silhouette, no floating random debris. Constraints: genuine transparent background, no scene, no UI, no typography, no letters, no logos, no characters, no watermark."
+    },
+    {
+      "name": "machine-hall",
+      "mode": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: wide cinematic industrial interior environment image for background accents in a storage dashboard. Original heavy-industrial futuristic server and power relay hall, vast graphite machinery banks, white structural steel braces, thick bundled conduits, overhead rails, complex cooling fins, walkways, precisely manufactured panels, caution-yellow edge strips and small yellow practical lights, dramatic diagonal perspective into the machine hall. Rich near-photorealistic premium game environment art. No people. Desaturated gray and near-black with industrial yellow as the only chromatic accent, atmospheric volumetric light, visible fine metallic details. Very wide landscape composition, mechanical detail clustered toward right and upper edge, quieter floor with negative space in left third for overlay. Moderate contrast for dark and light theme overlays. Constraints: artwork only, no UI, no lettering, no digits, no logos, no copyrighted props, no watermark."
+    },
+    {
+      "name": "node-rack",
+      "mode": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: transparent-background artwork for an original industrial NAS dashboard. A powerful freestanding industrial NAS storage terminal: three vertically stacked graphite server pods in a white ceramic armored rack, very detailed cooling fins and ports, rugged angular hydraulic support frame, cable harnesses, miniature safety yellow status slits and manufacturing details, three-quarter front view, full isolated assembly, premium realistic futuristic game prop. NOT a satellite dish. Stable rectangular silhouette suitable as a thumbnail beside real node status. Unified art direction: desaturated graphite, white ceramic, stainless steel and industrial yellow only; believable manufactured machinery with rich material depth, soft high-end studio lighting, crisp readable silhouette on both ivory and charcoal interfaces. Constraints: genuine transparent background, no floor, no surrounding scene, no shadow plane, no typography, no digits, no logos, no watermarks, no people."
+    },
+    {
+      "name": "transfer-conveyor",
+      "mode": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: transparent-background artwork for an original industrial NAS dashboard. A full isolated futuristic industrial data transport bridge: two small armored server towers connected by a sophisticated segmented mechanical conveyor and bundled conduits, yellow luminous transport capsules passing along the central rail, fine graphite and stainless steel cooling elements, white protective casings, isometric wide horizontal 2.4:1 composition, all parts fully visible. Premium realistic game equipment illustration for a transfer-status page, intricate tangible machinery rather than a diagram. Unified art direction: desaturated graphite, white ceramic, stainless steel and industrial yellow only; believable manufactured machinery with rich material depth, soft high-end studio lighting, crisp readable silhouette on both ivory and charcoal interfaces. Constraints: genuine transparent background, no floor, no surrounding scene, no shadow plane, no typography, no digits, no logos, no watermarks, no people."
+    },
+    {
+      "name": "exchange-vault",
+      "mode": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: transparent-background artwork for an original industrial NAS dashboard. One isolated original sci-fi industrial secure data vault and archive case: a robust graphite cubic case, open layered armored white ceramic lids revealing dense arrays of silver storage cartridge slots and a subtle yellow luminous core, precision latches, thick sealed connectors, safety yellow stripe and small practical lamps. Three-quarter front isometric perspective, entire object fully visible, premium realistic manufactured game prop. Compact silhouette suitable next to shared files. Unified art direction: desaturated graphite, white ceramic, stainless steel and industrial yellow only; believable manufactured machinery with rich material depth, soft high-end studio lighting, crisp readable silhouette on both ivory and charcoal interfaces. Constraints: genuine transparent background, no floor, no surrounding scene, no shadow plane, no typography, no digits, no logos, no watermarks, no people."
+    },
+    {
+      "name": "media-projector",
+      "mode": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: transparent-background artwork for an original industrial NAS dashboard. One isolated original futuristic heavy-industrial media playback unit: angular graphite and silver dual-reel projection and broadcasting apparatus, armored white ceramic shell, finely machined lens housing, yellow luminous lens and yellow protective rail accents, detailed controls and cooling fins, a small antenna on rear. Three-quarter front perspective, full object visible, premium realistic hard-surface game equipment design, compact wide silhouette. No emitted beam, no image screens. Unified art direction: desaturated graphite, white ceramic, stainless steel and industrial yellow only; believable manufactured machinery with rich material depth, soft high-end studio lighting, crisp readable silhouette on both ivory and charcoal interfaces. Constraints: genuine transparent background, no floor, no surrounding scene, no shadow plane, no typography, no digits, no logos, no watermarks, no people."
+    },
+    {
+      "name": "signal-console",
+      "mode": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: transparent-background artwork for an original industrial NAS dashboard. One isolated original futuristic heavy-industrial communications console: rugged graphite control desk with folded white ceramic armored panels, two tilted charcoal unlit data displays, precise yellow light slots, exposed silver connector plugs, one compact antenna assembly, deep cooling fins and neatly bundled conduits. Three-quarter isometric perspective, complete desk and base visible. Premium realistic hard-surface game prop for a collaboration and chat dashboard. Screens blank with no text or UI. Unified art direction: desaturated graphite, white ceramic, stainless steel and industrial yellow only; believable manufactured machinery with rich material depth, soft high-end studio lighting, crisp readable silhouette on both ivory and charcoal interfaces. Constraints: genuine transparent background, no floor, no surrounding scene, no shadow plane, no typography, no digits, no logos, no watermarks, no people."
+    },
+    {
+      "name": "archive-drive",
+      "mode": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: transparent-background artwork for an original industrial NAS dashboard. One isolated original sci-fi industrial archive storage cartridge: chunky rectangular graphite data module seated in a white ceramic protective holder, highly detailed machined edges, cooling slits, exposed silver data connector and layered frame, bright safety yellow locking tabs, small yellow practical status lights, rugged matte texture and restrained wear. Three-quarter isometric perspective with full object visible. Premium realistic hard-surface game equipment art for file archive card placeholders. Unified art direction: desaturated graphite, white ceramic, stainless steel and industrial yellow only; believable manufactured machinery with rich material depth, soft high-end studio lighting, crisp readable silhouette on both ivory and charcoal interfaces. Constraints: genuine transparent background, no floor, no surrounding scene, no shadow plane, no typography, no digits, no logos, no watermarks, no people."
+    }
+  ],
+  "edits": [
+    {
+      "name": "media-projector",
+      "mode": "built-in image_gen",
+      "prompt": "Edit this exact industrial media projector image. Remove the entire surrounding studio background, floor, vignette and glow behind the object, producing a genuinely transparent alpha background. Preserve the equipment itself exactly, including its material colors, reels, lens, yellow accents, proportions, and fine mechanical details. Clean accurate silhouette with no backdrop pixels, no shadow plane, no new objects, no text.",
+      "note": "Output retained an opaque studio background; used as a framed image."
+    }
+  ]
+}

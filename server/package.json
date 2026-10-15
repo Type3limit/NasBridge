@@ -11,6 +11,7 @@
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^12.8.0",
     "cheerio": "^1.2.0",
+    "compression": "^1.8.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",

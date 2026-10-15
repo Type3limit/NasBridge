@@ -1,5 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap");
-
+@layer legacy {
 :root {
   color-scheme: light;
   --page-bg: #eef3f8;
@@ -38,7 +37,7 @@ body,
 
 body {
   background: 
-    linear-gradient(180deg, rgba(244, 248, 251, 0.3) 0%, rgba(238, 243, 248, 0.3) 100%);
+    var(--surface);
 }
 
 button,
@@ -130,7 +129,7 @@ textarea {
 }
 
 .shareHeroIntro .fui-Caption1 {
-  color: rgba(226, 232, 240, 0.84);
+  color: var(--text-soft);
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
@@ -145,7 +144,7 @@ textarea {
   max-width: 760px;
   font-size: 1rem;
   line-height: 1.72;
-  color: rgba(226, 232, 240, 0.84);
+  color: var(--text);
 }
 
 .shareHeroFacts {
@@ -209,7 +208,7 @@ textarea {
 .shareLinkBlock,
 .shareStatusBlock {
   padding: 16px 18px;
-  background: rgba(255, 255, 255, 0.68);
+  background: var(--surface);
 }
 
 .shareLinkBlock .fui-Text,
@@ -240,7 +239,7 @@ textarea {
   overflow: hidden;
   border-radius: var(--radius-lg);
   border: 1px solid var(--stroke);
-  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+  box-shadow: none;
 }
 
 .surfaceCard {
@@ -249,7 +248,7 @@ textarea {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.92)),
     radial-gradient(circle at top right, rgba(14, 165, 233, 0.07), transparent 32%);
-  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+  box-shadow: none;
   -webkit-backdrop-filter: blur(18px);
   backdrop-filter: blur(18px);
 }
@@ -273,14 +272,7 @@ textarea {
   inset: 0 16px auto 16px;
   height: 2px;
   border-radius: 999px;
-  background: linear-gradient(
-    90deg,
-    #ffffff 0%,
-    #b9e5f9 28%,
-    #e1f7ff 50%,
-    #b9e5f9 72%,
-    #ffffff 100%
-  );
+  background: var(--surface-hover);
   pointer-events: none;
 }
 
@@ -313,31 +305,31 @@ textarea {
   align-items: center;
   padding: 14px 14px 14px 16px;
   border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 18px 34px rgba(15, 23, 42, 0.16);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
   -webkit-backdrop-filter: blur(16px);
   backdrop-filter: blur(16px);
   cursor: pointer;
 }
 
 .toastItem.info {
-  border-color: rgba(59, 130, 246, 0.2);
+  border-color: var(--accent);
 }
 
 .toastItem.success {
-  border-color: rgba(34, 197, 94, 0.24);
-  background: linear-gradient(180deg, rgba(240, 253, 244, 0.96), rgba(255, 255, 255, 0.94));
+  border-color: var(--success);
+  background: var(--surface);
 }
 
 .toastItem.warning {
-  border-color: rgba(245, 158, 11, 0.26);
-  background: linear-gradient(180deg, rgba(255, 251, 235, 0.98), rgba(255, 255, 255, 0.94));
+  border-color: var(--danger);
+  background: var(--surface);
 }
 
 .toastItem.error {
-  border-color: rgba(239, 68, 68, 0.28);
-  background: linear-gradient(180deg, rgba(254, 242, 242, 0.98), rgba(255, 255, 255, 0.94));
+  border-color: var(--danger);
+  background: var(--surface);
 }
 
 .toastBody {
@@ -360,7 +352,7 @@ textarea {
 
 .toastClose {
   border: none;
-  background: rgba(241, 245, 249, 0.92);
+  background: var(--surface);
   color: var(--text-soft);
   border-radius: 999px;
   padding: 8px 12px;
@@ -385,12 +377,12 @@ textarea {
   width: 100%;
   min-height: 44px;
   border-radius: 14px;
-  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.2);
+  box-shadow: none;
 }
 
 .fui-Input:focus-within,
 .fui-Dropdown:focus-within {
-  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+  box-shadow: none;
 }
 
 .fui-Button {
@@ -438,8 +430,8 @@ textarea {
     radial-gradient(circle at 14% 16%, rgba(125, 211, 252, 0.22), transparent 28%),
     radial-gradient(circle at 85% 18%, rgba(45, 212, 191, 0.18), transparent 26%),
     linear-gradient(145deg, #071a2c 0%, #0a2240 42%, #0f172a 100%);
-  box-shadow: 0 28px 80px rgba(15, 23, 42, 0.22);
-  color: #f8fafc;
+  box-shadow: none;
+  color: var(--text);
 }
 
 .authShowcase::before {
@@ -447,15 +439,15 @@ textarea {
   position: absolute;
   inset: 24px;
   border-radius: 28px;
-  border: 1px solid rgba(148, 163, 184, 0.08);
+  border: 1px solid var(--stroke);
   pointer-events: none;
 }
 
 .authShowcase .fui-Badge {
   width: fit-content;
-  color: rgba(248, 250, 252, 0.94);
-  border-color: rgba(148, 163, 184, 0.24);
-  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  border-color: var(--stroke);
+  background: var(--surface);
 }
 
 .authShowcase .fui-Text,
@@ -490,16 +482,16 @@ textarea {
   gap: 10px;
   padding: 9px 14px;
   border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
 }
 
 .authShowcasePulseDot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: #34d399;
-  box-shadow: 0 0 0 7px rgba(52, 211, 153, 0.16);
+  background: var(--success-bg);
+  box-shadow: none;
 }
 
 .authShowcaseHeadline {
@@ -513,14 +505,14 @@ textarea {
   font-size: clamp(2.45rem, 4vw, 4.7rem);
   line-height: 0.96;
   letter-spacing: -0.06em;
-  color: #f8fafc;
+  color: var(--text);
 }
 
 .authShowcaseHeadline .fui-Text {
   max-width: 610px;
   font-size: 1.03rem;
   line-height: 1.72;
-  color: rgba(226, 232, 240, 0.84);
+  color: var(--text);
 }
 
 .authShowcaseMetrics {
@@ -533,8 +525,8 @@ textarea {
   min-height: 108px;
   padding: 16px;
   border-radius: 22px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: var(--surface);
+  border: 1px solid var(--stroke);
   -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
   display: flex;
@@ -544,16 +536,16 @@ textarea {
 }
 
 .authMetricCard.primary {
-  background: linear-gradient(160deg, rgba(34, 197, 94, 0.16), rgba(59, 130, 246, 0.16));
-  border-color: rgba(125, 211, 252, 0.22);
+  background: var(--success-bg);
+  border-color: var(--accent);
 }
 
 .authMetricCard .fui-Caption1 {
-  color: rgba(191, 219, 254, 0.88);
+  color: var(--accent);
 }
 
 .authMetricCard .fui-Text {
-  color: #f8fafc;
+  color: var(--text);
   font-weight: 800;
 }
 
@@ -566,19 +558,19 @@ textarea {
 .authFeatureBlock {
   padding: 18px 16px;
   border-radius: 22px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: var(--surface);
+  border: 1px solid var(--stroke);
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
 .authFeatureBlock .fui-Caption1 {
-  color: rgba(125, 211, 252, 0.92);
+  color: var(--accent);
 }
 
 .authFeatureBlock .fui-Text {
-  color: rgba(226, 232, 240, 0.82);
+  color: var(--text);
 }
 
 .authShowcaseVisual {
@@ -615,9 +607,9 @@ textarea {
 .authVisualCard {
   position: relative;
   border-radius: 26px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.06));
-  box-shadow: 0 24px 40px rgba(2, 6, 23, 0.22);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
+  box-shadow: none;
   -webkit-backdrop-filter: blur(18px);
   backdrop-filter: blur(18px);
 }
@@ -641,15 +633,15 @@ textarea {
 }
 
 .authVisualWindowDot.red {
-  background: #f87171;
+  background: var(--danger-bg);
 }
 
 .authVisualWindowDot.amber {
-  background: #fbbf24;
+  background: var(--warning-bg);
 }
 
 .authVisualWindowDot.green {
-  background: #34d399;
+  background: var(--success-bg);
 }
 
 .authVisualBody {
@@ -662,12 +654,12 @@ textarea {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  color: rgba(226, 232, 240, 0.9);
+  color: var(--text);
   font-size: 0.95rem;
 }
 
 .authVisualRow strong {
-  color: #86efac;
+  color: var(--success);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-size: 0.78rem;
@@ -683,18 +675,18 @@ textarea {
   display: block;
   height: 10px;
   border-radius: 999px;
-  background: linear-gradient(90deg, rgba(59, 130, 246, 0.88), rgba(45, 212, 191, 0.76));
+  background: var(--accent-bg);
 }
 
 .authVisualTerminal {
   margin-top: 8px;
   padding: 18px;
   border-radius: 20px;
-  background: rgba(2, 6, 23, 0.34);
-  border: 1px solid rgba(148, 163, 184, 0.1);
+  background: var(--accent-bg);
+  border: 1px solid var(--stroke);
   display: grid;
   gap: 10px;
-  color: rgba(226, 232, 240, 0.82);
+  color: var(--text);
   font-size: 0.95rem;
 }
 
@@ -715,11 +707,11 @@ textarea {
 }
 
 .authVisualMini .fui-Caption1 {
-  color: rgba(125, 211, 252, 0.92);
+  color: var(--accent);
 }
 
 .authVisualMini .fui-Text {
-  color: rgba(248, 250, 252, 0.92);
+  color: var(--text);
   font-weight: 700;
 }
 
@@ -734,8 +726,8 @@ textarea {
   width: 48px;
   height: 48px;
   border-radius: 16px;
-  background: linear-gradient(135deg, rgba(37, 99, 235, 0.14), rgba(15, 118, 110, 0.16));
-  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: var(--accent-bg);
+  border: 1px solid var(--stroke);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -747,12 +739,12 @@ textarea {
   height: 18px;
   border-radius: 6px;
   background: linear-gradient(180deg, var(--accent), var(--brand));
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.28);
+  box-shadow: none;
 }
 
 .brandLogoOrbit {
   position: absolute;
-  border: 2px solid rgba(37, 99, 235, 0.22);
+  border: 2px solid var(--accent);
   border-radius: 999px;
 }
 
@@ -766,7 +758,7 @@ textarea {
   width: 34px;
   height: 20px;
   transform: rotate(-28deg);
-  border-color: rgba(15, 118, 110, 0.22);
+  border-color: var(--accent);
 }
 
 .authPanel {
@@ -778,7 +770,7 @@ textarea {
     linear-gradient(180deg, rgba(255, 255, 255, 0.995), rgba(246, 248, 251, 0.98)),
     radial-gradient(circle at top right, rgba(34, 197, 94, 0.08), transparent 34%),
     radial-gradient(circle at bottom left, rgba(59, 130, 246, 0.08), transparent 32%);
-  box-shadow: 0 36px 90px rgba(15, 23, 42, 0.18);
+  box-shadow: var(--shadow-md);
 }
 
 .authPanelElevated {
@@ -812,8 +804,8 @@ textarea {
   gap: 10px;
   padding: 6px;
   border-radius: 18px;
-  background: rgba(241, 245, 249, 0.92);
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: var(--surface);
+  border: 1px solid var(--stroke);
 }
 
 .authForm {
@@ -834,14 +826,14 @@ textarea {
 }
 
 .authPanel .fui-Input {
-  background: rgba(248, 250, 252, 0.96);
+  background: var(--surface);
 }
 
 .authPanelFooterNote {
   padding: 14px 16px;
   border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(248, 250, 252, 0.9);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
 }
 
 .appTopbar {
@@ -856,7 +848,7 @@ textarea {
   border-radius: 0;
   border: none;
   box-shadow: none;
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--surface);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--stroke);
@@ -927,13 +919,13 @@ textarea {
   width: 72px;
   height: 72px;
   padding: 0;
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  border: 1px solid var(--stroke);
   border-radius: 999px;
   background:
     linear-gradient(180deg, rgba(249, 251, 253, 0.98), rgba(240, 245, 249, 0.94)),
     radial-gradient(circle at top left, rgba(37, 99, 235, 0.14), transparent 34%),
     radial-gradient(circle at bottom right, rgba(15, 118, 110, 0.14), transparent 38%);
-  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.14);
+  box-shadow: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -941,8 +933,8 @@ textarea {
 }
 
 .globalMusicFloatButton.active {
-  border-color: rgba(37, 99, 235, 0.24);
-  box-shadow: 0 22px 48px rgba(15, 23, 42, 0.2);
+  border-color: var(--accent);
+  box-shadow: none;
 }
 
 .globalMusicFloatButton:focus-visible {
@@ -955,14 +947,13 @@ textarea {
   max-width: min(500px, 38vw);
   padding: 8px 10px;
   border-radius: 24px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid var(--stroke);
   background:
     linear-gradient(180deg, rgba(249, 251, 253, 0.98), rgba(240, 245, 249, 0.94)),
     radial-gradient(circle at top left, rgba(37, 99, 235, 0.12), transparent 34%),
     radial-gradient(circle at bottom right, rgba(15, 118, 110, 0.12), transparent 38%);
   box-shadow:
-    0 22px 56px rgba(15, 23, 42, 0.16),
-    0 4px 14px rgba(15, 23, 42, 0.08);
+    none;
   display: grid;
   grid-template-columns: 58px minmax(0, 1fr);
   gap: 10px;
@@ -1018,15 +1009,14 @@ textarea {
   border-radius: 999px;
   opacity: 0;
   transform: scale(0.86) translateY(4px);
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+  box-shadow: var(--shadow-md);
 }
 
 .globalMusicPlayerCard.floating.isVisible {
   opacity: 1;
   transform: scale(1);
   box-shadow:
-    0 28px 68px rgba(15, 23, 42, 0.18),
-    0 8px 22px rgba(15, 23, 42, 0.1);
+    var(--shadow-md);
 }
 
 .globalMusicPlayerShell.side-left .globalMusicPlayerCard.floating.isHidden {
@@ -1085,8 +1075,7 @@ textarea {
   border-radius: 50%;
   overflow: hidden;
   box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.2),
-    0 14px 24px rgba(15, 23, 42, 0.16);
+    none;
 }
 
 .globalMusicCoverArtShell.spinning {
@@ -1104,10 +1093,9 @@ textarea {
   position: absolute;
   inset: 21px;
   border-radius: 50%;
-  background: rgba(15, 23, 42, 0.76);
+  background: var(--accent-bg);
   box-shadow:
-    0 0 0 2px rgba(255, 255, 255, 0.58),
-    inset 0 0 0 2px rgba(148, 163, 184, 0.32);
+    none;
 }
 
 .globalMusicDisc {
@@ -1119,9 +1107,7 @@ textarea {
     radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.2), transparent 14%),
     radial-gradient(circle at center, #0f172a 0 17%, #121c31 17% 23%, #091018 23% 100%);
   box-shadow:
-    inset 0 0 0 1px rgba(148, 163, 184, 0.12),
-    inset 0 0 24px rgba(255, 255, 255, 0.04),
-    0 14px 24px rgba(15, 23, 42, 0.16);
+    none;
 }
 
 .globalMusicDisc.spinning {
@@ -1132,7 +1118,7 @@ textarea {
   position: absolute;
   inset: 8px;
   border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--stroke);
 }
 
 .globalMusicDiscGroove.grooveB {
@@ -1143,8 +1129,8 @@ textarea {
   position: absolute;
   inset: 20px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(45, 212, 191, 0.9) 0 16%, rgba(37, 99, 235, 0.72) 16% 100%);
-  box-shadow: inset 0 0 0 6px rgba(226, 232, 240, 0.16);
+  background: var(--success-bg);
+  box-shadow: none;
 }
 
 .globalMusicPlayerMain {
@@ -1257,8 +1243,8 @@ textarea {
 .globalMusicStatusPill {
   padding: 6px 10px;
   border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
   color: var(--text-soft);
   font-size: 0.76rem;
   font-weight: 800;
@@ -1266,13 +1252,13 @@ textarea {
 }
 
 .globalMusicQueuePill {
-  background: rgba(239, 246, 255, 0.82);
+  background: var(--surface);
   color: var(--accent);
 }
 
 .globalMusicStatusPill {
-  background: rgba(240, 253, 250, 0.84);
-  color: #0f766e;
+  background: var(--surface);
+  color: var(--accent);
 }
 
 .globalMusicProgressBlock {
@@ -1332,8 +1318,8 @@ textarea {
   height: 14px;
   border-radius: 50%;
   border: none;
-  background: #fff;
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.18), 0 6px 12px rgba(15, 23, 42, 0.16);
+  background: var(--surface);
+  box-shadow: none;
   -webkit-appearance: none;
   appearance: none;
 }
@@ -1344,8 +1330,8 @@ textarea {
   height: 14px;
   border-radius: 50%;
   border: none;
-  background: #fff;
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.18), 0 6px 12px rgba(15, 23, 42, 0.16);
+  background: var(--surface);
+  box-shadow: none;
 }
 
 .globalMusicPlayButton,
@@ -1353,8 +1339,8 @@ textarea {
 .globalMusicTextButton,
 .musicSourceSelect,
 .globalMusicExpandButton {
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
   color: var(--text);
 }
 
@@ -1394,8 +1380,8 @@ textarea {
 }
 
 .globalMusicIconButton.primary {
-  background: linear-gradient(180deg, rgba(37, 99, 235, 0.94), rgba(15, 118, 110, 0.96));
-  color: #fff;
+  background: var(--accent-bg);
+  color: var(--text);
   border-color: transparent;
 }
 
@@ -1406,8 +1392,8 @@ textarea {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(180deg, rgba(37, 99, 235, 0.94), rgba(15, 118, 110, 0.96));
-  color: #fff;
+  background: var(--accent-bg);
+  color: var(--text);
   border-color: transparent;
 }
 
@@ -1422,8 +1408,8 @@ textarea {
 }
 
 .globalMusicExpandButton.active {
-  border-color: rgba(37, 99, 235, 0.28);
-  background: rgba(239, 246, 255, 0.94);
+  border-color: var(--accent);
+  background: var(--surface-hover);
   color: var(--accent);
 }
 
@@ -1433,7 +1419,7 @@ textarea {
 .musicSourceSelect:hover,
 .globalMusicExpandButton:hover {
   transform: translateY(-1px);
-  border-color: rgba(37, 99, 235, 0.24);
+  border-color: var(--accent);
 }
 
 .globalMusicPlayButton:disabled,
@@ -1491,7 +1477,7 @@ textarea {
 
 .globalMusicComposer .fui-Input,
 .globalMusicInput {
-  background: rgba(255, 255, 255, 0.86);
+  background: var(--surface);
 }
 
 .globalMusicLyricsPanel {
@@ -1500,8 +1486,8 @@ textarea {
   gap: 8px;
   padding: 10px 12px;
   border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(248, 250, 252, 0.72);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
 }
 
 .globalMusicLyricsPanel.popup {
@@ -1535,7 +1521,7 @@ textarea {
 .globalMusicQueueStrip.popup {
   margin-top: 14px;
   padding-top: 16px;
-  border-top: 1px solid rgba(148, 163, 184, 0.22);
+  border-top: 1px solid var(--stroke);
 }
 
 .globalMusicQueueItem,
@@ -1543,7 +1529,7 @@ textarea {
   min-width: 0;
   padding: 12px;
   border-radius: 20px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  border: 1px solid var(--stroke);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.9)),
     radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 42%);
@@ -1574,8 +1560,8 @@ textarea {
 }
 
 .globalMusicQueueItem.active {
-  background: linear-gradient(180deg, rgba(239, 246, 255, 0.92), rgba(255, 255, 255, 0.84));
-  border-color: rgba(37, 99, 235, 0.22);
+  background: var(--surface-hover);
+  border-color: var(--accent);
 }
 
 .globalMusicQueueItemTitle {
@@ -1598,10 +1584,10 @@ textarea {
   width: 32px;
   height: 32px;
   min-width: 32px;
-  border: 1px solid rgba(248, 113, 113, 0.22);
+  border: 1px solid var(--danger);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.92);
-  color: #dc2626;
+  background: var(--surface);
+  color: var(--danger);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1611,8 +1597,8 @@ textarea {
 
 .globalMusicQueueRemoveButton:hover {
   transform: translateY(-1px);
-  background: rgba(254, 242, 242, 0.96);
-  border-color: rgba(239, 68, 68, 0.3);
+  background: var(--surface-hover);
+  border-color: var(--danger);
 }
 
 .globalMusicQueueEmpty {
@@ -1620,11 +1606,11 @@ textarea {
 }
 
 .globalMusicErrorText {
-  color: #b91c1c;
+  color: var(--danger);
 }
 
 .globalMusicWarningText {
-  color: #9a3412;
+  color: var(--danger);
 }
 
 .globalMusicExpandedPanel {
@@ -1636,7 +1622,7 @@ textarea {
   overflow: hidden;
   opacity: 0;
   padding-top: 0;
-  border-top: 1px solid rgba(148, 163, 184, 0);
+  border-top: 1px solid var(--stroke);
   transform: translateY(-10px) scale(0.985);
   transition:
     max-height 0.38s cubic-bezier(0.22, 1, 0.36, 1),
@@ -1650,7 +1636,7 @@ textarea {
   max-height: min(72vh, 960px);
   opacity: 1;
   padding-top: 14px;
-  border-top-color: rgba(148, 163, 184, 0.2);
+  border-top-color: var(--stroke);
   transform: translateY(0) scale(1);
 }
 
@@ -1693,11 +1679,11 @@ textarea {
   z-index: 25;
   padding: 16px;
   border-radius: 22px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid var(--stroke);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.96)),
     radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 44%);
-  box-shadow: 0 20px 46px rgba(15, 23, 42, 0.14);
+  box-shadow: var(--shadow-md);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -1777,15 +1763,15 @@ textarea {
 .musicSearchStatusText {
   padding: 12px 14px;
   border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(248, 250, 252, 0.9);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
   color: var(--text-soft);
 }
 
 .musicSearchStatusText.error {
-  border-color: rgba(239, 68, 68, 0.22);
-  background: rgba(254, 242, 242, 0.92);
-  color: #b91c1c;
+  border-color: var(--danger);
+  background: var(--surface);
+  color: var(--danger);
 }
 
 .musicSearchResultList {
@@ -1809,7 +1795,7 @@ textarea {
   align-items: center;
   padding: 14px;
   border-radius: 20px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  border: 1px solid var(--stroke);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.9)),
     radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 42%);
@@ -1825,8 +1811,8 @@ textarea {
   height: 72px;
   border-radius: 18px;
   object-fit: cover;
-  background: rgba(226, 232, 240, 0.9);
-  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.12);
+  background: var(--surface);
+  box-shadow: none;
 }
 
 .musicSearchResultCard.compact .musicSearchCover {
@@ -1837,8 +1823,7 @@ textarea {
 
 .musicSearchCover.fallback {
   background:
-    linear-gradient(135deg, rgba(37, 99, 235, 0.16), rgba(15, 118, 110, 0.18)),
-    rgba(226, 232, 240, 0.9);
+    var(--accent-bg);
 }
 
 .musicSearchResultBody {
@@ -1903,7 +1888,7 @@ textarea {
   max-width: min(100%, 320px);
   padding: 10px 14px;
   border-radius: 20px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  border: 1px solid var(--stroke);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 248, 252, 0.95)),
     radial-gradient(circle at top right, rgba(59, 130, 246, 0.09), transparent 38%);
@@ -1912,7 +1897,7 @@ textarea {
   gap: 10px;
   color: var(--text);
   cursor: pointer;
-  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.06);
+  box-shadow: none;
   flex: 0 1 auto;
 }
 
@@ -1925,7 +1910,7 @@ textarea {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  background: linear-gradient(135deg, rgba(14, 165, 233, 0.16), rgba(37, 99, 235, 0.2));
+  background: var(--accent-bg);
   color: var(--accent);
   font-weight: 800;
 }
@@ -2021,7 +2006,7 @@ textarea {
   width: 100%;
   opacity: 1;
   pointer-events: auto;
-  border-right-color: rgba(148, 163, 184, 0.14);
+  border-right-color: var(--stroke);
 }
 
 .workspaceNavCard {
@@ -2032,7 +2017,7 @@ textarea {
   padding: 18px 14px;
   border: none;
   border-radius: 0;
-  background: linear-gradient(180deg, rgba(250, 252, 255, 0.96), rgba(244, 247, 250, 0.92));
+  background: var(--surface);
   overflow: hidden;
   box-shadow: none;
 }
@@ -2041,14 +2026,14 @@ textarea {
   width: 48px;
   height: 48px;
   border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(241, 245, 249, 0.94));
+  border: 1px solid var(--stroke);
+  background: var(--surface);
   color: var(--accent);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.1);
+  box-shadow: none;
   transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease;
 }
 
@@ -2059,8 +2044,8 @@ textarea {
 .workspaceFlyoutTrigger:hover,
 .workspaceFlyoutTrigger.active {
   transform: translateY(-1px);
-  background: rgba(239, 246, 255, 0.98);
-  border-color: rgba(59, 130, 246, 0.24);
+  background: var(--surface-hover);
+  border-color: var(--accent);
 }
 
 .workspaceNavHeader {
@@ -2085,8 +2070,8 @@ textarea {
   min-height: 56px;
   padding: 10px 12px;
   border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(247, 250, 252, 0.92));
+  border: 1px solid var(--stroke);
+  background: var(--surface);
   color: var(--text);
   display: flex;
   align-items: center;
@@ -2099,14 +2084,14 @@ textarea {
 
 .workspaceNavButton:hover {
   transform: translateY(-1px);
-  border-color: rgba(59, 130, 246, 0.2);
-  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.06);
+  border-color: var(--accent);
+  box-shadow: none;
 }
 
 .workspaceNavButton.active {
-  border-color: rgba(59, 130, 246, 0.24);
-  background: linear-gradient(180deg, rgba(239, 246, 255, 0.98), rgba(248, 250, 252, 0.96));
-  box-shadow: 0 18px 30px rgba(37, 99, 235, 0.08);
+  border-color: var(--accent);
+  background: var(--surface-hover);
+  box-shadow: none;
 }
 
 .workspaceNavButtonMain {
@@ -2211,14 +2196,14 @@ textarea {
   width: 38px;
   height: 38px;
   border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(241, 245, 249, 0.92));
+  border: 1px solid var(--stroke);
+  background: var(--surface);
   color: var(--accent);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.05);
+  box-shadow: none;
 }
 
 .railSectionHeaderMeta {
@@ -2251,8 +2236,8 @@ textarea {
 .railMetric {
   padding: 12px 14px;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.74);
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: var(--surface);
+  border: 1px solid var(--stroke);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -2272,16 +2257,16 @@ textarea {
   gap: 12px;
   padding: 14px 16px;
   border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 250, 253, 0.94));
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
+  box-shadow: none;
   transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 }
 
 .miniListRow:hover {
   transform: translateY(-1px);
-  border-color: rgba(59, 130, 246, 0.22);
-  box-shadow: 0 16px 28px rgba(15, 23, 42, 0.09);
+  border-color: var(--accent);
+  box-shadow: none;
 }
 
 .miniListMain {
@@ -2311,13 +2296,13 @@ textarea {
 }
 
 .downloadTransferRow {
-  background: linear-gradient(180deg, rgba(239, 246, 255, 0.98), rgba(247, 250, 252, 0.94));
-  border-color: rgba(96, 165, 250, 0.24);
+  background: var(--surface);
+  border-color: var(--accent);
 }
 
 .uploadTransferRow {
-  background: linear-gradient(180deg, rgba(236, 253, 245, 0.98), rgba(247, 250, 252, 0.94));
-  border-color: rgba(52, 211, 153, 0.24);
+  background: var(--surface);
+  border-color: var(--success);
 }
 
 .transferQueueHeader {
@@ -2370,12 +2355,12 @@ textarea {
 .iconActionButton {
   width: 38px;
   height: 38px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  border: 1px solid var(--stroke);
   border-radius: 12px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.94);
+  background: var(--surface);
   color: var(--text-soft);
   cursor: pointer;
   transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
@@ -2383,13 +2368,13 @@ textarea {
 
 .iconActionButton:hover {
   transform: translateY(-1px);
-  background: rgba(241, 245, 249, 0.98);
-  border-color: rgba(59, 130, 246, 0.22);
+  background: var(--surface-hover);
+  border-color: var(--accent);
   color: var(--text);
 }
 
 .iconActionButton.danger {
-  color: #dc2626;
+  color: var(--danger);
 }
 
 .queueIconButton {
@@ -2574,8 +2559,8 @@ textarea {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: linear-gradient(180deg, #0f766e, #2563eb);
-  box-shadow: 0 0 0 5px rgba(37, 99, 235, 0.06);
+  background: var(--accent-bg);
+  box-shadow: none;
 }
 
 .chatRoomTitleBlock .fui-Subtitle1 {
@@ -2591,10 +2576,10 @@ textarea {
 }
 
 .chatSidebarCard {
-  border: 1px solid rgba(148, 163, 184, 0.14);
+  border: 1px solid var(--stroke);
   border-radius: 20px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 250, 253, 0.94));
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05);
+  background: var(--surface);
+  box-shadow: none;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -2665,10 +2650,10 @@ textarea {
 .chatDayDivider span {
   padding: 6px 12px;
   border-radius: 999px;
-  background: rgba(241, 245, 249, 0.92);
+  background: var(--surface);
   color: var(--text-faint);
   font-size: 0.78rem;
-  border: 1px solid rgba(148, 163, 184, 0.12);
+  border: 1px solid var(--stroke);
 }
 
 .chatEmptyState {
@@ -2739,13 +2724,13 @@ textarea {
   height: 42px;
   border-radius: 14px;
   overflow: hidden;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(241, 245, 249, 0.92));
+  border: 1px solid var(--stroke);
+  background: var(--surface);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  box-shadow: 0 14px 24px rgba(15, 23, 42, 0.08);
+  box-shadow: none;
 }
 
 .chatMessageAvatar img {
@@ -2761,11 +2746,11 @@ textarea {
   gap: 6px;
   padding: 8px 12px;
   border-radius: 18px 18px 18px 8px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
+  border: 1px solid var(--stroke);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(248, 250, 252, 0.95)),
     radial-gradient(circle at top right, rgba(37, 99, 235, 0.05), transparent 42%);
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.04);
+  box-shadow: none;
   position: relative;
 }
 
@@ -2773,7 +2758,7 @@ textarea {
   background:
     linear-gradient(180deg, rgba(236, 253, 245, 0.99), rgba(239, 246, 255, 0.94)),
     radial-gradient(circle at top left, rgba(16, 185, 129, 0.1), transparent 38%);
-  border-color: rgba(16, 185, 129, 0.16);
+  border-color: var(--success);
   border-radius: 18px 18px 8px 18px;
 }
 
@@ -2783,15 +2768,15 @@ textarea {
 }
 
 .chatMessageCard.selected {
-  border-color: rgba(37, 99, 235, 0.28);
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08), 0 10px 20px rgba(15, 23, 42, 0.05);
+  border-color: var(--accent);
+  box-shadow: none;
 }
 
 .chatMessageRow.bot .chatMessageCard {
   background:
     linear-gradient(180deg, rgba(255, 251, 235, 0.99), rgba(255, 247, 237, 0.95)),
     radial-gradient(circle at top right, rgba(245, 158, 11, 0.08), transparent 42%);
-  border-color: rgba(245, 158, 11, 0.18);
+  border-color: var(--danger);
 }
 
 .chatMessageCard.dynamic {
@@ -2807,9 +2792,9 @@ textarea {
   gap: 6px;
   padding: 4px;
   border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.08);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
+  box-shadow: none;
   opacity: 0;
   transform: translateY(-50%) scale(0.96);
   pointer-events: none;
@@ -2838,7 +2823,7 @@ textarea {
   padding: 0;
   border: 0;
   border-radius: 10px;
-  background: rgba(241, 245, 249, 0.94);
+  background: var(--surface);
   color: var(--text-soft);
   display: inline-flex;
   align-items: center;
@@ -2849,7 +2834,7 @@ textarea {
 }
 
 .chatMessageActionButton:hover {
-  background: rgba(219, 234, 254, 0.9);
+  background: var(--surface-hover);
   color: var(--text);
   transform: translateY(-1px);
 }
@@ -2865,7 +2850,7 @@ textarea {
 }
 
 .chatMessageActionButton.menu:hover {
-  background: rgba(241, 245, 249, 0.96);
+  background: var(--surface-hover);
   transform: none;
 }
 
@@ -2936,14 +2921,14 @@ textarea {
 .chatMarkdownBlock code {
   padding: 0.08rem 0.3rem;
   border-radius: 6px;
-  background: rgba(15, 23, 42, 0.08);
+  background: var(--accent-bg);
   font-size: 0.86em;
 }
 
 .chatMarkdownBlock pre {
   padding: 0.7rem 0.8rem;
   border-radius: 10px;
-  background: rgba(15, 23, 42, 0.08);
+  background: var(--accent-bg);
   overflow-x: auto;
 }
 
@@ -2954,12 +2939,12 @@ textarea {
 
 .chatMarkdownBlock blockquote {
   padding-left: 0.8rem;
-  border-left: 3px solid rgba(59, 130, 246, 0.28);
+  border-left: 3px solid var(--accent);
   color: var(--text-soft);
 }
 
 .chatMarkdownBlock a {
-  color: #1d4ed8;
+  color: var(--accent);
 }
 
 .chatDynamicMarkdown {
@@ -2973,8 +2958,8 @@ textarea {
   gap: 10px;
   padding: 10px 12px;
   border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
 }
 
 .chatDynamicCardCover {
@@ -2986,8 +2971,8 @@ textarea {
   align-self: center;
   object-fit: contain;
   border-radius: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.12);
-  background: rgba(241, 245, 249, 0.88);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
 }
 
 .chatDynamicCardCover.fit-contain {
@@ -3000,25 +2985,25 @@ textarea {
   padding: 12px;
   border-radius: 0;
   image-rendering: pixelated;
-  background: #ffffff;
+  background: var(--surface);
 }
 
 .chatDynamicCard.status-running,
 .chatDynamicCard.status-queued,
 .chatDynamicCard.status-info {
-  background: linear-gradient(180deg, rgba(239, 246, 255, 0.92), rgba(239, 246, 255, 0.72));
-  border-color: rgba(59, 130, 246, 0.18);
+  background: var(--surface);
+  border-color: var(--accent);
 }
 
 .chatDynamicCard.status-succeeded {
-  background: linear-gradient(180deg, rgba(236, 253, 245, 0.96), rgba(236, 253, 245, 0.72));
-  border-color: rgba(16, 185, 129, 0.2);
+  background: var(--surface);
+  border-color: var(--success);
 }
 
 .chatDynamicCard.status-failed,
 .chatDynamicCard.status-cancelled {
-  background: linear-gradient(180deg, rgba(254, 242, 242, 0.96), rgba(255, 247, 237, 0.78));
-  border-color: rgba(248, 113, 113, 0.18);
+  background: var(--surface);
+  border-color: var(--danger);
 }
 
 .chatDynamicCardHeader {
@@ -3044,7 +3029,7 @@ textarea {
 }
 
 .chatDynamicCardBadges .fui-Badge {
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+  box-shadow: none;
 }
 
 .chatModelChoiceSection {
@@ -3065,9 +3050,9 @@ textarea {
 }
 
 .chatModelChoiceGroup {
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  border: 1px solid var(--stroke);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.52);
+  background: var(--surface);
   overflow: hidden;
 }
 
@@ -3087,7 +3072,7 @@ textarea {
 }
 
 .chatModelChoiceGroupToggle:hover {
-  background: rgba(255, 255, 255, 0.32);
+  background: var(--surface-hover);
 }
 
 .chatModelChoiceGroupTitle {
@@ -3134,12 +3119,12 @@ textarea {
 }
 
 .chatModelChoiceGroupFlag {
-  background: rgba(59, 130, 246, 0.1);
-  color: #1d4ed8;
+  background: var(--accent-bg);
+  color: var(--accent);
 }
 
 .chatModelChoiceGroupCount {
-  background: rgba(15, 23, 42, 0.08);
+  background: var(--accent-bg);
   color: var(--text-soft);
 }
 
@@ -3154,8 +3139,8 @@ textarea {
 
 .chatModelChoiceButton {
   appearance: none;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
   color: var(--text);
   border-radius: 999px;
   padding: 4px 9px;
@@ -3168,34 +3153,34 @@ textarea {
 
 .chatModelChoiceButton:hover {
   transform: translateY(-1px);
-  background: rgba(239, 246, 255, 0.96);
-  border-color: rgba(59, 130, 246, 0.24);
+  background: var(--surface-hover);
+  border-color: var(--accent);
 }
 
 .chatModelChoiceButton.is-text-default {
-  background: rgba(220, 252, 231, 0.9);
-  border-color: rgba(22, 163, 74, 0.28);
+  background: var(--surface);
+  border-color: var(--success);
 }
 
 .chatModelChoiceButton.is-vision-default {
-  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.24);
+  box-shadow: none;
 }
 
 .chatModelChoiceButton.provider-copilot {
-  border-color: rgba(59, 130, 246, 0.26);
+  border-color: var(--accent);
 }
 
 .chatModelChoiceButton.provider-ark {
-  border-color: rgba(14, 165, 233, 0.28);
+  border-color: var(--accent);
 }
 
 .chatModelChoiceButton.provider-xunfei,
 .chatModelChoiceButton.provider-xfyun {
-  border-color: rgba(245, 158, 11, 0.3);
+  border-color: var(--danger);
 }
 
 .chatModelChoiceButton.provider-openai {
-  border-color: rgba(99, 102, 241, 0.26);
+  border-color: var(--accent);
 }
 
 .chatDynamicCardTitleBlock .fui-Text {
@@ -3231,13 +3216,13 @@ textarea {
   height: 10px;
   border-radius: 999px;
   overflow: hidden;
-  background: rgba(148, 163, 184, 0.16);
+  background: var(--surface);
 }
 
 .chatDynamicProgressValue {
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #0f766e, #2563eb);
+  background: var(--accent-bg);
 }
 
 .chatDynamicMediaStage {
@@ -3252,8 +3237,8 @@ textarea {
 
 .chatDynamicActionButton {
   appearance: none;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
   color: var(--text);
   border-radius: 999px;
   padding: 8px 12px;
@@ -3265,14 +3250,14 @@ textarea {
 
 .chatDynamicActionButton:hover {
   transform: translateY(-1px);
-  background: rgba(219, 234, 254, 0.92);
-  border-color: rgba(59, 130, 246, 0.24);
+  background: var(--surface-hover);
+  border-color: var(--accent);
 }
 
 /* ── AI 星图（宇宙贴近视角）──────────────────────────────────────── */
 .aiStarMapContainer {
   margin-top: 8px;
-  background: #020408;
+  background: var(--accent-bg);
   border-radius: 10px;
   overflow: hidden;
   will-change: transform;
@@ -3307,7 +3292,7 @@ textarea {
   position: absolute;
   font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
   font-size: 13px;
-  color: rgba(147, 197, 253, 0.22);
+  color: var(--accent);
   line-height: 1;
   -webkit-user-select: none;
   user-select: none;
@@ -3350,21 +3335,21 @@ textarea {
   gap: 5px;
 }
 @keyframes hudBlink {
-  0%, 100% { opacity: 1; box-shadow: 0 0 6px rgba(74,222,128,0.9); }
+  0%, 100% { opacity: 1; box-shadow: none; }
   50%       { opacity: 0.28; box-shadow: none; }
 }
 .hudTagDot {
   width: 5px; height: 5px;
   border-radius: 50%;
-  background: #4ade80;
-  box-shadow: 0 0 6px rgba(74,222,128,0.9);
+  background: var(--success-bg);
+  box-shadow: none;
   animation: hudBlink 1.9s ease-in-out infinite;
   flex-shrink: 0;
 }
 .hudTagText {
   font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
   font-size: 9px;
-  color: rgba(74, 222, 128, 0.65);
+  color: var(--success);
   letter-spacing: 2px;
 }
 
@@ -3382,7 +3367,7 @@ textarea {
 }
 .hudSignalBar {
   width: 3px;
-  background: rgba(147, 197, 253, 0.55);
+  background: var(--accent-bg);
   border-radius: 1px;
 }
 .hudSB1 { height: 4px; }
@@ -3396,7 +3381,7 @@ textarea {
   top: 50%; left: 50%;
   width: 14px; height: 14px;
   transform: translate(-50%, -50%);
-  border: 1px solid rgba(147, 197, 253, 0.14);
+  border: 1px solid var(--accent);
   border-radius: 50%;
   pointer-events: none;
 }
@@ -3405,7 +3390,7 @@ textarea {
   position: absolute;
   left: 50%; top: 50%;
   width: 1px; height: 8px;
-  background: rgba(147, 197, 253, 0.12);
+  background: var(--accent-bg);
   transform: translate(-50%, -50%);
 }
 .hudReticle::after {
@@ -3413,7 +3398,7 @@ textarea {
   position: absolute;
   left: 50%; top: 50%;
   width: 8px; height: 1px;
-  background: rgba(147, 197, 253, 0.12);
+  background: var(--accent-bg);
   transform: translate(-50%, -50%);
 }
 
@@ -3426,28 +3411,14 @@ textarea {
   position: absolute;
   right: 10px; top: 36px; bottom: 14px;
   width: 2px;
-  background: linear-gradient(
-    to bottom,
-    rgba(147,197,253,0)    0%,
-    rgba(147,197,253,0.20) 25%,
-    rgba(96,165,250,0.35)  50%,
-    rgba(147,197,253,0.20) 75%,
-    rgba(147,197,253,0)    100%
-  );
+  background: var(--accent-bg);
   animation: hudTelePulse 3.5s ease-in-out infinite;
 }
 .hudTelemetryBarL {
   position: absolute;
   left: 10px; top: 36px; bottom: 14px;
   width: 2px;
-  background: linear-gradient(
-    to bottom,
-    rgba(147,197,253,0)    0%,
-    rgba(147,197,253,0.15) 30%,
-    rgba(96,165,250,0.28)  55%,
-    rgba(147,197,253,0.15) 80%,
-    rgba(147,197,253,0)    100%
-  );
+  background: var(--accent-bg);
   animation: hudTelePulse 4.2s ease-in-out infinite 0.7s;
 }
 
@@ -3461,7 +3432,7 @@ textarea {
 .hudBottomLabel {
   font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
   font-size: 9px;
-  color: rgba(147, 197, 253, 0.28);
+  color: var(--accent);
   letter-spacing: 2.5px;
 }
 
@@ -3501,13 +3472,13 @@ textarea {
   justify-content: space-between;
   align-items: center;
   padding: 5px 12px;
-  background: rgba(3, 5, 8, 0.92);
-  border-top: 1px solid rgba(147, 197, 253, 0.08);
+  background: var(--accent-bg);
+  border-top: 1px solid var(--accent);
   position: relative;
   z-index: 3;
 }
 .cosmicStatusLabel {
-  color: #93c5fd;
+  color: var(--accent);
   font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
   font-size: 11px;
   font-weight: 500;
@@ -3515,15 +3486,15 @@ textarea {
   text-shadow: 0 0 8px rgba(96, 165, 250, 0.5);
 }
 .cosmicElapsed {
-  color: rgba(160, 185, 220, 0.45);
+  color: var(--accent);
   font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
   font-size: 10px;
   letter-spacing: 0.5px;
 }
 .cosmicDetailRow {
   padding: 3px 12px 5px;
-  background: rgba(3, 5, 8, 0.88);
-  color: rgba(147, 197, 253, 0.55);
+  background: var(--accent-bg);
+  color: var(--accent);
   font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
   font-size: 10px;
   letter-spacing: 0.4px;
@@ -3534,7 +3505,7 @@ textarea {
   z-index: 3;
 }
 .cosmicDetailHint {
-  color: rgba(147, 197, 253, 0.35);
+  color: var(--accent);
   font-size: 9px;
   padding-top: 0;
 }
@@ -3562,8 +3533,8 @@ textarea {
   min-height: 136px;
   border-radius: 14px;
   overflow: hidden;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: linear-gradient(180deg, rgba(241, 245, 249, 0.92), rgba(226, 232, 240, 0.82));
+  border: 1px solid var(--stroke);
+  background: var(--surface);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3606,7 +3577,7 @@ button.chatAttachmentTile:disabled {
 }
 
 .chatAttachmentTile.video {
-  background: #020617;
+  background: var(--accent-bg);
 }
 
 .chatAttachmentTile.deferred::after {
@@ -3634,8 +3605,8 @@ button.chatAttachmentTile:disabled {
   z-index: 1;
   padding: 6px 10px;
   border-radius: 999px;
-  background: rgba(15, 23, 42, 0.78);
-  color: rgba(255, 255, 255, 0.96);
+  background: var(--accent-bg);
+  color: var(--text-soft);
   font-size: 0.76rem;
   font-weight: 700;
   text-align: center;
@@ -3705,15 +3676,15 @@ button.chatAttachmentTile:disabled {
 }
 
 .chatInlineVideoFooter .fui-Caption1 {
-  color: rgba(226, 232, 240, 0.84);
+  color: var(--text-soft);
 }
 
 .chatInlineVideoAction {
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  border: 1px solid var(--stroke);
   border-radius: 999px;
   padding: 5px 10px;
-  background: rgba(255, 255, 255, 0.1);
-  color: #f8fafc;
+  background: var(--surface);
+  color: var(--text);
   font-size: 0.75rem;
   font-weight: 700;
   cursor: pointer;
@@ -3728,7 +3699,7 @@ button.chatAttachmentTile:disabled {
 .chatInlineVideoTile video {
   max-height: none;
   object-fit: contain;
-  background: #020617;
+  background: var(--accent-bg);
 }
 
 .chatQueuedInlineVideo .chatInlineVideoTile {
@@ -3803,7 +3774,7 @@ button.chatAttachmentTile:disabled {
 }
 
 .chatComposerBotButton.active {
-  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
+  box-shadow: none;
 }
 
 .chatComposerBotButtonLabel {
@@ -3818,8 +3789,8 @@ button.chatAttachmentTile:disabled {
   height: 20px;
   padding: 0 6px;
   border-radius: 999px;
-  background: rgba(59, 130, 246, 0.1);
-  color: #1d4ed8;
+  background: var(--accent-bg);
+  color: var(--accent);
   font-size: 11px;
   font-weight: 800;
 }
@@ -3830,9 +3801,9 @@ button.chatAttachmentTile:disabled {
   gap: 6px;
   height: 32px;
   padding: 0 10px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
+  border: 1px solid var(--stroke);
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--surface);
   color: var(--text-soft);
   font-size: 12px;
   font-weight: 700;
@@ -3847,14 +3818,14 @@ button.chatAttachmentTile:disabled {
   height: 18px;
   padding: 0 5px;
   border-radius: 999px;
-  background: rgba(59, 130, 246, 0.12);
-  color: #1d4ed8;
+  background: var(--accent-bg);
+  color: var(--accent);
   font-size: 11px;
 }
 
 .chatBotTooltipTrigger.active {
-  border-color: rgba(59, 130, 246, 0.3);
-  background: rgba(239, 246, 255, 0.96);
+  border-color: var(--accent);
+  background: var(--surface-hover);
 }
 
 .chatBotTooltipTrigger:disabled {
@@ -3870,11 +3841,11 @@ button.chatAttachmentTile:disabled {
   gap: 12px;
   padding: 14px;
   border-radius: 20px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  border: 1px solid var(--stroke);
   background:
     radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 32%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.965), rgba(244, 248, 252, 0.95));
-  box-shadow: 0 20px 42px rgba(15, 23, 42, 0.13);
+  box-shadow: var(--shadow-md);
   -webkit-backdrop-filter: blur(16px);
   backdrop-filter: blur(16px);
   overflow-y: auto;
@@ -3900,7 +3871,7 @@ button.chatAttachmentTile:disabled {
   right: 0;
   bottom: 0;
   height: 1px;
-  background: linear-gradient(90deg, rgba(148, 163, 184, 0), rgba(148, 163, 184, 0.32), rgba(148, 163, 184, 0));
+  background: var(--surface);
 }
 
 .chatBotTooltipHeaderMain {
@@ -3942,10 +3913,10 @@ button.chatAttachmentTile:disabled {
   gap: 12px;
   padding: 14px;
   border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
+  border: 1px solid var(--stroke);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.985), rgba(248, 250, 252, 0.92));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.62), 0 10px 20px rgba(15, 23, 42, 0.05);
+    var(--surface);
+  box-shadow: none;
 }
 
 .chatBotTooltipCardHeader .fui-Text {
@@ -3966,12 +3937,12 @@ button.chatAttachmentTile:disabled {
   min-width: 54px;
   padding: 6px 11px;
   border-radius: 999px;
-  background: linear-gradient(135deg, rgba(15, 23, 42, 0.96), rgba(30, 41, 59, 0.92));
-  color: #f8fafc;
+  background: var(--accent-bg);
+  color: var(--text);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: -0.02em;
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.14);
+  box-shadow: none;
 }
 
 .chatBotTooltipCardTitleBlock {
@@ -4016,7 +3987,7 @@ button.chatAttachmentTile:disabled {
   align-items: center;
   padding: 4px 9px;
   border-radius: 999px;
-  background: rgba(226, 232, 240, 0.66);
+  background: var(--surface);
   color: var(--text-soft);
   font-size: 11px;
   font-weight: 700;
@@ -4035,11 +4006,11 @@ button.chatAttachmentTile:disabled {
 }
 
 .chatBotExampleChip {
-  border: 1px solid rgba(37, 99, 235, 0.14);
+  border: 1px solid var(--accent);
   border-radius: 999px;
   padding: 7px 12px;
-  background: linear-gradient(180deg, rgba(239, 246, 255, 0.92), rgba(255, 255, 255, 0.96));
-  color: #1d4ed8;
+  background: var(--surface);
+  color: var(--accent);
   font-size: 11px;
   font-weight: 700;
   justify-content: flex-start;
@@ -4048,10 +4019,10 @@ button.chatAttachmentTile:disabled {
 }
 
 .chatBotExampleChip:hover:not(:disabled) {
-  border-color: rgba(37, 99, 235, 0.24);
-  background: linear-gradient(180deg, rgba(219, 234, 254, 0.96), rgba(239, 246, 255, 0.98));
+  border-color: var(--accent);
+  background: var(--surface-hover);
   transform: translateY(-1px);
-  box-shadow: 0 10px 18px rgba(37, 99, 235, 0.12);
+  box-shadow: none;
 }
 
 .chatBotExampleChip:disabled {
@@ -4079,11 +4050,11 @@ button.chatAttachmentTile:disabled {
   gap: 8px;
   padding: 10px;
   border-radius: 20px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  border: 1px solid var(--stroke);
   background:
     radial-gradient(circle at top right, rgba(37, 99, 235, 0.1), transparent 36%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.985), rgba(244, 248, 252, 0.97));
-  box-shadow: 0 22px 44px rgba(15, 23, 42, 0.14);
+  box-shadow: var(--shadow-md);
   -webkit-backdrop-filter: blur(18px);
   backdrop-filter: blur(18px);
   overflow-y: auto;
@@ -4113,9 +4084,9 @@ button.chatAttachmentTile:disabled {
   align-items: flex-start;
   gap: 8px;
   padding: 10px 12px;
-  border: 1px solid rgba(148, 163, 184, 0.08);
+  border: 1px solid var(--stroke);
   border-radius: 14px;
-  background: rgba(248, 250, 252, 0.72);
+  background: var(--surface);
   color: var(--text);
   text-align: left;
   cursor: pointer;
@@ -4124,10 +4095,10 @@ button.chatAttachmentTile:disabled {
 
 .chatBotMentionOption:hover,
 .chatBotMentionOption.active {
-  border-color: rgba(37, 99, 235, 0.24);
-  background: linear-gradient(180deg, rgba(239, 246, 255, 0.96), rgba(248, 250, 252, 0.92));
+  border-color: var(--accent);
+  background: var(--surface-hover);
   transform: none;
-  box-shadow: 0 10px 18px rgba(37, 99, 235, 0.1);
+  box-shadow: none;
 }
 
 .chatBotMentionMeta {
@@ -4198,10 +4169,10 @@ button.chatAttachmentTile:disabled {
 
 .chatComposerInputWrap {
   position: relative;
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  border: 1px solid var(--stroke);
   border-radius: 18px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(248, 250, 252, 0.96));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  background: var(--surface);
+  box-shadow: none;
   overflow: visible;
 }
 
@@ -4212,8 +4183,8 @@ button.chatAttachmentTile:disabled {
   gap: 10px;
   padding: 10px;
   border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(255, 255, 255, 0.98));
+  border: 1px solid var(--stroke);
+  background: var(--surface);
 }
 
 .chatEmojiPopup {
@@ -4222,7 +4193,7 @@ button.chatAttachmentTile:disabled {
   width: min(388px, calc(100vw - 48px));
   max-width: calc(100vw - 24px);
   overflow-y: auto;
-  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.14);
+  box-shadow: var(--shadow-md);
 }
 
 .chatEmojiSection {
@@ -4258,9 +4229,9 @@ button.chatAttachmentTile:disabled {
 .chatEmojiCategoryTab {
   height: 28px;
   padding: 0 10px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  border: 1px solid var(--stroke);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.96);
+  background: var(--surface);
   color: var(--text-soft);
   font-size: 0.8rem;
   font-weight: 700;
@@ -4268,8 +4239,8 @@ button.chatAttachmentTile:disabled {
 }
 
 .chatEmojiCategoryTab.active {
-  border-color: rgba(37, 99, 235, 0.24);
-  background: rgba(239, 246, 255, 0.98);
+  border-color: var(--accent);
+  background: var(--surface-hover);
   color: var(--accent);
 }
 
@@ -4294,8 +4265,8 @@ button.chatAttachmentTile:disabled {
   width: 100%;
   aspect-ratio: 1;
   border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
   cursor: pointer;
   transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
@@ -4314,8 +4285,8 @@ button.chatAttachmentTile:disabled {
 .chatEmojiButton:hover,
 .chatCustomEmojiButton:hover {
   transform: translateY(-1px);
-  border-color: rgba(37, 99, 235, 0.22);
-  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.08);
+  border-color: var(--accent);
+  box-shadow: none;
 }
 
 .chatCustomEmojiCard {
@@ -4355,8 +4326,8 @@ button.chatAttachmentTile:disabled {
   height: 20px;
   border: 0;
   border-radius: 999px;
-  background: rgba(15, 23, 42, 0.74);
-  color: #fff;
+  background: var(--accent-bg);
+  color: var(--text);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4366,7 +4337,7 @@ button.chatAttachmentTile:disabled {
 .chatEmojiEmptyState {
   padding: 10px 12px;
   border-radius: 14px;
-  background: rgba(241, 245, 249, 0.88);
+  background: var(--surface);
   color: var(--text-soft);
 }
 
@@ -4379,9 +4350,9 @@ button.chatAttachmentTile:disabled {
   width: min(380px, calc(100vw - 48px));
   max-width: calc(100vw - 24px);
   border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(255, 255, 255, 0.98));
-  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.14);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
   overflow: hidden;
 }
 
@@ -4393,9 +4364,9 @@ button.chatAttachmentTile:disabled {
   width: 100%;
   box-sizing: border-box;
   padding: 8px 12px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
+  border: 1px solid var(--stroke);
   border-radius: 10px;
-  background: rgba(241, 245, 249, 0.7);
+  background: var(--surface);
   font: inherit;
   font-size: 13px;
   outline: none;
@@ -4433,7 +4404,7 @@ button.chatAttachmentTile:disabled {
 }
 
 .chatFilePickerItem:hover {
-  background: rgba(241, 245, 249, 0.88);
+  background: var(--surface-hover);
 }
 
 .chatFilePickerItemIcon {
@@ -4444,7 +4415,7 @@ button.chatAttachmentTile:disabled {
   align-items: center;
   justify-content: center;
   border-radius: 8px;
-  background: rgba(148, 163, 184, 0.1);
+  background: var(--surface);
   color: var(--text-soft);
   font-size: 16px;
 }
@@ -4463,7 +4434,7 @@ button.chatAttachmentTile:disabled {
   height: 32px;
   object-fit: cover;
   border-radius: 6px;
-  background: rgba(148, 163, 184, 0.1);
+  background: var(--surface);
 }
 
 .chatFilePickerItemName {
@@ -4491,7 +4462,7 @@ button.chatAttachmentTile:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, rgba(241, 245, 249, 0.92), rgba(226, 232, 240, 0.72));
+  background: var(--surface);
 }
 
 .chatQueuedRefIcon {
@@ -4504,7 +4475,7 @@ button.chatAttachmentTile:disabled {
 
 .chatQueuedStatusPill.ready {
   color: var(--brand);
-  background: rgba(15, 118, 110, 0.1);
+  background: var(--accent-bg);
 }
 
 .chatDropOverlay {
@@ -4512,8 +4483,8 @@ button.chatAttachmentTile:disabled {
   inset: 10px;
   z-index: 2;
   border-radius: 24px;
-  border: 2px dashed rgba(37, 99, 235, 0.4);
-  background: rgba(239, 246, 255, 0.92);
+  border: 2px dashed var(--accent);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4542,17 +4513,17 @@ button.chatAttachmentTile:disabled {
 }
 
 .chatComposerInputWrap:focus-within {
-  border-color: rgba(37, 99, 235, 0.32);
-  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
+  border-color: var(--accent);
+  box-shadow: none;
 }
 
 .chatComposerQueueDock {
-  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  border-top: 1px solid var(--stroke);
   padding: 8px 10px 10px;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  background: rgba(248, 250, 252, 0.72);
+  background: var(--surface);
   border-radius: 0 0 18px 18px;
 }
 
@@ -4585,9 +4556,9 @@ button.chatAttachmentTile:disabled {
   width: min(220px, calc(100vw - 24px));
   padding: 8px;
   border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 22px 40px rgba(15, 23, 42, 0.16);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
 }
 
 .chatLightboxOverlay {
@@ -4603,7 +4574,7 @@ button.chatAttachmentTile:disabled {
   overflow: hidden;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  background: rgba(248, 250, 252, 0.98);
+  background: var(--surface);
 }
 
 .chatLightboxTopBar,
@@ -4613,12 +4584,12 @@ button.chatAttachmentTile:disabled {
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  border-bottom: 1px solid var(--stroke);
 }
 
 .chatLightboxFooter {
   border-bottom: 0;
-  border-top: 1px solid rgba(148, 163, 184, 0.14);
+  border-top: 1px solid var(--stroke);
 }
 
 .chatLightboxActions {
@@ -4648,7 +4619,7 @@ button.chatAttachmentTile:disabled {
   justify-content: center;
   padding: 12px;
   border-radius: 24px;
-  background: rgba(15, 23, 42, 0.92);
+  background: var(--accent-bg);
   overflow: hidden;
 }
 
@@ -4663,8 +4634,8 @@ button.chatAttachmentTile:disabled {
   gap: 10px;
   padding: 10px 14px 0;
   overflow-x: auto;
-  border-top: 1px solid rgba(148, 163, 184, 0.12);
-  background: rgba(248, 250, 252, 0.72);
+  border-top: 1px solid var(--stroke);
+  background: var(--surface);
 }
 
 .chatLightboxThumb {
@@ -4675,13 +4646,13 @@ button.chatAttachmentTile:disabled {
   border-radius: 12px;
   overflow: hidden;
   border: 2px solid transparent;
-  background: rgba(226, 232, 240, 0.9);
+  background: var(--surface);
   cursor: pointer;
 }
 
 .chatLightboxThumb.active {
-  border-color: rgba(37, 99, 235, 0.7);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  border-color: var(--accent);
+  box-shadow: none;
 }
 
 .chatLightboxThumb img {
@@ -4693,9 +4664,9 @@ button.chatAttachmentTile:disabled {
 .chatLightboxNav {
   width: 88px;
   height: 48px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  border: 1px solid var(--stroke);
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--surface);
   color: var(--text);
   cursor: pointer;
 }
@@ -4737,7 +4708,7 @@ button.chatAttachmentTile:disabled {
 }
 
 .chatLightboxLoading {
-  color: rgba(255, 255, 255, 0.88);
+  color: var(--text);
   font-weight: 700;
 }
 
@@ -4835,9 +4806,9 @@ button.chatAttachmentTile:disabled {
   min-height: 180px;
   max-height: min(68vh, 720px);
   overflow: auto;
-  border: 1px solid rgba(148, 163, 184, 0.22);
+  border: 1px solid var(--stroke);
   border-radius: 18px;
-  background: linear-gradient(180deg, rgba(241, 245, 249, 0.86), rgba(255, 255, 255, 0.98));
+  background: var(--surface);
   padding: 14px;
 }
 
@@ -4865,7 +4836,7 @@ button.chatAttachmentTile:disabled {
   font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
   font-size: 12px;
   line-height: 1.6;
-  color: #0f172a;
+  color: var(--accent);
 }
 
 .chatBotLogMiniPre {
@@ -4874,14 +4845,14 @@ button.chatAttachmentTile:disabled {
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  border: 1px solid var(--stroke);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.76);
+  background: var(--surface);
   padding: 10px 12px;
   font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
   font-size: 12px;
   line-height: 1.55;
-  color: #0f172a;
+  color: var(--accent);
 }
 
 .chatBotChildJobList {
@@ -4892,9 +4863,9 @@ button.chatAttachmentTile:disabled {
 
 
 .chatBotConfirmationPanel {
-  border: 1px solid rgba(245, 158, 11, 0.24);
+  border: 1px solid var(--danger);
   border-radius: 12px;
-  background: rgba(255, 251, 235, 0.72);
+  background: var(--surface);
   padding: 10px;
 }
 
@@ -4929,27 +4900,27 @@ button.chatAttachmentTile:disabled {
   flex-direction: column;
   gap: 4px;
   min-width: 0;
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  border: 1px solid var(--stroke);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--surface);
   padding: 9px 10px;
 }
 
 .chatBotChildJob.status-running,
 .chatBotChildJob.status-queued {
-  border-color: rgba(59, 130, 246, 0.22);
-  background: rgba(239, 246, 255, 0.76);
+  border-color: var(--accent);
+  background: var(--surface);
 }
 
 .chatBotChildJob.status-succeeded {
-  border-color: rgba(16, 185, 129, 0.22);
-  background: rgba(236, 253, 245, 0.76);
+  border-color: var(--success);
+  background: var(--surface);
 }
 
 .chatBotChildJob.status-failed,
 .chatBotChildJob.status-cancelled {
-  border-color: rgba(248, 113, 113, 0.22);
-  background: rgba(254, 242, 242, 0.82);
+  border-color: var(--danger);
+  background: var(--surface);
 }
 
 .chatBotChildJobMain {
@@ -4977,7 +4948,7 @@ button.chatAttachmentTile:disabled {
 }
 
 .chatBotChildJobError {
-  color: #b91c1c;
+  color: var(--danger);
 }
 
 .chatSaveField {
@@ -4989,17 +4960,17 @@ button.chatAttachmentTile:disabled {
 .chatSaveInput {
   width: 100%;
   min-height: 40px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid var(--stroke);
   border-radius: 12px;
   padding: 0 12px;
-  background: rgba(248, 250, 252, 0.98);
+  background: var(--surface);
   color: var(--text);
 }
 
 .chatSaveInput:focus {
   outline: none;
-  border-color: rgba(37, 99, 235, 0.32);
-  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
+  border-color: var(--accent);
+  box-shadow: none;
 }
 
 .chatQueuedCard {
@@ -5009,23 +4980,23 @@ button.chatAttachmentTile:disabled {
   gap: 8px;
   padding: 10px;
   border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(248, 250, 252, 0.94);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
 }
 
 .chatQueuedCard.uploading {
-  border-color: rgba(37, 99, 235, 0.22);
-  background: rgba(239, 246, 255, 0.78);
+  border-color: var(--accent);
+  background: var(--surface);
 }
 
 .chatQueuedCard.uploaded {
-  border-color: rgba(16, 185, 129, 0.18);
-  background: rgba(236, 253, 245, 0.74);
+  border-color: var(--success);
+  background: var(--surface);
 }
 
 .chatQueuedCard.failed {
-  border-color: rgba(248, 113, 113, 0.24);
-  background: rgba(254, 242, 242, 0.9);
+  border-color: var(--danger);
+  background: var(--surface);
 }
 
 .chatQueuedVisual {
@@ -5035,7 +5006,7 @@ button.chatAttachmentTile:disabled {
   min-height: 100px;
   border-radius: 14px;
   overflow: hidden;
-  background: rgba(226, 232, 240, 0.8);
+  background: var(--surface);
 }
 
 .chatQueuedVisual img,
@@ -5074,8 +5045,8 @@ button.chatAttachmentTile:disabled {
   bottom: 10px;
   padding: 5px 10px;
   border-radius: 999px;
-  background: rgba(15, 23, 42, 0.72);
-  color: #fff;
+  background: var(--accent-bg);
+  color: var(--text);
   font-size: 0.78rem;
   font-weight: 700;
   -webkit-backdrop-filter: blur(8px);
@@ -5083,15 +5054,15 @@ button.chatAttachmentTile:disabled {
 }
 
 .chatQueuedStatusPill.uploading {
-  background: rgba(37, 99, 235, 0.84);
+  background: var(--accent-bg);
 }
 
 .chatQueuedStatusPill.uploaded {
-  background: rgba(5, 150, 105, 0.84);
+  background: var(--success-bg);
 }
 
 .chatQueuedStatusPill.failed {
-  background: rgba(220, 38, 38, 0.84);
+  background: var(--danger-bg);
 }
 
 .chatQueuedRemove {
@@ -5100,9 +5071,9 @@ button.chatAttachmentTile:disabled {
   right: 10px;
   width: 32px;
   height: 32px;
-  background: rgba(15, 23, 42, 0.7);
-  border-color: rgba(255, 255, 255, 0.24);
-  color: #fff;
+  background: var(--accent-bg);
+  border-color: var(--stroke);
+  color: var(--text);
 }
 
 .chatQueuedMeta {
@@ -5139,7 +5110,7 @@ button.chatAttachmentTile:disabled {
 .chatQueuedProgressTrack {
   height: 6px;
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.16);
+  background: var(--surface);
   overflow: hidden;
   grid-column: 2;
 }
@@ -5149,32 +5120,32 @@ button.chatAttachmentTile:disabled {
   height: 100%;
   width: 0;
   border-radius: inherit;
-  background: rgba(148, 163, 184, 0.36);
+  background: var(--surface);
   transition: width 0.18s ease;
 }
 
 .chatQueuedProgressBar.uploading {
-  background: linear-gradient(90deg, #0ea5e9, #2563eb);
+  background: var(--accent-bg);
 }
 
 .chatQueuedProgressBar.uploaded {
-  background: linear-gradient(90deg, #10b981, #059669);
+  background: var(--success-bg);
 }
 
 .chatQueuedProgressBar.failed {
-  background: linear-gradient(90deg, #f87171, #dc2626);
+  background: var(--danger-bg);
 }
 
 .chatQueuedErrorText {
-  color: #b91c1c;
+  color: var(--danger);
   grid-column: 2;
 }
 
 .chatQueuedEmptyState {
   min-height: 220px;
   border-radius: 18px;
-  border: 1px dashed rgba(148, 163, 184, 0.22);
-  background: linear-gradient(180deg, rgba(248, 250, 252, 0.92), rgba(255, 255, 255, 0.96));
+  border: 1px dashed var(--stroke);
+  background: var(--surface);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -5191,7 +5162,7 @@ button.chatAttachmentTile:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(239, 246, 255, 0.92);
+  background: var(--surface);
   color: var(--accent);
 }
 
@@ -5211,10 +5182,10 @@ button.chatAttachmentTile:disabled {
 .chatComposerError {
   padding: 12px 14px;
   border-radius: 16px;
-  color: #b91c1c;
-  background: rgba(254, 242, 242, 0.96);
-  border: 1px solid rgba(248, 113, 113, 0.22);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  color: var(--danger);
+  background: var(--surface);
+  border: 1px solid var(--danger);
+  box-shadow: none;
 }
 
 @media (max-width: 1320px) {
@@ -5381,12 +5352,12 @@ button.chatAttachmentTile:disabled {
   flex-wrap: wrap;
   padding: 10px 14px;
   margin: 0 18px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
+  border: 1px solid var(--stroke);
   border-radius: 20px;
   background:
     linear-gradient(180deg, rgba(249, 251, 255, 0.96), rgba(255, 255, 255, 0.98)),
     radial-gradient(circle at top right, rgba(59, 130, 246, 0.08), transparent 34%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), 0 14px 30px rgba(15, 23, 42, 0.04);
+  box-shadow: none;
 }
 
 .explorerBreadcrumbs,
@@ -5409,7 +5380,7 @@ button.chatAttachmentTile:disabled {
 
 .explorerCrumbIcon {
   font-size: 14px;
-  color: rgba(100, 116, 139, 0.72);
+  color: var(--accent);
 }
 
 .explorerCrumbButton {
@@ -5425,14 +5396,14 @@ button.chatAttachmentTile:disabled {
 }
 
 .explorerCrumbButton:hover {
-  background: rgba(226, 232, 240, 0.7);
+  background: var(--surface-hover);
   color: var(--text);
 }
 
 .explorerCrumbButton.current {
-  background: linear-gradient(180deg, rgba(219, 234, 254, 0.96), rgba(239, 246, 255, 0.98));
-  color: #1d4ed8;
-  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.12);
+  background: var(--surface-hover);
+  color: var(--accent);
+  box-shadow: none;
 }
 
 .toolbarControlGroup {
@@ -5444,20 +5415,20 @@ button.chatAttachmentTile:disabled {
 }
 
 .actionChipPrimary {
-  background: linear-gradient(180deg, #1d4ed8, #2563eb);
-  color: #fff;
-  border-color: rgba(37, 99, 235, 0.24);
-  box-shadow: 0 10px 18px rgba(37, 99, 235, 0.2);
+  background: var(--accent-bg);
+  color: var(--text);
+  border-color: var(--accent);
+  box-shadow: none;
 }
 
 .actionChipPrimary:hover {
-  background: linear-gradient(180deg, #1e40af, #1d4ed8);
-  color: #fff;
+  background: var(--accent-bg);
+  color: var(--text);
 }
 
 .explorerToolbarButton.active {
-  background: rgba(239, 246, 255, 0.98);
-  border-color: rgba(59, 130, 246, 0.24);
+  background: var(--surface-hover);
+  border-color: var(--accent);
   color: var(--accent);
 }
 
@@ -5472,8 +5443,8 @@ button.chatAttachmentTile:disabled {
   min-width: 112px;
   padding: 12px 14px;
   border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: linear-gradient(180deg, rgba(249, 251, 255, 0.98), rgba(255, 255, 255, 0.96));
+  border: 1px solid var(--stroke);
+  background: var(--surface);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -5485,10 +5456,10 @@ button.chatAttachmentTile:disabled {
 
 .filterPanelShell {
   position: relative;
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  border: 1px solid var(--stroke);
   border-radius: 22px;
-  background: linear-gradient(180deg, rgba(250, 252, 255, 0.96), rgba(255, 255, 255, 0.99));
-  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.05);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
   overflow: visible;
   padding-top: 2px;
   padding-bottom: 2px;
@@ -5507,8 +5478,8 @@ button.chatAttachmentTile:disabled {
 }
 
 .filterToggleButton.active {
-  background: rgba(239, 246, 255, 0.98);
-  border-color: rgba(59, 130, 246, 0.24);
+  background: var(--surface-hover);
+  border-color: var(--accent);
   color: var(--accent);
 }
 
@@ -5520,14 +5491,14 @@ button.chatAttachmentTile:disabled {
   height: 18px;
   padding: 0 5px;
   border-radius: 999px;
-  background: linear-gradient(180deg, #2563eb, #1d4ed8);
-  color: #fff;
+  background: var(--accent-bg);
+  color: var(--text);
   font-size: 11px;
   font-weight: 800;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 10px 18px rgba(37, 99, 235, 0.22);
+  box-shadow: none;
 }
 
 .filterWorkbench {
@@ -5581,9 +5552,9 @@ button.chatAttachmentTile:disabled {
 .filterControl {
   padding: 10px 12px 12px;
   border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 250, 252, 0.94));
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
+  box-shadow: none;
   overflow: visible;
   min-height: 0;
 }
@@ -5606,9 +5577,9 @@ button.chatAttachmentTile:disabled {
   min-width: 0;
   min-height: 44px;
   border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(248, 250, 252, 0.92);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
+  box-shadow: none;
   box-sizing: border-box;
   overflow: hidden;
 }
@@ -5623,9 +5594,9 @@ button.chatAttachmentTile:disabled {
 
 .filterControl .fui-Input:focus-within,
 .filterControl .fui-Dropdown:focus-within {
-  border-color: rgba(37, 99, 235, 0.3);
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  border-color: var(--accent);
+  background: var(--surface);
+  box-shadow: none;
 }
 
 .filterControl .fui-Input::after,
@@ -5688,7 +5659,7 @@ button.chatAttachmentTile:disabled {
   padding: 0 6px;
   border-radius: 999px;
   background: var(--accent, #0ea5e9);
-  color: #fff;
+  color: var(--text);
   font-size: 12px;
   font-weight: 700;
   line-height: 1;
@@ -5707,8 +5678,8 @@ button.chatAttachmentTile:disabled {
   height: 28px;
   padding: 0 11px;
   border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(248, 250, 252, 0.95);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
   color: var(--text-soft, #475569);
   font-size: 12.5px;
   font-weight: 500;
@@ -5718,20 +5689,20 @@ button.chatAttachmentTile:disabled {
 }
 
 .bulkActionPill:hover {
-  background: rgba(226, 232, 240, 0.95);
-  border-color: rgba(148, 163, 184, 0.38);
+  background: var(--surface-hover);
+  border-color: var(--stroke);
   color: var(--text, #0f172a);
 }
 
 .bulkActionPill.danger {
-  background: rgba(254, 242, 242, 0.95);
-  border-color: rgba(220, 38, 38, 0.22);
-  color: #dc2626;
+  background: var(--surface);
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 .bulkActionPill.danger:hover {
-  background: rgba(254, 226, 226, 0.98);
-  border-color: rgba(220, 38, 38, 0.4);
+  background: var(--surface-hover);
+  border-color: var(--danger);
 }
 
 /* ─── Tag Filter Bar (always-visible category pills) ─────────── */
@@ -5753,9 +5724,9 @@ button.chatAttachmentTile:disabled {
 .tagFilterInput {
   width: 130px;
   padding: 5px 28px 5px 10px;
-  border: 1px solid rgba(148, 163, 184, 0.28);
+  border: 1px solid var(--stroke);
   border-radius: 999px;
-  background: rgba(248, 250, 252, 0.95);
+  background: var(--surface);
   color: var(--text, #0f172a);
   font-size: 12.5px;
   line-height: 1.5;
@@ -5765,7 +5736,7 @@ button.chatAttachmentTile:disabled {
 
 .tagFilterInput:focus {
   border-color: var(--accent, #0ea5e9);
-  box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.15);
+  box-shadow: none;
 }
 
 .tagFilterInput::placeholder {
@@ -5808,7 +5779,7 @@ button.chatAttachmentTile:disabled {
 }
 
 .tagFilterPills::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.35);
+  background: var(--surface);
   border-radius: 2px;
 }
 
@@ -5825,8 +5796,8 @@ button.chatAttachmentTile:disabled {
   font-size: 12.5px;
   font-weight: 500;
   cursor: pointer;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(248, 250, 252, 0.95);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
   color: var(--text-soft, #475569);
   transition: background 0.12s, border-color 0.12s, color 0.12s;
   white-space: nowrap;
@@ -5834,15 +5805,15 @@ button.chatAttachmentTile:disabled {
 }
 
 .tagFilterBarPill:hover {
-  background: rgba(226, 232, 240, 0.95);
-  border-color: rgba(148, 163, 184, 0.38);
+  background: var(--surface-hover);
+  border-color: var(--stroke);
   color: var(--text, #0f172a);
 }
 
 .tagFilterBarPill.active {
   background: var(--accent, #0ea5e9);
   border-color: var(--accent, #0ea5e9);
-  color: #fff;
+  color: var(--text);
   font-weight: 600;
 }
 
@@ -5880,15 +5851,15 @@ button.chatAttachmentTile:disabled {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.995), rgba(246, 250, 252, 0.96)),
     radial-gradient(circle at top right, rgba(14, 165, 233, 0.06), transparent 36%);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.06);
+  border: 1px solid var(--stroke);
+  box-shadow: none;
   transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 }
 
 .fileRow:hover {
   transform: translateY(-1px);
-  border-color: rgba(59, 130, 246, 0.24);
-  box-shadow: 0 18px 34px rgba(15, 23, 42, 0.09);
+  border-color: var(--accent);
+  box-shadow: none;
 }
 
 .folderRow,
@@ -5901,18 +5872,18 @@ button.chatAttachmentTile:disabled {
 
 .folderThumbButton,
 .folderGridThumb {
-  background: linear-gradient(135deg, rgba(255, 247, 237, 0.96), rgba(254, 243, 199, 0.96));
-  border-color: rgba(245, 158, 11, 0.2);
+  background: var(--surface);
+  border-color: var(--danger);
 }
 
 .folderThumbFallback {
-  color: #9a6700;
-  background: linear-gradient(135deg, rgba(255, 247, 237, 0.98), rgba(254, 240, 138, 0.96));
+  color: var(--danger);
+  background: var(--surface);
 }
 
 .folderCoverIcon {
   font-size: 34px;
-  color: #b45309;
+  color: var(--danger);
 }
 
 .folderCoverIconLarge {
@@ -5921,13 +5892,13 @@ button.chatAttachmentTile:disabled {
 
 .uploadRow {
   border-style: dashed;
-  background: rgba(248, 250, 252, 0.96);
+  background: var(--surface);
 }
 
 .thumbButton,
 .gridThumb {
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(241, 245, 249, 0.92);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
   border-radius: 18px;
   cursor: pointer;
   padding: 0;
@@ -5957,7 +5928,7 @@ button.chatAttachmentTile:disabled {
   align-items: center;
   justify-content: center;
   color: var(--text-faint);
-  background: linear-gradient(135deg, rgba(226, 232, 240, 0.9), rgba(241, 245, 249, 0.96));
+  background: var(--surface);
   font-size: 13px;
   font-weight: 700;
 }
@@ -6102,9 +6073,9 @@ button.chatAttachmentTile:disabled {
   gap: 5px;
   padding: 5px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.96);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.1);
+  background: var(--surface);
+  border: 1px solid var(--stroke);
+  box-shadow: none;
 }
 
 .actionChip {
@@ -6115,7 +6086,7 @@ button.chatAttachmentTile:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(241, 245, 249, 0.95);
+  background: var(--surface);
   color: var(--text-soft);
   cursor: pointer;
   transition: transform 0.15s ease, background 0.15s ease, color 0.15s ease;
@@ -6124,17 +6095,17 @@ button.chatAttachmentTile:disabled {
 
 .actionChip:hover {
   transform: translateY(-1px);
-  background: rgba(226, 232, 240, 0.95);
+  background: var(--surface-hover);
   color: var(--text);
 }
 
 .actionChip.active {
-  background: rgba(37, 99, 235, 0.12);
+  background: var(--accent-bg);
   color: var(--accent);
 }
 
 .actionChip.danger {
-  color: #dc2626;
+  color: var(--danger);
 }
 
 .actionChip.pending {
@@ -6173,11 +6144,11 @@ button.chatAttachmentTile:disabled {
   position: relative;
   padding: 10px;
   border-radius: 22px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  border: 1px solid var(--stroke);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.995), rgba(247, 250, 252, 0.96)),
     radial-gradient(circle at top right, rgba(14, 165, 233, 0.09), transparent 38%);
-  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.07);
+  box-shadow: none;
   display: flex;
   flex-direction: column;
   gap: 7px;
@@ -6186,8 +6157,8 @@ button.chatAttachmentTile:disabled {
 
 .gridItem:hover {
   transform: translateY(-2px);
-  border-color: rgba(59, 130, 246, 0.24);
-  box-shadow: 0 18px 34px rgba(15, 23, 42, 0.1);
+  border-color: var(--accent);
+  box-shadow: none;
 }
 
 .gridCardFooter {
@@ -6212,8 +6183,8 @@ button.chatAttachmentTile:disabled {
   gap: 10px;
   padding: 12px;
   border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(255, 255, 255, 0.98));
+  border: 1px solid var(--stroke);
+  background: var(--surface);
 }
 
 .uploadFolderBrowserHeader {
@@ -6233,7 +6204,7 @@ button.chatAttachmentTile:disabled {
   border: none;
   padding: 6px 10px;
   border-radius: 999px;
-  background: rgba(241, 245, 249, 0.96);
+  background: var(--surface);
   color: var(--text-soft);
   font-size: 12px;
   font-weight: 700;
@@ -6242,8 +6213,8 @@ button.chatAttachmentTile:disabled {
 
 .uploadFolderCrumb.current,
 .uploadFolderCrumb:hover {
-  background: rgba(219, 234, 254, 0.98);
-  color: #1d4ed8;
+  background: var(--surface-hover);
+  color: var(--accent);
 }
 
 .uploadFolderTree {
@@ -6253,9 +6224,9 @@ button.chatAttachmentTile:disabled {
 }
 
 .uploadFolderTreeItem {
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  border: 1px solid var(--stroke);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.98);
+  background: var(--surface);
   color: var(--text);
   min-height: 42px;
   padding: 0 12px;
@@ -6268,8 +6239,8 @@ button.chatAttachmentTile:disabled {
 
 .uploadFolderTreeItem.active,
 .uploadFolderTreeItem:hover {
-  border-color: rgba(59, 130, 246, 0.22);
-  background: rgba(239, 246, 255, 0.98);
+  border-color: var(--accent);
+  background: var(--surface-hover);
 }
 
 .gridMetaLine {
@@ -6289,16 +6260,16 @@ button.chatAttachmentTile:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(180deg, #1d4ed8, #2563eb);
-  color: #fff;
+  background: var(--accent-bg);
+  color: var(--text);
   cursor: pointer;
-  box-shadow: 0 12px 22px rgba(37, 99, 235, 0.26);
+  box-shadow: none;
   transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
 }
 
 .folderEnterButton:hover {
   transform: translateY(-1px) scale(1.03);
-  box-shadow: 0 16px 28px rgba(37, 99, 235, 0.3);
+  box-shadow: none;
 }
 
 .folderEnterButton:disabled {
@@ -6399,17 +6370,17 @@ button.chatAttachmentTile:disabled {
   height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
-  box-shadow: 0 0 0 4px rgba(148, 163, 184, 0.14);
+  box-shadow: none;
 }
 
 .shareStatusDot.valid {
-  background: #16a34a;
-  box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.14);
+  background: var(--success-bg);
+  box-shadow: none;
 }
 
 .shareStatusDot.invalid {
-  background: #dc2626;
-  box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.14);
+  background: var(--danger-bg);
+  box-shadow: none;
 }
 
 .shareModal {
@@ -6451,8 +6422,8 @@ button.chatAttachmentTile:disabled {
   align-items: center;
   padding: 14px 16px;
   border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
 }
 
 .shareHistoryMeta {
@@ -6484,12 +6455,12 @@ button.chatAttachmentTile:disabled {
   min-height: 320px;
   border-radius: 24px;
   overflow: hidden;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(241, 245, 249, 0.82));
+  border: 1px solid var(--stroke);
+  background: var(--surface);
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  box-shadow: none;
 }
 
 .shareStandaloneThumb {
@@ -6505,7 +6476,7 @@ button.chatAttachmentTile:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, rgba(37, 99, 235, 0.08), rgba(15, 118, 110, 0.08));
+  background: var(--accent-bg);
 }
 
 .shareStandaloneStats {
@@ -6518,8 +6489,8 @@ button.chatAttachmentTile:disabled {
 .shareInfoCard {
   padding: 16px;
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.78);
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: var(--surface);
+  border: 1px solid var(--stroke);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -6692,8 +6663,8 @@ button.chatAttachmentTile:disabled {
   overflow: auto;
   padding: 10px 12px;
   border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(248, 250, 252, 0.94);
+  border: 1px solid var(--stroke);
+  background: var(--surface-hover);
 }
 
 .uploadSelectionPanel {
@@ -6732,7 +6703,7 @@ button.chatAttachmentTile:disabled {
   align-items: center;
   gap: 12px;
   padding: 12px 2px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  border-bottom: 1px solid var(--stroke);
 }
 
 .uploadDraftRow {
@@ -6783,7 +6754,7 @@ button.chatAttachmentTile:disabled {
   height: 8px;
   border-radius: 999px;
   overflow: hidden;
-  background: rgba(226, 232, 240, 0.95);
+  background: var(--surface);
 }
 
 .uploadProgressInner {
@@ -6801,7 +6772,7 @@ button.chatAttachmentTile:disabled {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(15, 23, 42, 0.5);
+  background: var(--overlay);
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
 }
@@ -6824,16 +6795,16 @@ button.chatAttachmentTile:disabled {
   overflow: auto;
   box-sizing: border-box;
   border-radius: 24px;
-  border: 1px solid rgba(148, 163, 184, 0.26);
-  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
   box-shadow: var(--shadow-lg);
   padding: 18px;
 }
 
 .dialogModal {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(248, 250, 252, 0.98));
-  border-color: rgba(148, 163, 184, 0.22);
-  box-shadow: 0 30px 70px rgba(15, 23, 42, 0.18);
+  background: var(--surface);
+  border-color: var(--stroke);
+  box-shadow: var(--shadow-md);
 }
 
 .drawerSheet {
@@ -6852,7 +6823,7 @@ button.chatAttachmentTile:disabled {
   width: 54px;
   height: 6px;
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.5);
+  background: var(--surface);
   margin: 0 auto 12px;
 }
 
@@ -6860,7 +6831,7 @@ button.chatAttachmentTile:disabled {
   padding: 14px;
   border-radius: 18px;
   border: 1px solid var(--stroke);
-  background: rgba(248, 250, 252, 0.78);
+  background: var(--surface);
 }
 
 .drawerSteps {
@@ -6873,17 +6844,17 @@ button.chatAttachmentTile:disabled {
 .drawerStepBadge {
   padding: 8px 12px;
   border-radius: 999px;
-  background: rgba(241, 245, 249, 0.96);
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: var(--surface);
+  border: 1px solid var(--stroke);
   color: var(--text-soft);
   font-size: 12px;
   font-weight: 700;
 }
 
 .drawerStepBadge.active {
-  background: rgba(37, 99, 235, 0.1);
+  background: var(--accent-bg);
   color: var(--accent);
-  border-color: rgba(37, 99, 235, 0.18);
+  border-color: var(--accent);
 }
 
 .drawerInlineFields {
@@ -6904,8 +6875,8 @@ button.chatAttachmentTile:disabled {
   bottom: -18px;
   margin: 0 -18px -18px;
   padding: 14px 18px 18px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.98));
-  border-top: 1px solid rgba(148, 163, 184, 0.18);
+  background: var(--surface);
+  border-top: 1px solid var(--stroke);
 }
 
 .dialogFooterInline {
@@ -6929,12 +6900,12 @@ button.chatAttachmentTile:disabled {
 }
 
 .dialogFocusCard {
-  background: linear-gradient(180deg, rgba(239, 246, 255, 0.98), rgba(255, 255, 255, 0.98));
-  border-color: rgba(96, 165, 250, 0.28);
+  background: var(--surface);
+  border-color: var(--accent);
 }
 
 .dialogSupportCard {
-  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(255, 255, 255, 0.98));
+  background: var(--surface);
 }
 
 .dialogChoiceGrid {
@@ -6944,8 +6915,8 @@ button.chatAttachmentTile:disabled {
 }
 
 .dialogChoicePill {
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
   color: var(--text);
   border-radius: 16px;
   padding: 12px 14px;
@@ -6957,14 +6928,14 @@ button.chatAttachmentTile:disabled {
 
 .dialogChoicePill:hover {
   transform: translateY(-1px);
-  border-color: rgba(96, 165, 250, 0.34);
+  border-color: var(--accent);
 }
 
 .dialogChoicePill.active {
-  background: rgba(219, 234, 254, 0.96);
-  border-color: rgba(59, 130, 246, 0.3);
+  background: var(--surface-hover);
+  border-color: var(--accent);
   color: var(--accent);
-  box-shadow: 0 12px 24px rgba(59, 130, 246, 0.1);
+  box-shadow: none;
 }
 
 .dialogSecondaryToggle {
@@ -6972,8 +6943,8 @@ button.chatAttachmentTile:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: space-between;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
   color: var(--accent);
   padding: 12px 14px;
   border-radius: 16px;
@@ -6983,8 +6954,8 @@ button.chatAttachmentTile:disabled {
 }
 
 .dialogSecondaryToggle:hover {
-  border-color: rgba(59, 130, 246, 0.24);
-  background: rgba(248, 250, 252, 0.98);
+  border-color: var(--accent);
+  background: var(--surface-hover);
 }
 
 .dialogAdvancedPanel {
@@ -6993,8 +6964,8 @@ button.chatAttachmentTile:disabled {
   gap: 12px;
   padding: 14px;
   border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(248, 250, 252, 0.72);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
 }
 
 .dialogAdvancedPanel > * {
@@ -7014,8 +6985,8 @@ button.chatAttachmentTile:disabled {
 .dialogAdvancedPanel .editMimeBlock {
   padding: 12px 14px;
   border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
 }
 
 .modalWindow .fui-Button,
@@ -7023,9 +6994,9 @@ button.chatAttachmentTile:disabled {
   min-height: 38px;
   padding-inline: 14px;
   border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
   transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 }
 
@@ -7041,8 +7012,8 @@ button.chatAttachmentTile:disabled {
 .modalWindow .fui-Button:hover,
 .dialogActionButton:hover {
   transform: translateY(-1px);
-  border-color: rgba(59, 130, 246, 0.26);
-  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.12);
+  border-color: var(--accent);
+  box-shadow: var(--shadow-md);
 }
 
 .modalWindow .fui-Button .fui-Button__icon,
@@ -7054,23 +7025,23 @@ button.chatAttachmentTile:disabled {
 
 .modalWindow .fui-Button.dangerButton,
 .dialogActionButton.dangerButton {
-  color: #b91c1c;
-  border-color: rgba(220, 38, 38, 0.22);
-  background: rgba(254, 242, 242, 0.96);
+  color: var(--danger);
+  border-color: var(--danger);
+  background: var(--surface);
 }
 
 .modalWindow .fui-Button.dialogPrimaryButton,
 .dialogActionButton.dialogPrimaryButton {
-  color: #eff6ff;
-  border-color: rgba(37, 99, 235, 0.32);
-  background: linear-gradient(135deg, #2563eb, #1d4ed8);
-  box-shadow: 0 14px 28px rgba(37, 99, 235, 0.24);
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  box-shadow: var(--shadow-md);
 }
 
 .modalWindow .fui-Button.dialogPrimaryButton:hover,
 .dialogActionButton.dialogPrimaryButton:hover {
-  border-color: rgba(29, 78, 216, 0.4);
-  background: linear-gradient(135deg, #1d4ed8, #1e40af);
+  border-color: var(--accent);
+  background: var(--accent-bg);
 }
 
 .uploadModal,
@@ -7123,9 +7094,9 @@ button.chatAttachmentTile:disabled {
 .dialogField {
   padding: 10px 12px 12px;
   border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 250, 252, 0.94));
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
+  box-shadow: none;
   overflow: hidden;
 }
 
@@ -7142,9 +7113,9 @@ button.chatAttachmentTile:disabled {
   min-width: 0;
   min-height: 44px;
   border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(248, 250, 252, 0.92);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
+  box-shadow: none;
   box-sizing: border-box;
   overflow: hidden;
 }
@@ -7161,9 +7132,9 @@ button.chatAttachmentTile:disabled {
 .dialogField .fui-Input:focus-within,
 .dialogField .fui-Dropdown:focus-within,
 .dialogDropdown:focus-within {
-  border-color: rgba(37, 99, 235, 0.3);
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  border-color: var(--accent);
+  background: var(--surface);
+  box-shadow: none;
 }
 
 .dialogField .fui-Input::after,
@@ -7263,7 +7234,7 @@ button.chatAttachmentTile:disabled {
   padding: 14px;
   border-radius: 18px;
   border: 1px solid var(--stroke);
-  background: rgba(255, 255, 255, 0.98);
+  background: var(--surface);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -7283,10 +7254,10 @@ button.chatAttachmentTile:disabled {
 }
 
 .diagMetaGrid.compact {
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  border: 1px solid var(--stroke);
   border-radius: 14px;
   padding: 10px 12px;
-  background: rgba(248, 250, 252, 0.92);
+  background: var(--surface);
 }
 
 .diagRoleActions {
@@ -7301,8 +7272,8 @@ button.chatAttachmentTile:disabled {
   gap: 10px;
   padding: 12px 14px;
   border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: linear-gradient(180deg, rgba(248, 250, 252, 0.92), rgba(255, 255, 255, 0.98));
+  border: 1px solid var(--stroke);
+  background: var(--surface);
 }
 
 .diagRoleHeader {
@@ -7339,7 +7310,7 @@ button.chatAttachmentTile:disabled {
 
 .previewTopBar {
   border-bottom: 1px solid var(--stroke);
-  background: rgba(248, 250, 252, 0.96);
+  background: var(--surface);
 }
 
 .previewHeaderMeta {
@@ -7388,9 +7359,9 @@ button.chatAttachmentTile:disabled {
   height: 36px;
   min-height: 36px;
   border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(248, 250, 252, 0.92);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
+  box-shadow: none;
   box-sizing: border-box;
   overflow: hidden;
 }
@@ -7420,9 +7391,9 @@ button.chatAttachmentTile:disabled {
 
 .previewToolbar .fui-Dropdown.previewResolutionDropdown:focus-within,
 .previewResolutionDropdown:focus-within {
-  border-color: rgba(37, 99, 235, 0.3);
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  border-color: var(--accent);
+  background: var(--surface);
+  box-shadow: none;
 }
 
 .previewToolbar .fui-Dropdown.previewResolutionDropdown::after,
@@ -7444,8 +7415,8 @@ button.chatAttachmentTile:disabled {
 }
 
 .previewToolbarButton.active {
-  background: rgba(239, 246, 255, 0.98);
-  border-color: rgba(59, 130, 246, 0.24);
+  background: var(--surface-hover);
+  border-color: var(--accent);
   color: var(--accent);
 }
 
@@ -7456,9 +7427,9 @@ button.chatAttachmentTile:disabled {
   width: min(380px, 72vw);
   padding: 14px;
   border-radius: 20px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 24px 48px rgba(15, 23, 42, 0.14);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
   z-index: 5;
 }
 
@@ -7469,9 +7440,9 @@ button.chatAttachmentTile:disabled {
   top: calc(100% + 10px);
   right: 0;
   border-radius: 20px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 24px 48px rgba(15, 23, 42, 0.14);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
   z-index: 5;
   padding: 14px 16px;
 }
@@ -7519,7 +7490,7 @@ button.chatAttachmentTile:disabled {
 }
 
 .popupActionLink:hover:not(:disabled) {
-  background: rgba(37, 99, 235, 0.08);
+  background: var(--accent-bg);
 }
 
 .popupActionLink:disabled {
@@ -7536,7 +7507,7 @@ button.chatAttachmentTile:disabled {
   height: 14px;
   padding: 0 3px;
   background: var(--accent, #2563eb);
-  color: #fff;
+  color: var(--text);
   font-size: 9px;
   font-weight: 700;
   border-radius: 8px;
@@ -7562,14 +7533,14 @@ button.chatAttachmentTile:disabled {
   justify-content: center;
   gap: 10px;
   padding: 14px;
-  background: linear-gradient(180deg, rgba(226, 232, 240, 0.35), rgba(248, 250, 252, 0.88));
+  background: var(--surface);
   overflow: visible;
 }
 
 .playerSurface.pageFillActive {
   padding: 0;
   gap: 0;
-  background: #020617;
+  background: var(--accent-bg);
 }
 
 .previewBody {
@@ -7592,7 +7563,7 @@ button.chatAttachmentTile:disabled {
 
 .previewSidePanel {
   border-left: 1px solid var(--stroke);
-  background: rgba(248, 250, 252, 0.96);
+  background: var(--surface);
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -7621,14 +7592,14 @@ button.chatAttachmentTile:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(241, 245, 249, 0.96);
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: var(--surface);
+  border: 1px solid var(--stroke);
   color: var(--accent);
 }
 
 .diagnosticsCollapsedCard {
   padding-bottom: 4px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  border-bottom: 1px solid var(--stroke);
 }
 
 .preview,
@@ -7639,7 +7610,7 @@ button.chatAttachmentTile:disabled {
   display: block;
   border-radius: 16px;
   border: 1px solid var(--stroke);
-  background: rgba(15, 23, 42, 0.92);
+  background: var(--accent-bg);
 }
 
 .playerSurface > .preview,
@@ -7928,18 +7899,18 @@ button.chatAttachmentTile:disabled {
 .previewPlaybackTime.current {
   padding: 4px 8px;
   border-radius: 999px;
-  border: 1px solid rgba(125, 211, 252, 0.18);
-  background: rgba(255, 255, 255, 0.08);
-  color: #f8fafc;
+  border: 1px solid var(--accent);
+  background: var(--surface-hover);
+  color: var(--text);
   font-weight: 800;
 }
 
 .previewPlaybackTime.total {
-  color: rgba(226, 232, 240, 0.84);
+  color: var(--text);
 }
 
 .previewPlaybackSeparator {
-  color: rgba(148, 163, 184, 0.7);
+  color: var(--text);
 }
 
 .previewDanmakuComposer {
@@ -8029,18 +8000,18 @@ button.chatAttachmentTile:disabled {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: #f8fafc;
-  border: 2px solid rgba(56, 189, 248, 0.96);
-  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.32);
+  background: var(--surface);
+  border: 2px solid var(--accent);
+  box-shadow: none;
 }
 
 .previewTimelineRange::-moz-range-thumb {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: #f8fafc;
-  border: 2px solid rgba(56, 189, 248, 0.96);
-  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.32);
+  background: var(--surface);
+  border: 2px solid var(--accent);
+  box-shadow: none;
 }
 
 .previewTimelineRange::-moz-range-track {
@@ -8108,7 +8079,7 @@ button.chatAttachmentTile:disabled {
   padding: 0 8px;
   border-radius: 999px;
   background: transparent;
-  color: rgba(226, 232, 240, 0.92);
+  color: var(--text);
   font: inherit;
   font-weight: 700;
   cursor: pointer;
@@ -8129,8 +8100,8 @@ button.chatAttachmentTile:disabled {
 }
 
 .previewModeChip.active {
-  background: rgba(14, 165, 233, 0.22);
-  color: #f8fafc;
+  background: var(--accent-bg);
+  color: var(--text);
 }
 
 .previewControlButton {
@@ -8138,16 +8109,16 @@ button.chatAttachmentTile:disabled {
   width: 34px;
   height: 34px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-  color: #f8fafc;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--stroke);
+  box-shadow: none;
 }
 
 .previewControlButton.active {
-  background: rgba(14, 165, 233, 0.2);
-  color: #f8fafc;
-  border-color: rgba(56, 189, 248, 0.28);
+  background: var(--accent-bg);
+  color: var(--text);
+  border-color: var(--accent);
 }
 
 .debugHighlightCard.wide {
@@ -8155,9 +8126,9 @@ button.chatAttachmentTile:disabled {
 }
 
 .previewControlButton.primary {
-  background: linear-gradient(180deg, rgba(251, 191, 36, 0.96), rgba(245, 158, 11, 0.96));
-  color: #111827;
-  border-color: rgba(251, 191, 36, 0.4);
+  background: var(--warning-bg);
+  color: var(--accent);
+  border-color: var(--warning);
 }
 
 .previewControlButton.primary:disabled {
@@ -8315,7 +8286,7 @@ button.chatAttachmentTile:disabled {
   overflow: auto;
   border-radius: 16px;
   border: 1px solid var(--stroke);
-  background: rgba(255, 255, 255, 0.96);
+  background: var(--surface);
   color: var(--text);
   font-family: "Cascadia Code", "Consolas", monospace;
   font-size: 13px;
@@ -8347,7 +8318,7 @@ button.chatAttachmentTile:disabled {
 .previewMarkdown h6 {
   margin: 1.2em 0 0.55em;
   line-height: 1.28;
-  color: #0f172a;
+  color: var(--accent);
 }
 
 .previewMarkdown h1 {
@@ -8382,10 +8353,10 @@ button.chatAttachmentTile:disabled {
 
 .previewMarkdown blockquote {
   padding: 0.9em 1em;
-  border-left: 4px solid rgba(37, 99, 235, 0.5);
-  background: rgba(239, 246, 255, 0.9);
+  border-left: 4px solid var(--accent);
+  background: var(--surface);
   border-radius: 0 12px 12px 0;
-  color: #334155;
+  color: var(--accent);
 }
 
 .previewMarkdown code {
@@ -8393,15 +8364,15 @@ button.chatAttachmentTile:disabled {
   font-size: 0.92em;
   padding: 0.14em 0.34em;
   border-radius: 6px;
-  background: rgba(226, 232, 240, 0.72);
+  background: var(--surface);
 }
 
 .previewMarkdown pre {
   overflow: auto;
   padding: 14px 16px;
   border-radius: 14px;
-  background: #0f172a;
-  color: #e2e8f0;
+  background: var(--accent-bg);
+  color: var(--text);
 }
 
 .previewMarkdown pre code {
@@ -8415,19 +8386,19 @@ button.chatAttachmentTile:disabled {
   border-collapse: collapse;
   overflow: hidden;
   border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid var(--stroke);
 }
 
 .previewMarkdown th,
 .previewMarkdown td {
   padding: 10px 12px;
   text-align: left;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  border-bottom: 1px solid var(--stroke);
 }
 
 .previewMarkdown th {
-  background: rgba(241, 245, 249, 0.96);
-  color: #0f172a;
+  background: var(--surface);
+  color: var(--accent);
 }
 
 .previewMarkdown tr:last-child td {
@@ -8436,7 +8407,7 @@ button.chatAttachmentTile:disabled {
 
 .previewMarkdown hr {
   border: 0;
-  border-top: 1px solid rgba(148, 163, 184, 0.24);
+  border-top: 1px solid var(--stroke);
   margin: 1.2em 0;
 }
 
@@ -8448,7 +8419,7 @@ button.chatAttachmentTile:disabled {
 }
 
 .previewMarkdown a {
-  color: #2563eb;
+  color: var(--accent);
   text-decoration: none;
 }
 
@@ -8483,7 +8454,7 @@ button.chatAttachmentTile:disabled {
 .previewDebugPanel {
   border-radius: 18px;
   border: 1px solid var(--stroke);
-  background: rgba(255, 255, 255, 0.8);
+  background: var(--surface);
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
@@ -8563,7 +8534,7 @@ button.chatAttachmentTile:disabled {
 
 .animePageTab:hover {
   color: var(--text);
-  background: rgba(148, 163, 184, 0.1);
+  background: var(--surface-hover);
 }
 
 .animePageTab.active {
@@ -8615,7 +8586,7 @@ button.chatAttachmentTile:disabled {
 .animeDayBtn.active {
   background: var(--brand);
   border-color: var(--brand);
-  color: #fff;
+  color: var(--text);
 }
 
 .animeDayBtn.today::before {
@@ -8624,12 +8595,12 @@ button.chatAttachmentTile:disabled {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #22c55e;
+  background: var(--success-bg);
   flex-shrink: 0;
 }
 
 .animeDayBtn.active.today::before {
-  background: #fff;
+  background: var(--surface-hover);
 }
 
 .animeDayTodayDot {
@@ -8685,15 +8656,15 @@ button.chatAttachmentTile:disabled {
 .animeCardImgPlaceholder {
   width: 100%;
   height: 100%;
-  background: linear-gradient(135deg, #e2e8f0, #cbd5e1);
+  background: var(--surface);
 }
 
 .animeCardScore {
   position: absolute;
   bottom: 6px;
   right: 6px;
-  background: rgba(0, 0, 0, 0.72);
-  color: #fff;
+  background: var(--surface);
+  color: var(--text);
   font-size: 11px;
   font-weight: 700;
   padding: 2px 6px;
@@ -8816,7 +8787,7 @@ button.chatAttachmentTile:disabled {
   padding: 4px 10px;
   font-size: 13px;
   font-weight: 600;
-  color: #fff;
+  color: var(--text-soft);
   background: var(--accent, #e74c3c);
   border-radius: 6px;
   text-align: center;
@@ -8844,7 +8815,7 @@ button.chatAttachmentTile:disabled {
 }
 .animeCatalogChip.active {
   background: var(--accent, #3b82f6);
-  color: #fff;
+  color: var(--text);
   border-color: var(--accent, #3b82f6);
 }
 
@@ -8892,7 +8863,7 @@ button.chatAttachmentTile:disabled {
 
 .animeDetailClose:hover {
   color: var(--text);
-  background: rgba(148, 163, 184, 0.15);
+  background: var(--surface-hover);
 }
 
 .animeDetailBgmLink {
@@ -8910,7 +8881,7 @@ button.chatAttachmentTile:disabled {
 }
 
 .animeDetailBgmLink:hover {
-  background: rgba(15, 118, 110, 0.08);
+  background: var(--accent-bg);
 }
 
 .animeDetailBody {
@@ -9117,7 +9088,7 @@ button.chatAttachmentTile:disabled {
 
 .animeEpDownload:hover {
   color: var(--brand);
-  background: rgba(15, 118, 110, 0.1);
+  background: var(--accent-bg);
 }
 
 /* Per-episode play button */
@@ -9136,7 +9107,7 @@ button.chatAttachmentTile:disabled {
 }
 
 .animeEpPlay:hover {
-  background: rgba(37, 99, 235, 0.1);
+  background: var(--accent-bg);
 }
 
 .animeEpPlay:disabled {
@@ -9151,21 +9122,21 @@ button.chatAttachmentTile:disabled {
   flex-wrap: wrap;
   gap: 6px;
   padding: 8px 12px;
-  background: #1a1a1a;
-  border-top: 1px solid #333;
+  background: var(--surface);
+  border-top: 1px solid var(--stroke);
 }
 
 .animeSourceBarLabel {
   font-size: 11px;
-  color: #888;
+  color: var(--text-soft);
   white-space: nowrap;
   margin-right: 4px;
 }
 
 .animeSourceBtn {
-  background: #2a2a2a;
-  border: 1px solid #444;
-  color: #ccc;
+  background: var(--surface);
+  border: 1px solid var(--stroke);
+  color: var(--text);
   padding: 3px 10px;
   border-radius: 12px;
   font-size: 11px;
@@ -9175,14 +9146,14 @@ button.chatAttachmentTile:disabled {
 }
 
 .animeSourceBtn:hover {
-  background: #3a3a3a;
-  color: #fff;
-  border-color: #666;
+  background: var(--surface-hover);
+  color: var(--text);
+  border-color: var(--stroke);
 }
 
 .animeSourceBtn.active {
   background: var(--brand, #2563eb);
-  color: #fff;
+  color: var(--text);
   border-color: var(--brand, #2563eb);
 }
 
@@ -9425,10 +9396,10 @@ button.chatAttachmentTile:disabled {
   flex-shrink: 0;
   transition: color 0.15s, border-color 0.15s;
 }
-.animeSourceManualBtn:hover { color: var(--text); border-color: #666; }
+.animeSourceManualBtn:hover { color: var(--text); border-color: var(--stroke); }
 .animeSourceManualBtn:disabled { opacity: 0.35; cursor: default; }
 .animeDownloadEpBtn.downloading { color: var(--accent, #3b82f6); border-color: var(--accent, #3b82f6); }
-.animeDownloadEpBtn.done { color: #22c55e; border-color: #22c55e; }
+.animeDownloadEpBtn.done { color: var(--success); border-color: var(--success); }
 
 /* Progress track */
 .animeSourceProgressTrack {
@@ -9476,7 +9447,7 @@ button.chatAttachmentTile:disabled {
   justify-content: center;
   font-size: 11px;
   font-weight: 700;
-  color: #fff;
+  color: var(--text);
   flex-shrink: 0;
   user-select: none;
 }
@@ -9517,7 +9488,7 @@ button.chatAttachmentTile:disabled {
 .animeManualSelectSheet {
   position: absolute;
   inset: 0;
-  background: rgba(0,0,0,0.55);
+  background: var(--surface);
   display: flex;
   align-items: flex-end;
   z-index: 200;
@@ -9564,7 +9535,7 @@ button.chatAttachmentTile:disabled {
   transition: background 0.1s;
 }
 .animeManualSelectItem:hover { background: var(--hover); }
-.animeManualSelectItem.active { background: rgba(99,102,241,0.10); }
+.animeManualSelectItem.active { background: var(--accent-bg); }
 .animeManualSelectName {
   font-size: 13px;
   font-weight: 500;
@@ -9616,8 +9587,8 @@ button.chatAttachmentTile:disabled {
   transition: background 0.15s;
 }
 .animeEpBgmBtn:hover:not(.noStream) { background: var(--hover, rgba(255,255,255,0.07)); }
-.animeEpBgmBtn.active { background: rgba(99,102,241,0.13); }
-.animeEpBgmBtn.active .animeEpBgmSort { color: #818cf8; }
+.animeEpBgmBtn.active { background: var(--accent-bg); }
+.animeEpBgmBtn.active .animeEpBgmSort { color: var(--accent); }
 .animeEpBgmBtn.noStream { opacity: 0.35; cursor: default; }
 
 .animeEpBgmSort {
@@ -9670,9 +9641,9 @@ button.chatAttachmentTile:disabled {
 }
 .animeRoutePill:hover { background: var(--hover, rgba(255,255,255,0.12)); }
 .animeRoutePill.active {
-  background: #6366f1;
-  border-color: #6366f1;
-  color: #fff;
+  background: var(--accent-bg);
+  border-color: var(--accent);
+  color: var(--text);
   font-weight: 600;
 }
 
@@ -9681,22 +9652,22 @@ button.chatAttachmentTile:disabled {
   margin-top: 10px;
   padding: 10px 12px;
   border-radius: 8px;
-  background: rgba(234,179,8,0.08);
-  border: 1px solid rgba(234,179,8,0.25);
+  background: var(--warning-bg);
+  border: 1px solid var(--warning);
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
-.animeBlockedTitle { font-size: 12px; color: #ca8a04; font-weight: 600; }
+.animeBlockedTitle { font-size: 12px; color: var(--danger); font-weight: 600; }
 .animeBlockedList { display: flex; flex-wrap: wrap; gap: 6px; }
 .animeBlockedLink {
   padding: 3px 10px; border-radius: 999px;
-  border: 1px solid rgba(234,179,8,0.35);
-  background: rgba(234,179,8,0.1);
-  font-size: 12px; color: #ca8a04; text-decoration: none;
+  border: 1px solid var(--warning);
+  background: var(--warning-bg);
+  font-size: 12px; color: var(--danger); text-decoration: none;
   white-space: nowrap; transition: background 0.15s;
 }
-.animeBlockedLink:hover { background: rgba(234,179,8,0.2); }
+.animeBlockedLink:hover { background: var(--warning-bg); }
 .animeBlockedHint { font-size: 11px; color: var(--text-muted, #888); }
 
 /* ── Blocked sites embedded in source picker ──────────────────────────── */
@@ -9720,16 +9691,16 @@ button.chatAttachmentTile:disabled {
   color: var(--text);
   transition: background 0.12s;
 }
-.animeBlockedPickerLink:hover { background: rgba(234,179,8,0.1); }
+.animeBlockedPickerLink:hover { background: var(--warning-bg); }
 .animeBlockedPickerAvatar { flex-shrink: 0; }
 .animeBlockedPickerName { flex: 1; font-size: 13px; min-width: 0; }
 .animeBlockedPickerBadge {
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(234,179,8,0.15);
-  border: 1px solid rgba(234,179,8,0.3);
-  color: #ca8a04;
+  background: var(--warning-bg);
+  border: 1px solid var(--warning);
+  color: var(--danger);
   white-space: nowrap;
 }
 
@@ -9806,7 +9777,7 @@ button.chatAttachmentTile:disabled {
 }
 
 .mikanPickerItem:hover {
-  background: rgba(15, 118, 110, 0.07);
+  background: var(--accent-bg);
   color: var(--brand);
 }
 
@@ -9835,16 +9806,16 @@ button.chatAttachmentTile:disabled {
   font-size: 10px;
   padding: 1px 6px;
   border-radius: 10px;
-  background: rgba(99, 102, 241, 0.12);
-  color: #6366f1;
+  background: var(--accent-bg);
+  color: var(--accent);
   font-weight: 500;
   white-space: nowrap;
 }
 
 /* ─── Copied banner ── */
 .mikanCopiedBanner {
-  background: #f0fdf4;
-  border-bottom: 1.5px solid #86efac;
+  background: var(--surface);
+  border-bottom: 1.5px solid var(--success);
   padding: 10px 14px;
   display: flex;
   flex-direction: column;
@@ -9854,7 +9825,7 @@ button.chatAttachmentTile:disabled {
 
 .mikanCopiedTitle {
   font-size: 12px;
-  color: #15803d;
+  color: var(--success);
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -9868,8 +9839,8 @@ button.chatAttachmentTile:disabled {
 }
 
 .mikanCopiedBtn {
-  background: #16a34a;
-  color: #fff;
+  background: var(--success-bg);
+  color: var(--text);
   border: none;
   border-radius: 6px;
   padding: 5px 12px;
@@ -9880,17 +9851,17 @@ button.chatAttachmentTile:disabled {
 }
 
 .mikanCopiedBtn:hover {
-  background: #15803d;
+  background: var(--success-bg);
 }
 
 .mikanCopiedBtn:not(.primary) {
   background: transparent;
-  color: #15803d;
-  border: 1px solid #86efac;
+  color: var(--success);
+  border: 1px solid var(--success);
 }
 
 .mikanCopiedBtn:not(.primary):hover {
-  background: #dcfce7;
+  background: var(--surface-hover);
 }
 
 /* ─── Shared helpers ── */
@@ -9907,7 +9878,7 @@ button.chatAttachmentTile:disabled {
 }
 
 .animePageError {
-  color: #dc2626;
+  color: var(--danger);
 }
 
 .animePageEmpty {
@@ -9936,7 +9907,7 @@ button.chatAttachmentTile:disabled {
   display: flex;
   height: 100%;
   overflow: hidden;
-  background: #000;
+  background: var(--surface);
 }
 
 /* Sidebar */
@@ -9969,7 +9940,7 @@ button.chatAttachmentTile:disabled {
   justify-content: center;
   border: none;
   border-radius: 8px;
-  background: rgba(241, 245, 249, 0.9);
+  background: var(--surface);
   color: var(--text-soft);
   cursor: pointer;
   flex-shrink: 0;
@@ -9984,7 +9955,7 @@ button.chatAttachmentTile:disabled {
   display: flex;
 }
 .tvSidebarToggle:hover {
-  background: rgba(219, 234, 254, 0.9);
+  background: var(--surface-hover);
   color: var(--accent);
 }
 
@@ -10018,7 +9989,7 @@ button.chatAttachmentTile:disabled {
   padding: 0 8px;
   border-radius: 10px;
   border: 1px solid var(--stroke-strong);
-  background: rgba(255, 255, 255, 0.8);
+  background: var(--surface);
   color: var(--text);
   font: inherit;
   font-size: 0.82rem;
@@ -10034,20 +10005,20 @@ button.chatAttachmentTile:disabled {
   justify-content: center;
   border: 1px solid var(--stroke);
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.8);
+  background: var(--surface);
   color: var(--text-soft);
   cursor: pointer;
   flex-shrink: 0;
 }
 .tvIconBtn:hover {
-  background: rgba(219, 234, 254, 0.9);
+  background: var(--surface-hover);
   color: var(--accent);
-  border-color: rgba(59, 130, 246, 0.22);
+  border-color: var(--accent);
 }
 .tvIconBtnDanger:hover {
-  background: rgba(254, 226, 226, 0.9);
-  color: #dc2626;
-  border-color: rgba(239, 68, 68, 0.22);
+  background: var(--surface-hover);
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 .tvInput {
@@ -10056,15 +10027,15 @@ button.chatAttachmentTile:disabled {
   padding: 0 10px;
   border-radius: 10px;
   border: 1px solid var(--stroke-strong);
-  background: rgba(255, 255, 255, 0.88);
+  background: var(--surface);
   color: var(--text);
   font: inherit;
   font-size: 0.82rem;
 }
 .tvInput:focus {
   outline: none;
-  border-color: rgba(37, 99, 235, 0.4);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+  border-color: var(--accent);
+  box-shadow: none;
 }
 
 .tvAddSourceForm {
@@ -10081,7 +10052,7 @@ button.chatAttachmentTile:disabled {
   height: 30px;
   border: 1px solid var(--stroke-strong);
   border-radius: 999px;
-  background: rgba(241, 245, 249, 0.9);
+  background: var(--surface);
   color: var(--text);
   font: inherit;
   font-size: 0.8rem;
@@ -10091,7 +10062,7 @@ button.chatAttachmentTile:disabled {
 .tvBtnPrimary {
   background: var(--accent);
   border-color: transparent;
-  color: #fff;
+  color: var(--text);
 }
 .tvBtnPrimary:disabled {
   opacity: 0.5;
@@ -10118,7 +10089,7 @@ button.chatAttachmentTile:disabled {
 .tvModeTabActive {
   background: var(--accent);
   border-color: transparent;
-  color: #fff;
+  color: var(--text);
 }
 /* Paste textarea */
 .tvContentArea {
@@ -10179,7 +10150,7 @@ button.chatAttachmentTile:disabled {
   text-align: left;
   cursor: pointer;
 }
-.tvSubSourceItem:hover { background: rgba(241, 245, 249, 0.9); }
+.tvSubSourceItem:hover { background: var(--surface-hover); }
 .tvSubSourceFailed {
   opacity: 0.38;
   cursor: not-allowed;
@@ -10206,7 +10177,7 @@ button.chatAttachmentTile:disabled {
   border-bottom: 1px solid var(--border);
   margin-bottom: 4px;
 }
-.tvAggregationBack:hover { background: rgba(219, 234, 254, 0.4); }
+.tvAggregationBack:hover { background: var(--surface-hover); }
 .tvChannelGroup {
   display: flex;
   flex-direction: column;
@@ -10228,7 +10199,7 @@ button.chatAttachmentTile:disabled {
   letter-spacing: 0.06em;
 }
 .tvGroupHeader:hover {
-  background: rgba(241, 245, 249, 0.9);
+  background: var(--surface-hover);
   color: var(--text);
 }
 .tvGroupChevron {
@@ -10247,7 +10218,7 @@ button.chatAttachmentTile:disabled {
   white-space: nowrap;
 }
 .tvGroupCount {
-  background: rgba(148, 163, 184, 0.18);
+  background: var(--surface);
   border-radius: 999px;
   padding: 1px 7px;
   font-size: 0.72rem;
@@ -10272,7 +10243,7 @@ button.chatAttachmentTile:disabled {
   overflow: hidden;
 }
 .tvChannelItem:hover {
-  background: rgba(241, 245, 249, 0.9);
+  background: var(--surface-hover);
 }
 .tvChannelItemFailed {
   opacity: 0.38;
@@ -10284,7 +10255,7 @@ button.chatAttachmentTile:disabled {
   background: transparent;
 }
 .tvChannelItemActive {
-  background: rgba(219, 234, 254, 0.7) !important;
+  background: var(--surface) !important;
   color: var(--accent);
   font-weight: 700;
 }
@@ -10299,7 +10270,7 @@ button.chatAttachmentTile:disabled {
   width: 22px;
   height: 22px;
   border-radius: 4px;
-  background: rgba(148, 163, 184, 0.14);
+  background: var(--surface);
   flex-shrink: 0;
 }
 .tvChannelName {
@@ -10325,7 +10296,7 @@ button.chatAttachmentTile:disabled {
   flex-direction: column;
   align-items: center;
   gap: 12px;
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--text-soft);
   font-size: 0.9rem;
 }
 .tvEmptyIcon {
@@ -10353,11 +10324,11 @@ button.chatAttachmentTile:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--overlay);
   pointer-events: none;
 }
 .tvOverlayError {
-  color: #fca5a5;
+  color: var(--danger);
   font-size: 0.9rem;
   font-weight: 600;
   pointer-events: auto;
@@ -10371,19 +10342,19 @@ button.chatAttachmentTile:disabled {
   gap: 8px;
   padding: 4px 10px;
   border-radius: 999px;
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--surface);
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
   pointer-events: none;
 }
 .tvNowPlayingName {
-  color: rgba(255, 255, 255, 0.88);
+  color: var(--text);
   font-size: 0.82rem;
   font-weight: 600;
 }
 .tvLiveBadge {
-  background: #ef4444;
-  color: #fff;
+  background: var(--danger-bg);
+  color: var(--text);
   font-size: 0.65rem;
   font-weight: 800;
   letter-spacing: 0.08em;
@@ -10395,8 +10366,8 @@ button.chatAttachmentTile:disabled {
 .debugHighlightCard {
   padding: 10px 12px;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.96);
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: var(--surface);
+  border: 1px solid var(--stroke);
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -10416,23 +10387,23 @@ button.chatAttachmentTile:disabled {
   justify-content: space-between;
   padding: 10px 12px;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.96);
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: var(--surface);
+  border: 1px solid var(--stroke);
 }
 
 .debugNotice {
   padding: 12px;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.96);
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: var(--surface);
+  border: 1px solid var(--stroke);
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
 .debugNotice.danger {
-  background: rgba(254, 242, 242, 0.96);
-  border-color: rgba(220, 38, 38, 0.18);
+  background: var(--surface);
+  border-color: var(--danger);
 }
 
 .compactNotice {
@@ -10471,8 +10442,8 @@ button.chatAttachmentTile:disabled {
 .commentLockedCard {
   padding: 12px 14px;
   border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.12);
-  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
 }
 
 .commentComposer {
@@ -10483,13 +10454,13 @@ button.chatAttachmentTile:disabled {
   margin-top: 12px;
   padding: 10px;
   flex-shrink: 0;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 -10px 24px rgba(248, 250, 252, 0.95);
+  background: var(--surface);
+  box-shadow: none;
 }
 
 .commentComposer.nested {
   margin-top: 10px;
-  background: rgba(248, 250, 252, 0.88);
+  background: var(--surface);
   box-shadow: none;
 }
 
@@ -10503,7 +10474,7 @@ button.chatAttachmentTile:disabled {
   flex: 1;
   width: auto;
   max-width: none;
-  background: rgba(248, 250, 252, 0.94);
+  background: var(--surface);
 }
 
 .commentComposerActions,
@@ -10571,7 +10542,7 @@ button.chatAttachmentTile:disabled {
 .commentReplies {
   margin-top: 10px;
   padding-left: 12px;
-  border-left: 1px solid rgba(148, 163, 184, 0.14);
+  border-left: 1px solid var(--stroke);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -10580,22 +10551,22 @@ button.chatAttachmentTile:disabled {
 .commentCard.depth-1,
 .commentCard.depth-2,
 .commentCard.depth-3 {
-  background: rgba(248, 250, 252, 0.72);
-  border-color: rgba(148, 163, 184, 0.1);
+  background: var(--surface);
+  border-color: var(--stroke);
 }
 
 .commentIconButton {
   width: 28px;
   height: 28px;
   border-radius: 10px;
-  border-color: rgba(148, 163, 184, 0.12);
-  background: rgba(248, 250, 252, 0.82);
+  border-color: var(--stroke);
+  background: var(--surface);
 }
 
 .commentIconButton.active,
 .commentIconButton.primary {
-  background: rgba(239, 246, 255, 0.98);
-  border-color: rgba(59, 130, 246, 0.24);
+  background: var(--surface-hover);
+  border-color: var(--accent);
   color: var(--accent);
 }
 
@@ -10616,7 +10587,7 @@ button.chatAttachmentTile:disabled {
   justify-content: center;
   background: transparent;
   border-style: dashed;
-  border-color: rgba(148, 163, 184, 0.2);
+  border-color: var(--stroke);
 }
 
 .commentEmptyIcon {
@@ -10626,8 +10597,8 @@ button.chatAttachmentTile:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: rgba(148, 163, 184, 0.9);
-  background: rgba(241, 245, 249, 0.7);
+  color: var(--text-soft);
+  background: var(--surface);
 }
 
 .commentLockedCard {
@@ -10655,8 +10626,8 @@ button.chatAttachmentTile:disabled {
   flex-wrap: wrap;
   padding: 14px 16px;
   border-radius: 20px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
 }
 
 .profileAvatarLarge {
@@ -10685,21 +10656,21 @@ button.chatAttachmentTile:disabled {
 .profileDialog .fui-Textarea {
   min-height: 120px;
   border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid var(--stroke);
+  background: var(--surface);
 }
 
 .profileDialog .fui-Textarea:focus-within {
-  border-color: rgba(37, 99, 235, 0.3);
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  border-color: var(--accent);
+  background: var(--surface);
+  box-shadow: none;
 }
 
 .profileUploadHint {
   padding: 10px 12px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.98);
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: var(--surface);
+  border: 1px solid var(--stroke);
 }
 
 .unsupportedPreview {
@@ -10711,7 +10682,7 @@ button.chatAttachmentTile:disabled {
   padding: 14px;
   border-radius: 16px;
   border: 1px dashed var(--stroke-strong);
-  background: rgba(248, 250, 252, 0.96);
+  background: var(--surface);
 }
 
 .adminGrid {
@@ -10725,7 +10696,7 @@ button.chatAttachmentTile:disabled {
   padding: 12px;
   border-radius: 16px;
   border: 1px solid var(--stroke);
-  background: rgba(255, 255, 255, 0.98);
+  background: var(--surface);
 }
 
 .withActions {
@@ -11918,7 +11889,7 @@ button.chatAttachmentTile:disabled {
   height: 48px;
   flex-shrink: 0;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 250, 252, 0.94));
+    var(--surface);
   border-bottom: 1px solid var(--stroke, rgba(148, 163, 184, 0.25));
   position: sticky;
   top: 0;
@@ -11958,7 +11929,7 @@ button.chatAttachmentTile:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, rgba(14, 165, 233, 0.16), rgba(37, 99, 235, 0.2));
+  background: var(--accent-bg);
   color: var(--accent);
   font-weight: 800;
   font-size: 12px;
@@ -12021,7 +11992,7 @@ button.chatAttachmentTile:disabled {
   display: flex;
   flex-shrink: 0;
   border-top: 1px solid var(--stroke, rgba(148, 163, 184, 0.25));
-  background: rgba(255, 255, 255, 0.96);
+  background: var(--surface);
   -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
   padding-bottom: env(safe-area-inset-bottom, 0px);
@@ -12083,7 +12054,7 @@ button.chatAttachmentTile:disabled {
   height: 16px;
   border-radius: 8px;
   background: var(--accent, #0ea5e9);
-  color: #fff;
+  color: var(--text);
   font-size: 10px;
   font-weight: 700;
   display: flex;
@@ -12096,7 +12067,7 @@ button.chatAttachmentTile:disabled {
 .mobileMoreSheetBackdrop {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.32);
+  background: var(--overlay);
   z-index: 49;
   opacity: 0;
   pointer-events: none;
@@ -12114,10 +12085,10 @@ button.chatAttachmentTile:disabled {
   right: 0;
   bottom: 0;
   border-radius: 16px 16px 0 0;
-  background: #fff;
+  background: var(--surface);
   z-index: 50;
   padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
-  box-shadow: 0 -8px 40px rgba(15, 23, 42, 0.12);
+  box-shadow: none;
   transform: translateY(100%);
   transition: transform 0.25s cubic-bezier(0.32, 0.72, 0, 1);
   will-change: transform;
@@ -12131,7 +12102,7 @@ button.chatAttachmentTile:disabled {
   width: 36px;
   height: 4px;
   border-radius: 2px;
-  background: #cbd5e1;
+  background: var(--surface);
   margin: 12px auto 8px;
 }
 
@@ -12158,7 +12129,7 @@ button.chatAttachmentTile:disabled {
 
 .mobileMoreSheetRow:hover,
 .mobileMoreSheetRow:active {
-  background: rgba(15, 23, 42, 0.04);
+  background: var(--accent-bg);
 }
 
 .mobileMoreSheetRowIcon {
@@ -12180,7 +12151,7 @@ button.chatAttachmentTile:disabled {
   height: 20px;
   border-radius: 10px;
   background: var(--accent, #0ea5e9);
-  color: #fff;
+  color: var(--text);
   font-size: 11px;
   font-weight: 700;
   display: flex;
@@ -12197,11 +12168,11 @@ button.chatAttachmentTile:disabled {
 }
 
 .mobileMoreSheetLogout .mobileMoreSheetRowIcon {
-  color: #dc2626;
+  color: var(--danger);
 }
 
 .mobileMoreSheetLogout .mobileMoreSheetRowLabel {
-  color: #dc2626;
+  color: var(--danger);
 }
 
 /* ─── 子页面（更多 → 传输/分享/终端等） ─────────────────────── */
@@ -12271,8 +12242,8 @@ button.chatAttachmentTile:disabled {
     position: sticky;
     bottom: 0;
     z-index: 5;
-    background: rgba(255, 255, 255, 0.96);
-    border-top: 1px solid rgba(148, 163, 184, 0.18);
+    background: var(--surface);
+    border-top: 1px solid var(--stroke);
     padding: 8px 14px;
     -webkit-backdrop-filter: blur(12px);
     backdrop-filter: blur(12px);
@@ -12423,7 +12394,7 @@ button.chatAttachmentTile:disabled {
 .mobileSheetBackdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--overlay);
   z-index: 200;
   -webkit-tap-highlight-color: transparent;
 }
@@ -12439,7 +12410,7 @@ button.chatAttachmentTile:disabled {
   display: flex;
   flex-direction: column;
   max-height: 88dvh;
-  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.18);
+  box-shadow: none;
   animation: mobileSheetSlideUp 0.22s cubic-bezier(0.32, 0.72, 0, 1) both;
 }
 
@@ -12565,7 +12536,7 @@ button.chatAttachmentTile:disabled {
   padding: 10px 18px;
   font-size: 14px;
   font-weight: 600;
-  color: #fff;
+  color: var(--text);
   cursor: pointer;
   min-height: 44px;
   -webkit-tap-highlight-color: transparent;
@@ -12600,7 +12571,7 @@ button.chatAttachmentTile:disabled {
   height: 48px;
   padding: 0 14px;
   flex-shrink: 0;
-  background: rgba(248, 250, 252, 0.97);
+  background: var(--surface);
   border-top: 1px solid var(--stroke, rgba(148, 163, 184, 0.25));
   border-bottom: 1px solid var(--stroke, rgba(148, 163, 184, 0.25));
   cursor: pointer;
@@ -12746,7 +12717,7 @@ button.chatAttachmentTile:disabled {
 .aiSummaryViewText strong { font-weight: 600; }
 .aiSummaryViewText em { font-style: italic; }
 .aiSummaryViewText code {
-  background: rgba(148, 163, 184, 0.12);
+  background: var(--surface);
   border-radius: 3px;
   padding: 0.1em 0.35em;
   font-size: 0.88em;
@@ -12814,7 +12785,7 @@ button.chatAttachmentTile:disabled {
   gap: 4px;
   padding: 2px 8px;
   background: var(--chip-bg, rgba(14, 165, 233, 0.08));
-  border: 1px solid rgba(14, 165, 233, 0.2);
+  border: 1px solid var(--accent);
   border-radius: 20px;
   font-size: 12px;
   color: var(--accent, #0ea5e9);
@@ -12826,7 +12797,7 @@ button.chatAttachmentTile:disabled {
 }
 
 .tagPill:hover {
-  background: rgba(14, 165, 233, 0.14);
+  background: var(--accent-bg);
   border-color: var(--accent, #0ea5e9);
 }
 
@@ -12885,9 +12856,9 @@ button.chatAttachmentTile:disabled {
 .thumbTagPill {
   font-size: 11px !important;
   padding: 1px 6px !important;
-  background: rgba(10, 17, 32, 0.76) !important;
-  border: 1px solid rgba(255, 255, 255, 0.14) !important;
-  color: rgba(255, 255, 255, 0.92) !important;
+  background: var(--accent-bg) !important;
+  border: 1px solid var(--stroke) !important;
+  color: var(--text) !important;
   pointer-events: auto;
   -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
@@ -12895,9 +12866,9 @@ button.chatAttachmentTile:disabled {
 }
 
 .thumbTagPill:hover {
-  background: rgba(14, 165, 233, 0.72) !important;
-  border-color: rgba(125, 211, 252, 0.5) !important;
-  color: #fff !important;
+  background: var(--accent-bg) !important;
+  border-color: var(--accent) !important;
+  color: var(--text) !important;
 }
 
 /* ─── Tag filter in desktop filter panel ────────────────────── */
@@ -12940,11 +12911,11 @@ button.chatAttachmentTile:disabled {
 
 .batchTagButton:hover {
   opacity: 1;
-  background: rgba(14, 165, 233, 0.08);
+  background: var(--accent-bg);
 }
 
 
-   根本原因：:fullscreen 与 @media(max-width:760px) 同等优先级，
+/* 根本原因：:fullscreen 与 @media(max-width:760px) 同等优先级，
    后者因出现更晚而获胜；将全屏规则放到文件绝对末尾解决此问题。
    ══════════════════════════════════════════════════════════════ */
 .videoViewportSurface:fullscreen,
@@ -12997,3 +12968,5 @@ button.chatAttachmentTile:disabled {
   pointer-events: auto !important;
 }
 
+
+}

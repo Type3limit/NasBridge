@@ -1,13 +1,16 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { FluentProvider, webLightTheme } from "@fluentui/react-components";
+import { ThemeProvider } from "./ui/ThemeProvider";
+import { IndustrialBackdrop } from "./ui/IndustrialChrome";
 import SharePage from "./SharePage.jsx";
 import "./styles.css";
+import "./industrial.css";
 
 createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <FluentProvider theme={webLightTheme}>
+    <ThemeProvider>
+      <IndustrialBackdrop />
       <SharePage />
-    </FluentProvider>
+    </ThemeProvider>
   </React.StrictMode>
 );

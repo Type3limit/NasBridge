@@ -4,7 +4,7 @@
 
 - `server`：部署在公网服务器，提供用户系统、后台管理、文件索引、WebRTC 信令。
 - `storage-client`：部署在存储机，主动注册到 Server、同步本地文件索引、通过 WebRTC DataChannel 向网页端传输文件。
-- `web`：现代化 Fluent 风格前端，支持登录注册、收藏、上传、下载、预览、后台管理。
+- `web`：工业风双主题前端，支持登录注册、收藏、上传、下载、预览、后台管理。
 
 > 关键目标：大流量文件传输走 P2P，Server 只做控制面，适配 2M 带宽公网机。
 
@@ -137,6 +137,14 @@ npm run deploy:stop:linux
    npm run start -w server
    ```
 4. 使用 Nginx/Caddy 做 HTTPS 反代（WebRTC 建议 HTTPS/WSS）。
+
+#### 首屏加载与低带宽部署
+
+- Nginx 的 `gzip on` 默认不足以压缩 JS/CSS。可在本站 HTTPS `server` 块中引入 `deploy/nginx/frontend-assets.conf` 的规则（上游端口按实际配置调整），然后执行 `sudo nginx -t && sudo systemctl reload nginx`。已有同类规则时请合并，避免重复 location。Nginx 1.24 可用 `listen 443 ssl http2;` 开启 HTTP/2。
+- 带内容哈希的 `/assets/` 文件缓存一年；HTML 保持重新验证，发布时先上传新资源再替换 HTML，并保留旧哈希资源供已打开的页面使用。
+- 前端保留 Rollup 自动分包，避免把全部第三方库塞进一个 `vendor` 包。聊天、预览、播放器和 3D 引擎按需加载；全局背景使用工业场景与轻量 CSS 动效，减少动画偏好会关闭动效。字体使用本机回退，不依赖 Google Fonts。
+- 直接由 Node 托管时，`server/src/frontend.js` 也提供静态资源 gzip 和缓存策略，位于 API 路由之后。验证：`node scripts/test-frontend-serving.mjs`。
+- 2026-10-14 线上性能优化使用线上最新源码构建；本机其他功能改动未整体覆盖到线上。服务器备份位于 `/home/ubuntu/NasBridge/.deploy-backups/performance-20261014-final/`，含前端归档和此前 Nginx 配置。
 
 ### 存储机（Storage Client）
 
@@ -304,6 +312,14 @@ storage-client/
 - `ADMIN_INIT_PASSWORD`
 
 请在生产环境务必修改默认密码。
+
+## 8. 前端主题与美术资源
+
+三个入口共用 `web/src/ui/ThemeProvider.jsx`，主题保存在 `nas_ui_theme`，支持跨标签页同步。新界面使用 `industrial.css` 的语义颜色；旧样式处于 `legacy` 层。视频播放画面保持深色，文字与按钮需要在两种主题下分别检查。
+
+九类原创美术通过内置 image_gen 生成，已压缩为 `web/src/assets/*.webp`；完整提示词与媒体设备背景编辑的结果说明位于 `web/src/assets/imagegen-prompts.json`。场景与设备分别用于登录、概览、终端、传输、归档、分享、协作及媒体模块。真实文件缩略图优先于装饰图，状态文字来自业务数据。动效遵循 `prefers-reduced-motion`。
+
+`node scripts/capture-ui.mjs` 使用模拟 API 检查深浅主题、桌面及手机页面和弹窗，同时检查横向溢出、脚本错误与通知遮挡。`node scripts/verify-ui-live.mjs` 检查线上登录加载速度、资源缓存、主题持久化和动效偏好。这些页面检查不替代真实文件传输与媒体播放验收。 本地复查先运行 `npm run build`，再在单独终端启动 `node scripts/ui-preview.mjs`。Windows 默认使用 Edge；其他平台先运行 `npx playwright install chromium`。诊断截图和发布归档写入已忽略的 `local/`，不提交运行数据或环境文件。发布时以线上最新源码为基线，并核对源码校验和，保留并行开发功能及旧哈希资源。
 
 ## 网页同步组与文件副本
 

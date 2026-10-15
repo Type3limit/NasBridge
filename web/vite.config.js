@@ -14,6 +14,7 @@ const wsProxyTarget =
 export default defineConfig({
   plugins: [react()],
   build: {
+    manifest: true,
     chunkSizeWarningLimit: 600,
     rollupOptions: {
       input: {
@@ -26,12 +27,8 @@ export default defineConfig({
           if (id.includes("hls.js")) {
             return "hls-player";
           }
-          if (id.includes("/src/components/PreviewModal")) {
-            return "preview";
-          }
-          if (id.includes("node_modules")) {
-            return "vendor";
-          }
+          // Let Rollup preserve lazy boundaries. A single vendor chunk pulls
+          // the 3D engine and media dependencies into every entry point.
           return undefined;
         }
       }
