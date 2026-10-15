@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 const objectUrlCache = new Map();
 const pendingLoadCache = new Map();
+const P2P_ASSET_RETRY_DELAYS_MS = [0, 800, 2000, 5000];
 let cleanupRegistered = false;
 
 function registerCleanup() {
@@ -102,21 +103,36 @@ export function useResolvedP2PAssetUrl({ directUrl = "", url = "", clientId = ""
       };
     }
 
-    setResolvedUrl("");
-    loadAssetFromStorage(p2p, { url, clientId, path, fileId })
-      .then((nextUrl) => {
-        if (!cancelled) {
-          setResolvedUrl(nextUrl || "");
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
+    let retryTimer = null;
+
+    const loadWithRetry = (attempt = 0) => {
+      loadAssetFromStorage(p2p, { url, clientId, path, fileId })
+        .then((nextUrl) => {
+          if (!cancelled) {
+            setResolvedUrl(nextUrl || "");
+          }
+        })
+        .catch(() => {
+          if (cancelled) {
+            return;
+          }
+          const nextDelay = P2P_ASSET_RETRY_DELAYS_MS[attempt + 1];
+          if (p2p && nextDelay !== undefined) {
+            retryTimer = window.setTimeout(() => loadWithRetry(attempt + 1), nextDelay);
+            return;
+          }
           setResolvedUrl("");
-        }
-      });
+        });
+    };
+
+    setResolvedUrl("");
+    loadWithRetry(0);
 
     return () => {
       cancelled = true;
+      if (retryTimer) {
+        window.clearTimeout(retryTimer);
+      }
     };
   }, [cacheKey, clientId, fileId, path, p2p, resolvedDirectUrl, url]);
 

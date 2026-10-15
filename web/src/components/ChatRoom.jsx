@@ -497,6 +497,7 @@ function normalizeMessage(message) {
     dayKey: String(message?.dayKey || getDayKey(new Date(message?.createdAt || Date.now()))),
     historyPath: String(message?.historyPath || getHistoryPath(getDayKey(new Date(message?.createdAt || Date.now())))),
     hostClientId: String(message?.hostClientId || ""),
+    replyToMessageId: String(message?.replyToMessageId || ""),
     attachments,
     card: message?.card && typeof message.card === "object"
       ? {
@@ -742,6 +743,41 @@ function formatPendingConfirmationText(pendingConfirmation = null) {
   }
   return lines.join("\n");
 }
+function getMessageTimestamp(message) {
+  return Date.parse(message?.createdAt || "") || 0;
+}
+
+function getMessageKindRank(message) {
+  return message?.bot?.botId || String(message?.author?.id || "").startsWith("bot:") ? 1 : 0;
+}
+
+function sortReplyMessagesAfterParents(messages = []) {
+  const ordered = [...messages];
+  for (let pass = 0; pass < ordered.length; pass += 1) {
+    let moved = false;
+    const positions = new Map(ordered.map((message, index) => [message.id, index]));
+    for (let index = 0; index < ordered.length; index += 1) {
+      const message = ordered[index];
+      const parentId = String(message?.replyToMessageId || "");
+      if (!parentId || parentId === message.id) {
+        continue;
+      }
+      const parentIndex = positions.get(parentId);
+      if (parentIndex === undefined || parentIndex < index) {
+        continue;
+      }
+      const [reply] = ordered.splice(index, 1);
+      ordered.splice(parentIndex, 0, reply);
+      moved = true;
+      break;
+    }
+    if (!moved) {
+      break;
+    }
+  }
+  return ordered;
+}
+
 function mergeMessages(existing, incoming) {
   const map = new Map();
   for (const item of existing || []) {
@@ -754,11 +790,18 @@ function mergeMessages(existing, incoming) {
       map.set(item.id, normalizeMessage(item));
     }
   }
-  return [...map.values()].sort((left, right) => {
-    const leftTs = Date.parse(left.createdAt) || 0;
-    const rightTs = Date.parse(right.createdAt) || 0;
-    return leftTs - rightTs;
+  const sorted = [...map.values()].sort((left, right) => {
+    const timeDiff = getMessageTimestamp(left) - getMessageTimestamp(right);
+    if (timeDiff !== 0) {
+      return timeDiff;
+    }
+    const kindDiff = getMessageKindRank(left) - getMessageKindRank(right);
+    if (kindDiff !== 0) {
+      return kindDiff;
+    }
+    return String(left.id || "").localeCompare(String(right.id || ""));
   });
+  return sortReplyMessagesAfterParents(sorted);
 }
 
 function parseHistoryText(text) {

@@ -189,6 +189,39 @@ async function tryShareDownloadedFile(blob, fileName, mimeType = "application/oc
   }
 }
 
+
+async function blobToJpegDataUrl(blob, maxEdge = 1280, quality = 0.82) {
+  if (!blob) return null;
+  if (blob.type === "image/jpeg" && blob.size <= 1.4 * 1024 * 1024) {
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = reject;
+      el.src = objectUrl;
+    });
+    const scale = Math.min(1, maxEdge / Math.max(img.width || 1, img.height || 1));
+    const w = Math.max(1, Math.round((img.width || 1) * scale));
+    const h = Math.max(1, Math.round((img.height || 1) * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0, w, h);
+    return canvas.toDataURL("image/jpeg", quality);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 export default function SharePage() {
   const [loading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState("");
@@ -217,6 +250,7 @@ export default function SharePage() {
   const previewSessionIdRef = useRef(0);
   const previewModeRef = useRef("");
   const previewFirstFrameRef = useRef(false);
+  const ogUploadedRef = useRef(false);
   const p2p = useMemo(() => {
     if (!shareToken) {
       return null;
@@ -580,6 +614,22 @@ export default function SharePage() {
               if (prev) URL.revokeObjectURL(prev);
               return objectUrl;
             });
+            // Populate public OG JPEG so messengers can unfurl (shareToken-capable route).
+            if (!ogUploadedRef.current && share?.id && shareToken) {
+              try {
+                const dataUrl = await blobToJpegDataUrl(result.blob);
+                if (dataUrl) {
+                  await apiRequest(`/api/share/${encodeURIComponent(share.id)}/og-image`, {
+                    method: "POST",
+                    token: shareToken,
+                    body: { dataUrl }
+                  });
+                  ogUploadedRef.current = true;
+                }
+              } catch {
+                // Fail soft — preview still works; crawlers get default.jpg
+              }
+            }
           }
         } catch { }
         if (!disposed) setThumbLoading(false);
@@ -594,7 +644,7 @@ export default function SharePage() {
     return () => {
       disposed = true;
     };
-  }, [file, shareToken, p2p]);
+  }, [file, share, shareToken, p2p]);
 
   if (loading) {
     return (

@@ -110,6 +110,14 @@ function sanitizePathSegment(value = "") {
     .replace(/^-|-$/g, "") || "asset";
 }
 
+function buildAvatarUploadPath(userId = "", file) {
+  const originalName = String(file?.name || "avatar").trim() || "avatar";
+  const extMatch = /\.([a-zA-Z0-9]+)$/.exec(originalName);
+  const ext = extMatch ? `.${extMatch[1].toLowerCase()}` : "";
+  const baseName = ext ? originalName.slice(0, -ext.length) : originalName;
+  return `${PROFILE_AVATAR_DIR_NAME}/${sanitizePathSegment(userId)}/${Date.now()}-${sanitizePathSegment(baseName || "avatar")}${ext}`;
+}
+
 function getThumbKey(file) {
   return `${file.clientId}|${file.path}|${file.size}|${file.mimeType || ""}`;
 }
@@ -1392,7 +1400,7 @@ export default function App() {
                     className="iconActionButton shareManagerIconButton"
                     title="复制分享链接"
                     aria-label="复制分享链接"
-                    onClick={() => copyShareUrl(share.shareUrl)}
+                    onClick={() => copyShareUrl(share.shareUrl, getShareFileName(share))}
                   >
                     <CopyRegular />
                   </button>
@@ -2806,12 +2814,21 @@ export default function App() {
     setShareHistoryOpen(false);
   }
 
-  async function copyShareUrl(shareUrl) {
-    const copied = await copyText(shareUrl);
+  function buildShareClipboardText(shareUrl, title = "") {
+    const url = String(shareUrl || "").trim();
+    const name = String(title || "").trim();
+    if (!url) return "";
+    // 标题 + 换行 + 链接：微信/QQ/飞书等更容易识别链接并拉预览卡片
+    return name ? `${name}\n${url}` : url;
+  }
+
+  async function copyShareUrl(shareUrl, title = "") {
+    const text = buildShareClipboardText(shareUrl, title);
+    const copied = await copyText(text);
     if (copied) {
-      setMessage("分享链接已复制到剪贴板", "success");
+      setMessage("已复制标题和分享链接", "success");
     } else {
-      setMessage(`分享链接: ${shareUrl}`);
+      setMessage(text || `分享链接: ${shareUrl}`);
     }
   }
 
@@ -2847,6 +2864,110 @@ export default function App() {
     }
   }
 
+
+  async function blobOrUrlToJpegDataUrl(source, maxEdge = 1280, quality = 0.82) {
+    if (!source) return null;
+    let blob;
+    if (typeof source === "string") {
+      if (source.startsWith("data:image/jpeg")) {
+        return source;
+      }
+      if (source.startsWith("data:")) {
+        const res = await fetch(source);
+        blob = await res.blob();
+      } else if (source.startsWith("blob:")) {
+        const res = await fetch(source);
+        blob = await res.blob();
+      } else {
+        return null;
+      }
+    } else if (source instanceof Blob) {
+      blob = source;
+    } else {
+      return null;
+    }
+    if (blob.type === "image/jpeg" && blob.size <= 1.4 * 1024 * 1024) {
+      return blobToDataUrl(blob);
+    }
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+      const img = await new Promise((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = reject;
+        el.src = objectUrl;
+      });
+      const scale = Math.min(1, maxEdge / Math.max(img.width || 1, img.height || 1));
+      const w = Math.max(1, Math.round((img.width || 1) * scale));
+      const h = Math.max(1, Math.round((img.height || 1) * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, w, h);
+      return canvas.toDataURL("image/jpeg", quality);
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+
+  async function resolveShareOgDataUrl(file) {
+    if (!file) return null;
+    const thumbKey = getThumbKey(file);
+    const mapped = thumbMap[thumbKey]?.url || thumbnailCache.current[thumbKey]?.dataUrl || "";
+    if (mapped) {
+      try {
+        return await blobOrUrlToJpegDataUrl(mapped);
+      } catch {
+      }
+    }
+    try {
+      await ensureThumbnail(file);
+    } catch {
+    }
+    const after = thumbMap[thumbKey]?.url || thumbnailCache.current[thumbKey]?.dataUrl || "";
+    if (after) {
+      try {
+        return await blobOrUrlToJpegDataUrl(after);
+      } catch {
+      }
+    }
+    const isOnline = clients.find((item) => item.id === file.clientId)?.status === "online";
+    if (!p2p || !isOnline) return null;
+    try {
+      const result = await p2p.thumbnailFile(file.clientId, file.path);
+      if (result?.blob) {
+        return await blobOrUrlToJpegDataUrl(result.blob);
+      }
+    } catch {
+    }
+    return null;
+  }
+
+  async function uploadShareOgImage(shareId, dataUrl, authToken = token) {
+    if (!shareId || !dataUrl) return false;
+    try {
+      await apiRequest(`/api/shares/${encodeURIComponent(shareId)}/og-image`, {
+        method: "POST",
+        token: authToken,
+        body: { dataUrl }
+      });
+      return true;
+    } catch {
+      try {
+        await apiRequest(`/api/share/${encodeURIComponent(shareId)}/og-image`, {
+          method: "POST",
+          token: authToken,
+          body: { dataUrl }
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
+
+
   async function shareFile(file = shareTarget) {
     if (!file || shareLoading) return;
     setShareLoading(true);
@@ -2861,8 +2982,16 @@ export default function App() {
       });
       if (share?.id) {
         setShares((prev) => [share, ...prev.filter((item) => item.id !== share.id)]);
+        try {
+          const dataUrl = await resolveShareOgDataUrl(file);
+          if (dataUrl) {
+            await uploadShareOgImage(share.id, dataUrl, token);
+          }
+        } catch {
+          // Fail soft: link still works; OG falls back to default.jpg
+        }
       }
-      await copyShareUrl(shareUrl);
+      await copyShareUrl(shareUrl, file?.name || share?.fileName || share?.file?.name || "");
     } catch (error) {
       setMessage(`生成分享链接失败: ${error.message}`);
     } finally {
@@ -3827,15 +3956,14 @@ export default function App() {
         if (!p2p) {
           throw new Error("当前 P2P 通道尚未就绪，无法上传头像");
         }
-        const targetClientId = uploadClientId || clients.find((item) => item.status === "online")?.id || "";
+        const onlineClients = clients.filter((item) => item.status === "online");
+        const targetClientId = onlineClients.some((item) => item.id === uploadClientId)
+          ? uploadClientId
+          : onlineClients[0]?.id || "";
         if (!targetClientId) {
           throw new Error("没有可用的在线存储终端，无法上传头像");
         }
-        const ext = (() => {
-          const matched = /\.([a-zA-Z0-9]+)$/.exec(draft.avatarFile.name || "");
-          return matched ? `.${matched[1].toLowerCase()}` : "";
-        })();
-        const avatarRelativePath = `${PROFILE_AVATAR_DIR_NAME}/${sanitizePathSegment(user.id)}/${Date.now()}-${sanitizePathSegment(draft.avatarFile.name || "avatar")}${ext}`;
+        const avatarRelativePath = buildAvatarUploadPath(user.id, draft.avatarFile);
         await p2p.uploadFile(targetClientId, avatarRelativePath, draft.avatarFile, {
           uploadName: draft.avatarFile.name || "avatar"
         });
@@ -4272,7 +4400,7 @@ export default function App() {
                         </div>
                         <div className="shareHistoryActions">
                           <Badge appearance="outline" color={getShareStatusColor(share.status)}>{getShareStatusLabel(share.status)}</Badge>
-                          <Button size="small" className="dialogActionButton" icon={<CopyRegular />} onClick={() => copyShareUrl(share.shareUrl)}>复制</Button>
+                          <Button size="small" className="dialogActionButton" icon={<CopyRegular />} onClick={() => copyShareUrl(share.shareUrl, getShareFileName(share))}>复制</Button>
                           <Button size="small" className="dialogActionButton" icon={<DismissRegular />} disabled={share.status !== "active"} onClick={() => revokeShare(share.id)}>撤销</Button>
                           <Button size="small" className="dialogActionButton dangerButton" icon={<DeleteRegular />} onClick={() => deleteShare(share.id)}>删除</Button>
                         </div>
