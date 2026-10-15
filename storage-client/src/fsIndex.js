@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import mime from "mime-types";
+import { getContentHash } from './contentHash.js';
 
 function toIsoStringIfValid(value) {
   if (!value) {
@@ -86,6 +87,7 @@ export async function scanFiles(rootDir) {
           path: relative,
           name: entry.name,
           size: stat.size,
+          ...(process.env.CONTENT_HASH_ENABLED === '1' ? { contentHash: await getContentHash(absolute, stat) } : {}),
           createdAt: resolveCreatedAt(stat),
           updatedAt: stat.mtime.toISOString(),
           mimeType: mime.lookup(entry.name) || "application/octet-stream"

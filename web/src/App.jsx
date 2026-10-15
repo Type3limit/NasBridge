@@ -1,4 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { groupFileReplicas, findReplicas, selectReplica } from './replicas.js';
+import SyncGroupsPanel from './components/SyncGroupsPanel.jsx';
 import {
   Badge,
   Button,
@@ -891,7 +893,7 @@ export default function App() {
       }
       return true;
     });
-    return sortFiles(filtered, sortBy);
+    return groupFileReplicas(sortFiles(filtered, sortBy));
   }, [onlineFiles, columnFilter, typeFilter, tagFilter, keyword, sortBy]);
 
   const filteredOnlineDirectories = useMemo(() => {
@@ -1515,6 +1517,7 @@ export default function App() {
             </div>
           </div>
           <div className="adminList workspaceList">
+            <SyncGroupsPanel token={token} clients={clients} />
             {clients.map((item) => (
               <div key={item.id} className="simpleRow withActions">
                 <div>
@@ -1851,7 +1854,7 @@ export default function App() {
                         </div>
                       </VideoHoverPreview>
                       <div className="fileMeta">
-                        <div className="fileName">{entry.file.name}</div>
+                        <div className="fileName" title={entry.file.name} style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.file.name}</span>{entry.file.replicas?.length > 1 && <Badge style={{ flexShrink: 0 }} title={entry.file.replicas.map(f => getClientDisplayName(f.clientId)).join('、')}>{entry.file.replicas.length} 个副本</Badge>}</div>
                         <div className="fileSub">
                           {entry.file.path} · {formatBytes(entry.file.size)} · {getClientDisplayName(entry.file.clientId)}
                         </div>
@@ -1921,7 +1924,7 @@ export default function App() {
                         </div>
                       )}
                     </VideoHoverPreview>
-                    <div className="gridName" title={entry.file.name}>{entry.file.name}</div>
+                    <div className="gridName" title={entry.file.name} style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.file.name}</span>{entry.file.replicas?.length > 1 && <Badge style={{ flexShrink: 0 }} title={entry.file.replicas.map(f => getClientDisplayName(f.clientId)).join('、')}>{entry.file.replicas.length} 个副本</Badge>}</div>
                     <Caption1 className="gridMetaLine">{getClientDisplayName(entry.file.clientId)} · {formatBytes(entry.file.size)}</Caption1>
                     <Caption1 className="gridMetaLine">{columnMap.get(entry.file.columnId) || "未分类"} · {formatRelativeTime(getFileCreatedAt(entry.file))}</Caption1>
                     <div className="gridCardFooter">
@@ -3049,7 +3052,7 @@ export default function App() {
   async function download(file) {
     if (!p2p || !ensureClientOnline(file.clientId)) return;
     if (!(await ensureSignalingReady("download"))) return;
-    const jobId = getDownloadJobId(file);
+    let jobId = getDownloadJobId(file);
     const onStart = ({ requestId, channelName }) => {
       upsertDownloadJob(file, {
         requestId,
@@ -3079,6 +3082,8 @@ export default function App() {
       if (preferDesktopDirectSave) {
         try {
           const handle = await window.showSaveFilePicker({ suggestedName: file.name });
+          file = await selectReplica(p2p, file, onlineFiles, 'download');
+          jobId = getDownloadJobId(file);
           const writable = await handle.createWritable();
           upsertDownloadJob(file, { mode: "direct-save", progress: 0, transferredBytes: 0, size: Number(file.size || 0) });
           setMessage("正在建立P2P连接并直接写入文件...");
@@ -3096,6 +3101,8 @@ export default function App() {
         }
       }
 
+      file = await selectReplica(p2p, file, onlineFiles, 'download');
+      jobId = getDownloadJobId(file);
       upsertDownloadJob(file, { mode: mobileBrowser ? "mobile" : "browser", progress: 0, transferredBytes: 0, size: Number(file.size || 0) });
       setMessage("正在建立P2P连接并下载...");
   const result = await p2p.downloadFile(file.clientId, file.path, { onStart, onMeta, onProgress });
@@ -3140,6 +3147,11 @@ export default function App() {
     if (!p2p || !ensureClientOnline(file.clientId)) return;
     if (!(await ensureSignalingReady("preview"))) return;
     const sessionId = ++previewSessionIdRef.current;
+
+    try {
+      file = await selectReplica(p2p, file, onlineFiles, 'preview', options.excludedReplicaIds || []);
+      if (previewSessionIdRef.current !== sessionId) return;
+    } catch (error) { if (previewSessionIdRef.current === sessionId) setMessage(error.message); return; }
 
     if (previewClientId && previewClientId !== file.clientId) {
       p2p.cancelClientChannel(previewClientId, "preview");
@@ -3449,6 +3461,12 @@ export default function App() {
     } catch (error) {
       if (previewSessionIdRef.current !== sessionId) return;
       if (error?.cancelled || error?.intentionalClose) return;
+      const excluded = [...(options.excludedReplicaIds || []), file.clientId];
+      if (findReplicas(file, onlineFiles).some(candidate => !excluded.includes(candidate.clientId))) {
+        setMessage('当前副本预览失败，正在切换其他节点...');
+        await preview(file, { ...options, excludedReplicaIds: excluded });
+        return;
+      }
       setMessage(`预览失败: ${error.message}`);
       setPreviewOpen(false);
     } finally {

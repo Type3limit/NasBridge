@@ -304,3 +304,19 @@ storage-client/
 - `ADMIN_INIT_PASSWORD`
 
 请在生产环境务必修改默认密码。
+
+## 网页同步组与文件副本
+
+管理员在「终端管理 → 同步组」关联 2–8 个已升级终端及各自子目录，即自动双向同步新增、修改和删除；可以立即触发、移除成员或解散同步组。协调端需要在线，默认每 60 秒检查一次。取消关联保留文件；在线通知撤销，断线授权最多 30 秒后失效。
+
+所有参与端配置 `CONTENT_HASH_ENABLED=1`、`SYNC_MODE=web-groups`；Windows 旧安装可使用 `scripts/windows-sync-upgrade/Check.cmd` 与 `Update.cmd`，无需 Git，更新前停止客户端。新安装直接使用当前源码和示例配置。
+
+首次关联或改变组成员/目录后合并现有内容，不追溯断开期间删除。文件 SHA256 校验、并发修改检查和冲突副本保护内容；历史版本与删除回收位于存储根目录 `.nas-bot/peer-sync-v2/{versions,trash}`，JSON 中记录原路径。每个目录最多 10000 文件，当前不复制空目录、不提供块级差分或断点续传。禁止重叠同步范围与符号链接。WebRTC 支持直连及已配置的 TURN；主文件列表按内容哈希合并同目录副本，预览/下载使用节点测速选择。
+
+验证（Node.js 24）：
+```sh
+node --test --test-force-exit storage-client/test/bidirectionalSync.test.js storage-client/test/syncGroups.test.js storage-client/test/peerSync.test.js storage-client/test/contentHash.test.js server/test/syncGroups.test.js web/test/replicas.test.js
+node --test test/windows-sync-upgrade.test.cjs
+npm run build -w web
+```
+Windows 原生 wrtc 在自然退出阶段可能崩溃，测试用 `--test-force-exit` 在断言完成后退出。更新器测试使用 Git 中的原始安装快照，需保留完整仓库历史。

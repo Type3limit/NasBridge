@@ -14,6 +14,9 @@ import { createBotJobMessageId } from "./bot/context.js";
 import { scanFiles, safeJoin } from "./fsIndex.js";
 import { getEffectiveMultimodalModel, getEffectiveTextModel, readAiModelSettings } from "./bot/plugins/ai-chat/services/modelSettings.js";
 import { parseModelRef } from "./bot/tools/llmClient.js";
+import { createPeerSync } from "./peerSync.js";
+import { createSyncReceiver } from './syncReceiver.js';
+import { createSyncGroupManager } from './syncGroupManager.js';
 
 const wrtc = wrtcPkg?.default ?? wrtcPkg;
 const { RTCPeerConnection, RTCSessionDescription, RTCIceCandidate } = wrtc;
@@ -218,6 +221,15 @@ const state = {
 
 let botRuntime = null;
 let globalMusicPlayer = null;
+const syncReceiver = createSyncReceiver({ storageRoot, syncFiles });
+const syncGroupManager = createSyncGroupManager({ storageRoot, api, clientId: () => state.clientId, iceServers, syncFiles, log: logWarn, sendSignal: (targetId, payload) => {
+  if (state.ws?.readyState !== WebSocket.OPEN) throw new Error('Signaling is offline');
+  state.ws.send(JSON.stringify({ type: 'signal', targetId, payload }));
+} });
+const peerSync = createPeerSync({ storageRoot, api, iceServers, syncFiles, sendSignal: (targetId, payload) => {
+  if (state.ws?.readyState !== WebSocket.OPEN) throw new Error('Signaling is offline');
+  state.ws.send(JSON.stringify({ type: 'signal', targetId, payload }));
+} });
 const botJobStatusCache = new Map();
 const botJobTerminalLogCache = new Map();
 
@@ -2949,7 +2961,7 @@ async function backfillMissingThumbnails(reason = "startup") {
   let candidateCount = 0;
   let failedCount = 0;
   try {
-    const files = await scanFiles(storageRoot);
+    const { files } = await scanFiles(storageRoot);
     const candidates = files.filter((file) => shouldGenerateThumbnailForMime(file.mimeType));
     candidateCount = candidates.length;
     logInfo("[thumbnail-backfill] begin", JSON.stringify({ reason, candidates: candidateCount }));
@@ -3464,6 +3476,8 @@ function buildPc(remotePeerId) {
 }
 
 function wireDataChannel(channel, remotePeerId = "unknown-peer") {
+  if (process.env.SYNC_MODE === 'web-groups' && syncGroupManager.attach(channel, remotePeerId)) return;
+  if (syncReceiver.attach(channel, remotePeerId)) return;
   channel.binaryType = "arraybuffer";
   logInfo("[dc] wiring channel", channel.label, `readyState=${channel.readyState}`);
 
@@ -3647,6 +3661,16 @@ function wireDataChannel(channel, remotePeerId = "unknown-peer") {
 
     if (message.type === "ping") {
       safeSend(JSON.stringify({ type: "pong", ts: message.ts }), "pong");
+      return;
+    }
+
+    if (message.type === 'probe-transfer') {
+      const chunk = Buffer.alloc(64 * 1024);
+      for (let i = 0; i < 4; i++) {
+        await waitForDrain('probe');
+        if (!safeSend(chunk, 'probe')) return;
+      }
+      safeSend(JSON.stringify({ type: 'probe-end', requestId: message.requestId, bytes: 256 * 1024 }), 'probe-end');
       return;
     }
 
@@ -4463,7 +4487,10 @@ async function connectWs() {
     log("ws-message", `bytes=${raw.length || raw.toString().length}`);
     try {
       const message = JSON.parse(raw.toString());
+      if (message.type === 'sync-groups-changed' && process.env.SYNC_MODE === 'web-groups') { syncGroupManager.changed(); return; }
       if (message.type === "signal") {
+        if (process.env.SYNC_MODE === 'web-groups' && syncGroupManager.handleSignal(message.fromId, message.payload)) return;
+        if (peerSync?.handleSignal(message.fromId, message.payload)) return;
         await handleSignal(message.fromId, message.payload);
       }
     } catch (error) {
@@ -4524,6 +4551,8 @@ async function main() {
   await runWithStartupRetry(() => ensureGlobalMusicPlayer(), "music-player-init");
   await runWithStartupRetry(() => syncFiles(), "filesync-init");
   await runWithStartupRetry(() => connectWs(), "ws-connect");
+  await peerSync?.start();
+  if (process.env.SYNC_MODE === 'web-groups') await syncGroupManager.start();
   await cleanupExpiredCacheEntries();
   scheduleThumbnailBackfill("startup");
   await emitObservabilitySnapshot("startup", { clientId: state.clientId || "" });

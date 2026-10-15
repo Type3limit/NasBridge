@@ -1,4 +1,5 @@
 import { toWsUrl } from "./api";
+import { samplePeerNode } from './replicas.js';
 
 const FILE_TRANSFER_TIMEOUT_MS = 300_000;
 const PEER_IDLE_CLOSE_MS = 60_000;
@@ -2980,6 +2981,10 @@ export class P2PBridgePool {
 
   downloadFile(clientId, relativePath, options = {}) {
     return this.getBridge("download").downloadFile(clientId, relativePath, options);
+  }
+
+  sampleNode(clientId, role = 'preview') {
+    return samplePeerNode(this.getBridge(role), clientId);
   }
 
   createFolder(clientId, relativePath) {

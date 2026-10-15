@@ -181,6 +181,10 @@ export function initWsHub(server) {
   });
 
   return {
+    notifySyncClients(clientIds, payload) {
+      for (const id of clientIds) sendToSocket(clientSockets.get(id), payload);
+      broadcastToAppUsers(payload);
+    },
     broadcastAdminClientStatus: broadcastToAdmins,
     broadcastToAppUsers,
     broadcastToChatUsers

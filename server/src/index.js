@@ -66,6 +66,7 @@ import {
 } from "./db.js";
 import { signUserToken, signClientToken, signShareToken } from "./auth.js";
 import { requireAuth, requireRole } from "./middleware.js";
+import { installSyncGroupRoutes } from './syncGroups.js';
 import { initWsHub } from "./wsHub.js";
 import { listChatMessagesByDay, persistChatMessage } from "./chatDb.js";
 import { sanitizeUserChatPayload } from "./chatMessages.js";
@@ -299,6 +300,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 app.use(cors({ origin: process.env.WEB_ORIGIN?.split(",") ?? ["http://localhost:5173"], credentials: true }));
 app.use(express.json({ limit: "10mb" }));
+installSyncGroupRoutes(app, { requireAuth, requireRole, clients: listClients, notify: (ids, payload) => wsHub.notifySyncClients(ids, payload) });
 app.use((req, res, next) => {
   const reqId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const start = Date.now();
@@ -768,6 +770,14 @@ app.get("/api/clients", requireAuth, (_, res) => {
   return res.json({ clients });
 });
 
+app.get('/api/client/sync-manifest', requireAuth, requireRole('client'), (req, res) => {
+  const clientId = String(req.query.clientId || '');
+  if (!listClients().some(client => client.id === clientId && client.status === 'online')) {
+    return res.status(404).json({ message: 'source client is not online' });
+  }
+  return res.json({ files: listFiles().filter(file => file.clientId === clientId), directories: listDirectories().filter(directory => directory.clientId === clientId) });
+});
+
 app.post("/api/favorites/:fileId", requireAuth, (req, res) => {
   const favorite = toggleFavorite({ userId: req.auth.sub, fileId: req.params.fileId });
   return res.json({ favorite });
@@ -994,6 +1004,7 @@ app.post("/api/client/filesync", requireAuth, requireRole("client"), (req, res) 
       path: item.path,
       name: item.name ?? path.basename(item.path),
       size: Number(item.size ?? 0),
+      contentHash: /^[a-f0-9]{64}$/i.test(String(item.contentHash || '')) ? String(item.contentHash).toLowerCase() : '',
       mimeType: item.mimeType ?? "application/octet-stream",
       createdAt: item.createdAt ?? item.updatedAt ?? now,
       updatedAt: item.updatedAt ?? item.createdAt ?? now
