@@ -430,6 +430,15 @@ html, body { margin: 0; padding: 0; width: 100%; box-sizing: border-box; }
 .chatSignalPanel h3 { font-size: 18px; margin: 0 0 4px; font-weight: 800; }.chatSignalPanel .industrialEyebrow { font-size: 8px; }
 .chatSignalReadout { display: flex; flex-direction: column; gap: 8px; padding: 12px 0; border-top: 1px solid var(--stroke); }.chatSignalReadout span { font-size: 10px; color: var(--text-faint); }.chatSignalReadout strong { font: 750 22px Consolas, "Microsoft YaHei", monospace; color: var(--text); }
 .chatSignalHost { display: flex; flex-direction: column; gap: 10px; font-size: 10px; line-height: 1.8; color: var(--text-soft); }.chatSignalHost .monoLabel { font-size: 8px; }
+/* Chat node selectors: storage node in the header, bot node in the composer. */
+.chatNodeSelect { display: inline-flex; align-items: center; height: 28px; border: 1px solid var(--stroke); background: var(--surface); color: var(--text); font-size: 12px; }
+.chatNodeSelect .monoLabel { align-self: stretch; display: flex; align-items: center; padding: 0 7px; background: var(--accent-solid); color: var(--on-accent); font: 700 9px Consolas, monospace; letter-spacing: 1px; }
+.chatNodeSelect select { height: 100%; max-width: 180px; border: 0; padding: 0 8px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.chatNodeSelect select:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.chatNodeSelect select option { background: var(--surface); color: var(--text); }
+.chatNodeSelect.compact { height: 32px; }
+.chatNodeSelect.compact .monoLabel { background: transparent; color: var(--accent); border-right: 1px solid var(--stroke); }
+.chatNodeSelect.compact select { max-width: 132px; }
 .chatSignalPanel .fieldArtwork { height: 33%; opacity: .6; }.chatSignalPanel .fieldArtType, .chatSignalPanel .fieldArtCode { display: none; }.chatSignalPanel .fieldAssembly { height: 90%; max-width: 85%; right: 5%; }
 .lrHero { background: linear-gradient(90deg, var(--surface), transparent), url("./assets/machine-hall.webp") center / cover; }.lrHeroOverlay { opacity: .85; }.lrHeroTitle { max-width: 650px; font-size: clamp(28px, 4vw, 52px); font-weight: 850; }.lrHeroContent { max-width: 720px; padding-left: 48px; }
 .lrContentToggle, .lrContentToggleBtn, .lrSettingsMenu { border-radius: 1px; }.lrContentToggleBtn.active { color: var(--on-accent); background: var(--accent-solid); }

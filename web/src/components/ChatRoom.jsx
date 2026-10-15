@@ -9,6 +9,7 @@ import { useResolvedP2PAssetUrl } from "./p2pAsset";
 import { InlineVideoPlayer } from "./VideoViewportSurface";
 import { apiRequest, toWsUrl } from "../api";
 import { EquipmentVisual } from "../ui/OperationsDisplay";
+import { contentIdentity } from "../replicas.js";
 
 const AiStarMapCard = lazy(() => import("./AiStarMapCard").then(module => ({ default: module.AiStarMapCard })));
 
@@ -898,6 +899,45 @@ function buildForwardBlock(messages = []) {
   ].join("\n");
 }
 
+const CHAT_STORAGE_NODE_KEY = "nas_chat_storage_node";
+const CHAT_BOT_NODE_KEY = "nas_chat_bot_node";
+
+function readStoredNodeChoice(key) {
+  try {
+    return localStorage.getItem(key) || "";
+  } catch {
+    return "";
+  }
+}
+
+function storeNodeChoice(key, value) {
+  try {
+    if (value) {
+      localStorage.setItem(key, value);
+    } else {
+      localStorage.removeItem(key);
+    }
+  } catch {
+  }
+}
+
+// Chat attachments are mirrored to every node at the same path, so one whose node
+// is offline can be read from any online node. Library files fall back to an
+// online copy with the same content.
+function resolveAttachmentNode(attachment, context) {
+  if (!attachment?.clientId || !attachment.path || context.onlineIds.has(attachment.clientId)) {
+    return attachment;
+  }
+  if (String(attachment.path).startsWith(`${CHAT_ASSET_PREFIX}/`)) {
+    const clientId = context.onlineIds.has(context.preferredId) ? context.preferredId : [...context.onlineIds][0];
+    return { ...attachment, clientId, originClientId: attachment.clientId };
+  }
+  const { filesById, filesByIdentity } = context.fileIndex();
+  const identity = contentIdentity(filesById.get(attachment.id) || attachment);
+  const copy = identity ? (filesByIdentity.get(identity) || []).find((file) => context.onlineIds.has(file.clientId)) : null;
+  return copy ? { ...attachment, clientId: copy.clientId, path: copy.path, originClientId: attachment.clientId } : attachment;
+}
+
 function useAttachmentThumbnail({ attachment, p2p, enabled = true }) {
   const [thumbnailUrl, setThumbnailUrl] = useState("");
 
@@ -1064,10 +1104,54 @@ export default function ChatRoom({
     }),
     [clients]
   );
-  const hostClient = onlineClients[0] || null;
+  const [preferredNodeId, setPreferredNodeId] = useState(() => readStoredNodeChoice(CHAT_STORAGE_NODE_KEY));
+  const [preferredBotNodeId, setPreferredBotNodeId] = useState(() => readStoredNodeChoice(CHAT_BOT_NODE_KEY));
+  // The chosen node falls back to the oldest online node while it is offline.
+  const hostClient = onlineClients.find((item) => item.id === preferredNodeId) || onlineClients[0] || null;
   const hostClientId = hostClient?.id || "";
+  const botClientId = onlineClients.some((item) => item.id === preferredBotNodeId) ? preferredBotNodeId : hostClientId;
+  const chooseStorageNode = (clientId) => {
+    setPreferredNodeId(clientId);
+    storeNodeChoice(CHAT_STORAGE_NODE_KEY, clientId);
+  };
+  const chooseBotNode = (clientId) => {
+    setPreferredBotNodeId(clientId);
+    storeNodeChoice(CHAT_BOT_NODE_KEY, clientId);
+  };
   const todayKey = useMemo(() => getDayKey(), []);
-  const [messages, setMessages] = useState([]);
+  const [storedMessages, setMessages] = useState([]);
+  const onlineNodeKey = onlineClients.map((item) => item.id).join(",");
+  const messages = useMemo(() => {
+    const onlineIds = new Set(onlineNodeKey ? onlineNodeKey.split(",") : []);
+    if (!onlineIds.size) {
+      return storedMessages;
+    }
+    let index = null;
+    const context = {
+      onlineIds,
+      preferredId: hostClientId,
+      fileIndex: () => {
+        if (!index) {
+          index = { filesById: new Map(), filesByIdentity: new Map() };
+          for (const file of nasFiles || []) {
+            index.filesById.set(file.id, file);
+            const identity = contentIdentity(file);
+            if (identity) {
+              index.filesByIdentity.set(identity, [...(index.filesByIdentity.get(identity) || []), file]);
+            }
+          }
+        }
+        return index;
+      }
+    };
+    return storedMessages.map((message) => {
+      if (!message?.attachments?.length || message.attachments.every((item) => !item?.clientId || onlineIds.has(item.clientId))) {
+        return message;
+      }
+      const attachments = message.attachments.map((item) => resolveAttachmentNode(item, context));
+      return attachments.some((item, i) => item !== message.attachments[i]) ? { ...message, attachments } : message;
+    });
+  }, [storedMessages, onlineNodeKey, hostClientId, nasFiles]);
   const [chatConnectionState, setChatConnectionState] = useState(() => (authToken ? "connecting" : "offline"));
   const [loadedDays, setLoadedDays] = useState([]);
   const [nextOlderDayKey, setNextOlderDayKey] = useState(shiftDayKey(todayKey, -1));
@@ -1160,7 +1244,7 @@ export default function ChatRoom({
   const botMentionCandidates = useMemo(() => buildBotMentionCandidates(botCatalog), [botCatalog]);
   const botMentionContext = useMemo(() => getBotMentionContext(draft, composerCursor), [draft, composerCursor]);
   const botMentionSuggestions = useMemo(() => {
-    if (!botMentionContext || !hostClientId) {
+    if (!botMentionContext || !botClientId) {
       return [];
     }
     const query = botMentionContext.query;
@@ -1172,7 +1256,7 @@ export default function ChatRoom({
         || item.botId.toLowerCase().includes(query)
         || item.description.toLowerCase().includes(query))
       .slice(0, 6);
-  }, [botMentionCandidates, botMentionContext, hostClientId]);
+  }, [botMentionCandidates, botMentionContext, botClientId]);
   const botMentionSessionKey = botMentionContext ? `${botMentionContext.start}:${botMentionContext.query}` : "";
   const botMentionOpen = Boolean(botMentionContext && botMentionSuggestions.length && !sending && dismissedBotMentionKey !== botMentionSessionKey);
   const selectedMessageIdSet = useMemo(() => new Set(selectedMessageIds), [selectedMessageIds]);
@@ -1529,14 +1613,14 @@ export default function ChatRoom({
   }, [authToken, todayKey]);
 
   useEffect(() => {
-    if (!p2p || !hostClientId) {
+    if (!p2p || !botClientId) {
       setBotCatalog([]);
       setLoadingBotCatalog(false);
       return;
     }
     let cancelled = false;
     setLoadingBotCatalog(true);
-    p2p.getBotCatalog(hostClientId)
+    p2p.getBotCatalog(botClientId)
       .then((result) => {
         if (!cancelled) {
           setBotCatalog(Array.isArray(result?.bots) ? result.bots : []);
@@ -1555,7 +1639,7 @@ export default function ChatRoom({
     return () => {
       cancelled = true;
     };
-  }, [hostClientId, p2p]);
+  }, [botClientId, p2p]);
 
   useEffect(() => {
     if (!authToken) {
@@ -2695,6 +2779,8 @@ export default function ChatRoom({
     const createdAt = new Date().toISOString();
     const dayKey = getDayKey(new Date(createdAt));
     const historyPath = getHistoryPath(dayKey);
+    const botInvocation = resolveBotInvocation(text);
+    const targetClientId = botInvocation?.supported ? botClientId : hostClientId;
     try {
       const attachments = [];
       let failedUploads = 0;
@@ -2704,7 +2790,7 @@ export default function ChatRoom({
           continue;
         }
         const file = asset.file;
-        if (asset.uploadedAttachment?.path && asset.uploadedAttachment.clientId === hostClientId) {
+        if (asset.uploadedAttachment?.path && asset.uploadedAttachment.clientId === targetClientId) {
           attachments.push(asset.uploadedAttachment);
           patchQueuedFile(asset.id, { status: "uploaded", progress: 100, error: "" });
           continue;
@@ -2712,7 +2798,7 @@ export default function ChatRoom({
         const relativePath = buildAttachmentPath(dayKey, currentUser.id, file.name, index);
         patchQueuedFile(asset.id, { status: "uploading", progress: 0, error: "" });
         try {
-          await p2p.uploadFile(hostClientId, relativePath, file, {
+          await p2p.uploadFile(targetClientId, relativePath, file, {
             uploadName: file.name,
             onProgress: ({ progress }) => {
               patchQueuedFile(asset.id, {
@@ -2723,12 +2809,12 @@ export default function ChatRoom({
             }
           });
           const uploadedAttachment = {
-            id: `${hostClientId}:${relativePath}`,
+            id: `${targetClientId}:${relativePath}`,
             name: file.name,
             mimeType: file.type || "application/octet-stream",
             size: file.size,
             path: relativePath,
-            clientId: hostClientId,
+            clientId: targetClientId,
             kind: String(file.type || "").startsWith("video/") ? "video" : "image"
           };
           attachments.push(uploadedAttachment);
@@ -2756,7 +2842,7 @@ export default function ChatRoom({
         createdAt,
         dayKey,
         historyPath,
-        hostClientId,
+        hostClientId: targetClientId,
         attachments,
         author: {
           id: currentUser.id,
@@ -2775,12 +2861,11 @@ export default function ChatRoom({
       const storedMessage = normalizeMessage(result?.message || message);
       setMessages((prev) => mergeMessages(prev, [storedMessage]));
 
-      const botInvocation = resolveBotInvocation(text);
       if (botInvocation) {
         if (!botInvocation.supported) {
           setMessage?.("@bili 目前支持 login/status/logout，或 bilibili 链接 / BV 号", "warning");
         } else {
-        if (!hostClientId || !p2p) {
+        if (!botClientId || !p2p) {
           setMessage?.("当前没有在线的存储终端，暂时无法调用 bot", "warning");
         } else {
         try {
@@ -2789,7 +2874,7 @@ export default function ChatRoom({
             ...(botInvocation.parsedArgs || {}),
             ...(fileRefAttachment && !(botInvocation.parsedArgs || {}).fileId ? { fileId: fileRefAttachment.id } : {})
           };
-          const invoked = await p2p.invokeBot(hostClientId, {
+          const invoked = await p2p.invokeBot(botClientId, {
             botId: botInvocation.botId,
             trigger: {
               type: "chat-mention",
@@ -2802,7 +2887,7 @@ export default function ChatRoom({
               role: currentUser.role || "user"
             },
             chat: {
-              hostClientId,
+              hostClientId: botClientId,
               dayKey,
               historyPath,
               messageId: message.id,
@@ -3221,7 +3306,16 @@ export default function ChatRoom({
             </Badge>
             <Badge appearance="outline" color={hostClientId ? "success" : "warning"}>{hostClientId ? "存储在线" : "存储离线"}</Badge>
             <Caption1>今日 {todayMessageCount} 条</Caption1>
-            <Caption1>{hostClientId ? getClientDisplayName(hostClientId) : "文字聊天可用，附件和 Bot 需等待存储终端"}</Caption1>
+            {onlineClients.length > 1 ? (
+              <label className="chatNodeSelect" title="新附件保存到这个存储节点">
+                <span className="monoLabel">NODE</span>
+                <select value={hostClientId} onChange={(event) => chooseStorageNode(event.target.value)}>
+                  {onlineClients.map((item) => <option key={item.id} value={item.id}>{getClientDisplayName(item.id)}</option>)}
+                </select>
+              </label>
+            ) : (
+              <Caption1>{hostClientId ? getClientDisplayName(hostClientId) : "文字聊天可用，附件和 Bot 需等待存储终端"}</Caption1>
+            )}
           </div>
         </div>
 
@@ -3343,7 +3437,7 @@ export default function ChatRoom({
             <div className="chatSignalReadout"><span>聊天链路</span><strong>{chatConnectionState === "connected" ? "已连接" : "重连中"}</strong></div>
             <div className="chatSignalReadout"><span>今日消息</span><strong>{String(todayMessageCount).padStart(2, "0")}</strong></div>
             <div className="chatSignalReadout"><span>工作助手</span><strong>{String(botCatalog.length).padStart(2, "0")}</strong></div>
-            <div className="chatSignalHost"><span className="monoLabel">STORAGE NODE</span><span>{hostClientId ? getClientDisplayName(hostClientId) : "等待存储节点"}</span></div>
+            <div className="chatSignalHost"><span className="monoLabel">STORAGE NODE</span><span>{hostClientId ? getClientDisplayName(hostClientId) : "等待存储节点"}</span>{botClientId && botClientId !== hostClientId ? <><span className="monoLabel">BOT NODE</span><span>{getClientDisplayName(botClientId)}</span></> : null}</div>
             <div className="chatSignalArtwork"><EquipmentVisual kind="chat"/></div>
           </aside>
         </div>
@@ -3399,13 +3493,22 @@ export default function ChatRoom({
                     onMouseLeave={scheduleCloseBotTooltip}
                     onFocus={openBotTooltip}
                     onBlur={scheduleCloseBotTooltip}
-                    disabled={!hostClientId || sending}
+                    disabled={!botClientId || sending}
                     title="查看当前存储终端支持的 bot"
                   >
                     <span className="chatComposerBotButtonLabel">Bots</span>
                     <span className="chatComposerBotButtonCount">{loadingBotCatalog ? "..." : botCatalog.length || 0}</span>
                   </Button>
                 </div>
+                {onlineClients.length > 1 ? (
+                  <label className="chatNodeSelect compact" title="执行 bot 命令的节点">
+                    <span className="monoLabel">BOT@</span>
+                    <select value={botClientId === preferredBotNodeId ? botClientId : ""} onChange={(event) => chooseBotNode(event.target.value)} disabled={sending}>
+                      <option value="">跟随存储节点</option>
+                      {onlineClients.map((item) => <option key={item.id} value={item.id}>{getClientDisplayName(item.id)}</option>)}
+                    </select>
+                  </label>
+                ) : null}
                 <div ref={filePickerTriggerRef}>
                   <Button
                     className="chatComposerIconButton"
@@ -3606,7 +3709,7 @@ export default function ChatRoom({
                 <div className="chatBotTooltipHeaderTopline">
                   <Text>可用助手</Text>
                 </div>
-                <Caption1>{loadingBotCatalog ? "正在读取当前存储终端的助手目录" : hostClientId ? `来自 ${getClientDisplayName(hostClientId)}，点击命令可直接填入输入框` : "Bot 功能依赖在线存储终端"}</Caption1>
+                <Caption1>{loadingBotCatalog ? "正在读取当前存储终端的助手目录" : botClientId ? `来自 ${getClientDisplayName(botClientId)}，点击命令可直接填入输入框` : "Bot 功能依赖在线存储终端"}</Caption1>
               </div>
             </div>
             {botCatalog.length ? (

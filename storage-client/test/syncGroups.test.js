@@ -25,13 +25,13 @@ test('web registry supports multiple nodes, scopes, immediate unlink and persist
   const f = await fixture();
   try {
     const g = f.registry.create(f.body,'admin');
-    assert.equal(f.registry.assigned('C').groups.length,1);
+    assert.equal(f.registry.assigned('C').groups.filter(g=>!g.system).length,1);
     assert.throws(() => f.registry.create(f.body,'admin'), /重复或嵌套/);
     assert.throws(() => f.registry.update(g.id,{members:[{clientId:'A',directory:'../escape'},{clientId:'B',directory:'x'}]}));
     const changed = f.registry.detach(g.id,'A');
     assert.equal(changed.coordinatorId,'B'); assert.equal(changed.revision,2);
-    assert.equal(f.registry.assigned('A').groups.length,0);
-    f.registry.detach(g.id,'C'); assert.equal(f.registry.list().groups.length,0);
+    assert.equal(f.registry.assigned('A').groups.filter(g=>!g.system).length,0);
+    f.registry.detach(g.id,'C'); assert.equal(f.registry.list().groups.filter(g=>!g.system).length,0);
     assert.ok(f.notices.length >= 3);
     assert.throws(() => f.registry.create({...f.body,members:[{clientId:'A',directory:'x'},{clientId:'unknown',directory:'x'}]},'admin'));
   } finally { await fs.rm(f.root,{recursive:true,force:true}); }

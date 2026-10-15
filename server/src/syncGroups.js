@@ -9,6 +9,11 @@ export function normalizeGroupDirectory(value) {
   return text;
 }
 const overlaps = (a, b) => a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
+// Chat attachments are mirrored across every storage node by a group the server
+// maintains itself; admins cannot edit it and user groups cannot use .nas- folders.
+export const CHAT_ATTACHMENT_GROUP_ID = '00000000-0000-4000-8000-00000000c4a7';
+const CHAT_ATTACHMENT_DIRECTORY = '.nas-chat-room/attachments';
+const isSystemGroup = group => group?.system === 'chat-attachments';
 export function createSyncGroupRegistry({ filename = path.resolve(process.cwd(), 'server/data/sync-groups.json'), clients, notify = () => {} }) {
   const reports = new Map();
   const read = () => {
@@ -45,13 +50,42 @@ export function createSyncGroupRegistry({ filename = path.resolve(process.cwd(),
     return { name: String(body.name || existing?.name || '同步组').trim().slice(0, 80), members, coordinatorId, enabled: body.enabled !== false };
   };
   const broadcast = (oldGroup, group) => notify([...new Set([...(oldGroup?.members || []), ...(group?.members || [])].map(m => m.clientId))], { type: 'sync-groups-changed' });
+  const syncChatAttachmentGroup = data => {
+    const nodes = clients().filter(c => c.status !== 'disabled')
+      .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')) || String(a.id).localeCompare(String(b.id)))
+      .slice(0, 8);
+    const index = data.groups.findIndex(isSystemGroup);
+    const old = index >= 0 ? data.groups[index] : null;
+    if (nodes.length < 2) {
+      if (old) { data.groups.splice(index, 1); write(data); broadcast(old, null); }
+      return data;
+    }
+    const members = nodes.map(c => ({ clientId: c.id, directory: CHAT_ATTACHMENT_DIRECTORY }));
+    // Keep the coordinator while it is online so the pairwise sync state survives.
+    const online = nodes.filter(c => c.status === 'online');
+    const coordinatorId = online.some(c => c.id === old?.coordinatorId) ? old.coordinatorId
+      : online[0]?.id || (members.some(m => m.clientId === old?.coordinatorId) ? old.coordinatorId : members[0].clientId);
+    if (old && old.coordinatorId === coordinatorId && old.members.map(m => m.clientId).join() === members.map(m => m.clientId).join()) return data;
+    const group = old
+      ? { ...old, members, coordinatorId, revision: old.revision + 1, runSequence: (old.runSequence || 0) + 1 }
+      : { id: CHAT_ATTACHMENT_GROUP_ID, system: 'chat-attachments', name: '聊天室附件', members, coordinatorId, enabled: true, revision: 1, runSequence: 1, createdBy: 'system', createdAt: new Date().toISOString() };
+    if (old) data.groups[index] = group; else data.groups.push(group);
+    write(data); broadcast(old, group);
+    return data;
+  };
+  const userGroup = (data, id) => {
+    const group = data.groups.find(g => g.id === id);
+    if (!group) throw new Error('同步组不存在');
+    if (isSystemGroup(group)) throw new Error('聊天室附件同步组由服务器自动维护');
+    return group;
+  };
   return {
     list() {
-      return { groups: read().groups.map(g => ({ ...g, reports: Object.fromEntries(g.members.map(m => [m.clientId, capability(m.clientId)?.groups?.[g.id] || null])) })), capabilities: Object.fromEntries(clients().map(c => [c.id, capability(c.id) ? { protocol: capability(c.id).protocol, seenAt: new Date(capability(c.id).time).toISOString() } : null])) };
+      return { groups: syncChatAttachmentGroup(read()).groups.map(g => ({ ...g, reports: Object.fromEntries(g.members.map(m => [m.clientId, capability(m.clientId)?.groups?.[g.id] || null])) })), capabilities: Object.fromEntries(clients().map(c => [c.id, capability(c.id) ? { protocol: capability(c.id).protocol, seenAt: new Date(capability(c.id).time).toISOString() } : null])) };
     },
     assigned(clientId) {
       const online = new Map(clients().map(c => [c.id, c.status !== 'disabled']));
-      return { leaseMs: 30000, groups: read().groups.filter(g => g.enabled && g.members.some(m => m.clientId === clientId) && g.members.every(m => online.get(m.clientId))) };
+      return { leaseMs: 30000, groups: syncChatAttachmentGroup(read()).groups.filter(g => g.enabled && g.members.some(m => m.clientId === clientId) && g.members.every(m => online.get(m.clientId))) };
     },
     report(clientId, body) {
       const assigned = new Set(read().groups.filter(g => g.members.some(m => m.clientId === clientId)).map(g => g.id));
@@ -65,25 +99,21 @@ export function createSyncGroupRegistry({ filename = path.resolve(process.cwd(),
     },
     create(body, actor) {
       const data = read();
-      if (data.groups.length >= 24) throw new Error('最多支持 24 个同步组');
+      if (data.groups.filter(g => !isSystemGroup(g)).length >= 24) throw new Error('最多支持 24 个同步组');
       const group = { id: crypto.randomUUID(), ...validate(body, null, data.groups), revision: 1, runSequence: 1, createdBy: actor, createdAt: new Date().toISOString() };
       data.groups.push(group); write(data); broadcast(null, group); return group;
     },
     update(id, body) {
-      const data = read(), index = data.groups.findIndex(g => g.id === id);
-      if (index < 0) throw new Error('同步组不存在');
-      const old = data.groups[index];
+      const data = read(), old = userGroup(data, id), index = data.groups.indexOf(old);
       const group = { ...old, ...validate({ ...old, ...body }, old, data.groups.filter(g => g.id !== id)), revision: old.revision + 1, runSequence: (old.runSequence || 0) + 1 };
       data.groups[index] = group; write(data); broadcast(old, group); return group;
     },
     remove(id) {
-      const data = read(), old = data.groups.find(g => g.id === id);
-      if (!old) throw new Error('同步组不存在');
+      const data = read(), old = userGroup(data, id);
       data.groups = data.groups.filter(g => g.id !== id); write(data); broadcast(old, null); return { ok: true };
     },
     detach(id, clientId) {
-      const data = read(), old = data.groups.find(g => g.id === id);
-      if (!old) throw new Error('同步组不存在');
+      const data = read(), old = userGroup(data, id);
       const members = old.members.filter(m => m.clientId !== clientId);
       if (members.length === old.members.length) throw new Error('终端不在此同步组中');
       if (members.length < 2) return this.remove(id);
