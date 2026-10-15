@@ -5,6 +5,7 @@ import LivingRoomPage from "./LivingRoomPage.jsx";
 import "./player-controls.css";
 import "./living-room.css";
 import "./industrial.css";
+import "./tactical-tokens.css";
 
 createRoot(document.getElementById("root")).render(
   <React.StrictMode>

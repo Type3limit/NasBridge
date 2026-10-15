@@ -55,7 +55,8 @@ import ReactMarkdown from "react-markdown";
 import AccessPage from "./ui/AccessPage";
 import { OperationsOverview, NodeTopology, TransferDisplay, FieldArtwork, FileTypeVisual, EquipmentVisual } from "./ui/OperationsDisplay";
 import { ThemeSwitch } from "./ui/ThemeProvider";
-import { BridgeMark, RegistryFooter } from "./ui/IndustrialChrome";
+import { BridgeMark } from "./ui/IndustrialChrome";
+import { HudClock, HudTicker, TacticalStage, TacticalStatusBar } from "./ui/TacticalChrome";
 import remarkGfm from "remark-gfm";
 
 const PreviewModal = lazy(() => import("./components/PreviewModal"));
@@ -609,8 +610,9 @@ export default function App() {
   const [displayName, setDisplayName] = useState("");
   const [authMode, setAuthMode] = useState("login");
   const [filtersExpanded, setFiltersExpanded] = useState(false);
-  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState("explorer");
-  const [navExpanded, setNavExpanded] = useState(false);
+  // Desktop opens on the command center; phones keep the file browser first.
+  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState(() => (typeof window !== "undefined" && window.innerWidth > 760 ? "overview" : "explorer"));
+  const [navExpanded, setNavExpanded] = useState(() => typeof window !== "undefined" && window.innerWidth >= 1280);
   const [isMobileViewport, setIsMobileViewport] = useState(() => {
     if (typeof window === "undefined") {
       return false;
@@ -1897,18 +1899,18 @@ export default function App() {
   }
 
   const workspaceTabs = [
-    { id: "explorer", label: "资源浏览器", icon: <EyeRegular />, meta: `${filteredOnlineFiles.length}` },
-    { id: "chat", label: "聊天室", icon: <ChatRegular />, meta: onlineCount ? "live" : "offline" },
-    { id: "overview", label: "系统概览", icon: <AppsListRegular />, meta: diagnostics.wsState || "idle" },
-    { id: "terminals", label: "终端状态", icon: <DesktopRegular />, meta: `${onlineCount}` },
-    { id: "transfers", label: "传输队列", icon: <ArrowSwapRegular />, meta: `${visibleUploadJobs.length + downloadingCount}` },
-    { id: "shares", label: "分享管理", icon: <ShareRegular />, meta: `${shares.length}` },
-    { id: "tv", label: "TV直播", icon: <StreamRegular />, meta: "live" },
-    { id: "anime", label: "番剧", icon: <VideoRegular />, meta: "bgm" },
+    { id: "overview", label: "指挥中心", code: "COMMAND", icon: <AppsListRegular />, meta: diagnostics.wsState || "idle" },
+    { id: "explorer", label: "资源浏览器", code: "ARCHIVE", icon: <EyeRegular />, meta: `${filteredOnlineFiles.length}` },
+    { id: "chat", label: "聊天室", code: "COMMS", icon: <ChatRegular />, meta: onlineCount ? "live" : "offline" },
+    { id: "terminals", label: "终端状态", code: "NODES", icon: <DesktopRegular />, meta: `${onlineCount}` },
+    { id: "transfers", label: "传输队列", code: "TRANSIT", icon: <ArrowSwapRegular />, meta: `${visibleUploadJobs.length + downloadingCount}` },
+    { id: "shares", label: "分享管理", code: "EXCHANGE", icon: <ShareRegular />, meta: `${shares.length}` },
+    { id: "tv", label: "TV直播", code: "BROADCAST", icon: <StreamRegular />, meta: "live" },
+    { id: "anime", label: "番剧", code: "ANIME", icon: <VideoRegular />, meta: "bgm" },
     ...(user?.role === "admin"
       ? [
-          { id: "admin-users", label: "用户管理", icon: <EditRegular />, meta: `${users.length}` },
-          { id: "admin-clients", label: "终端管理", icon: <DesktopRegular />, meta: `${clients.length}` }
+          { id: "admin-users", label: "用户管理", code: "PERSONNEL", icon: <EditRegular />, meta: `${users.length}` },
+          { id: "admin-clients", label: "终端管理", code: "NODE CTRL", icon: <DesktopRegular />, meta: `${clients.length}` }
         ]
       : [])
   ];
@@ -4897,7 +4899,7 @@ export default function App() {
         {renderToastViewport()}
         {/* GlobalMusicPlayer 保持挂载以维持音频实例，CSS 隐藏悬浮 UI */}
         <GlobalMusicPlayer p2p={p2p} clients={clients} user={user} onToast={setMessage} />
-        <div className="mobileApp">
+        <div className="mobileApp tacMobile">
           {/* 顶栏 */}
           <header className="mobileTopbar">
             <div className="mobileTopbarBrand">
@@ -4948,7 +4950,9 @@ export default function App() {
             ref={mobilePageContentRef}
             className={`mobilePageContent${activeWorkspaceTab === "chat" ? " chatMode" : ""}`}
           >
-            {renderMobileActivePage()}
+            <div className="tacStage mobile" key={`${activeWorkspaceTab}:${moreNavigatedTab || ""}`}>
+              {renderMobileActivePage()}
+            </div>
           </div>
 
           {/* 迷你音乐栏（有曲目时显示） */}
@@ -5013,11 +5017,24 @@ export default function App() {
     return renderMobileLayout();
   }
 
+  const activeTabIndex = Math.max(0, workspaceTabs.findIndex(tab => tab.id === activeWorkspaceTab));
+  const activeTab = workspaceTabs[activeTabIndex] || workspaceTabs[0];
+  const activeTabNumber = String(activeTabIndex + 1).padStart(2, "0");
+  const tickerItems = [
+    `SIGNAL ${String(diagnostics.wsState || "idle").toUpperCase()}`,
+    `${onlineCount}/${clients.length} STORAGE NODES ONLINE`,
+    `${filteredOnlineFiles.length} FILES INDEXED`,
+    `${visibleUploadJobs.length} UPLOAD · ${downloadingCount} DOWNLOAD`,
+    `${shares.length} SHARE LINKS`,
+    `OPERATOR ${String(user.displayName || "").toUpperCase()}`,
+    "NAS BRIDGE // PRIVATE CLOUD RELAY"
+  ];
+
   return (
-    <div className="page">
+    <div className="page tacPage">
       {renderToastViewport()}
       <div className="shell appShell">
-        <header className="appTopbar surfaceCard">
+        <header className="appTopbar tacTopbar">
           <div className="topbarStart">
             <button
               type="button"
@@ -5030,12 +5047,18 @@ export default function App() {
             </button>
             <div className="brandBlock">
               <div className="brandIdentity compact">
-                <BridgeMark /><Title3>NAS BRIDGE</Title3>
+                <BridgeMark />
+                <span className="tacBrandText"><Title3>NAS BRIDGE</Title3><small>TACTICAL STORAGE TERMINAL</small></span>
                 <GlobalMusicPlayer p2p={p2p} clients={clients} user={user} onToast={setMessage} />
               </div>
             </div>
           </div>
-          <div className="consoleBreadcrumb"><span>CONTROL /</span><strong>{workspaceTabs.find(tab => tab.id === activeWorkspaceTab)?.label || "工作台"}</strong></div>
+          <div className="tacReadout" key={activeTab.id}>
+            <span className="tacReadoutIndex">{activeTabNumber}</span>
+            <span className="tacReadoutText"><strong>{activeTab.label}</strong><small>MODULE // {activeTab.code}</small></span>
+          </div>
+          <HudTicker items={tickerItems} />
+          <HudClock />
           <div className="topbarActions">
             <ThemeSwitch compact />
             <button type="button" className="profileTrigger" onClick={() => setProfileOpen(true)}>
@@ -5069,46 +5092,52 @@ export default function App() {
         </header>
 
         <div className={`workspaceLayout${navExpanded ? " navExpanded" : ""}`}>
-          <aside className={`controlRail navRail${navExpanded ? " expanded" : ""}`}>
-            <Card className="surfaceCard panelCard workspaceNavCard">
+          <aside className={`controlRail navRail tacSpine${navExpanded ? " expanded" : ""}`}>
+            <div className="workspaceNavCard">
               <div className="workspaceNavHeader">
-                <Subtitle1>工作区 / MODULES</Subtitle1>
-                <Caption1>PRIVATE STORAGE NETWORK</Caption1>
+                <span className="tacSpineTitle">工作区 / MODULES</span>
+                <span className="tacSpineSub">{String(workspaceTabs.length).padStart(2, "0")} UNITS · PRIVATE NETWORK</span>
               </div>
               <div className="workspaceNavList" role="tablist" aria-orientation="vertical">
-                {workspaceTabs.map((tab) => (
+                {workspaceTabs.map((tab, index) => (
                   <button
                     key={tab.id}
                     type="button"
                     role="tab"
                     aria-selected={activeWorkspaceTab === tab.id}
                     className={`workspaceNavButton${activeWorkspaceTab === tab.id ? " active" : ""}`}
+                    style={{ "--i": index }}
                     onClick={() => handleWorkspaceTabSelect(tab.id)}
                     title={tab.label}
                   >
+                    <span className="tacNavIndex">{String(index + 1).padStart(2, "0")}</span>
                     <span className="workspaceNavButtonMain">
                       <span className="railSectionIcon workspaceNavIcon" aria-hidden="true">{tab.icon}</span>
                       <span className="workspaceNavText">
                         <span className="workspaceNavLabel">{tab.label}</span>
+                        <span className="tacNavCode">{tab.code}</span>
                       </span>
                     </span>
-                    <Badge appearance="outline" color={activeWorkspaceTab === tab.id ? "informative" : "subtle"}>{tab.meta}</Badge>
+                    <span className="tacNavMeta">{tab.meta}</span>
                   </button>
                 ))}
               </div>
-              <div className="navRailFooter"><span>● {onlineCount} NODES ONLINE</span><span>NAS BRIDGE / NB—01</span></div>
-            </Card>
+              <div className="navRailFooter"><span><i className={onlineCount ? "online" : ""} /> {onlineCount} NODES ONLINE</span><span>NAS BRIDGE / NB—01</span></div>
+            </div>
           </aside>
 
           <main className="mainCanvas">
-            {renderActiveWorkspacePage()}
+            <TacticalStage key={activeTab.id} index={activeTabNumber} code={activeTab.code}>
+              {renderActiveWorkspacePage()}
+            </TacticalStage>
           </main>
         </div>
 
         {renderDialogs()}
 
       </div>
-      <RegistryFooter />
+      <TacticalStatusBar onlineCount={onlineCount} nodeTotal={clients.length} wsState={diagnostics.wsState}
+        lastRefresh={lastRefreshAt ? formatRelativeTime(lastRefreshAt) : "--"} moduleCode={activeTab.code} />
     </div>
   );
 }

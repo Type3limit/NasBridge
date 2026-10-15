@@ -1,0 +1,60 @@
+{
+  "note": "Tactical-terminal redesign art requests for NAS Bridge. Generate with built-in image_gen, export to WebP (quality ~82) and save under web/src/assets/ with the given file name, then point the matching slot in web/src/ui/tacticalArt.js at the new file. Until then each slot reuses an existing webp. Shared art direction with imagegen-prompts.json: desaturated graphite, white ceramic, stainless steel, safety yellow (#ffc414) as the main accent and a small amount of cold cyan (#38e1ff) for light sources only. No text, no logos, no people, no watermark.",
+  "assets": [
+    {
+      "name": "tactical-backdrop",
+      "file": "tactical-backdrop.webp",
+      "slot": "tacticalArt.backdrop",
+      "size": "2560x1440, landscape 16:9, <= 450 KB",
+      "usage": "Full-screen fixed background behind every page, shown at 14% opacity (7% in light theme) with a slow pan; must stay readable as texture, not as a picture.",
+      "mode": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: very dark, low-contrast full-screen background texture for a tactical storage terminal UI. Primary request: original heavy-industrial megastructure interior seen from a low angle in near darkness: towering graphite bulkheads, stacked server walls, angled steel girders, catwalks and cable trunks receding into fog, sparse safety-yellow hazard lights and a few cold cyan indicator strips. Premium science-fiction game environment concept art, gritty manufactured surfaces, volumetric haze. Composition: wide 16:9, detail spread evenly across the frame with no single focal subject, large calm dark areas in the centre and lower half so UI panels can sit on top, slightly darker edges. Lighting: mostly near-black graphite, very low overall brightness and contrast, only small point lights. Constraints: no UI, no typography, no letters, no digits, no logos, no people, no watermark."
+    },
+    {
+      "name": "command-bridge",
+      "file": "command-bridge.webp",
+      "slot": "tacticalArt.commandHero",
+      "size": "1920x1080, landscape, <= 380 KB",
+      "usage": "Background of the large hero panel on the 指挥中心 (command center) home page; left 45% is covered by a dark scrim with headline text, right side shows the art.",
+      "mode": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: cinematic hero background for the command-center home of a private storage network dashboard. Primary request: original futuristic heavy-industrial command bridge overlooking a vast data relay hall: an elevated graphite operations deck with angled white ceramic armor panels, blank dark console screens, thick conduits, overhead gantry rails, and through a huge slanted window a colossal relay ring and stacked storage towers in hazy depth. Safety-yellow hazard stripes on deck edges and railings, small cyan status lights. Premium realistic game cinematic still, believable scale, rich hard-surface detail. Composition: wide 16:9, all major structure and the relay ring in the right 55%, left 45% darker and simpler for overlay text, horizon slightly above centre. Lighting: dramatic dim interior with a cold light shaft through the window, medium-low contrast. Constraints: screens blank, no UI, no typography, no letters, no digits, no logos, no people, no watermark."
+    },
+    {
+      "name": "relay-core",
+      "file": "relay-core.webp",
+      "slot": "tacticalArt.heroMachine",
+      "size": "1200x1200, square, transparent background, <= 260 KB",
+      "usage": "Floating centrepiece machine inside the command-center hero, layered over animated HUD rings; slow vertical float animation.",
+      "mode": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: transparent-background hero prop for an industrial NAS command center. Primary request: one original floating data relay core: a hexagonal graphite reactor-like storage core held inside three concentric white ceramic armored rings with exposed steel ribs, segmented locking clamps, bundled cables trailing downward, glowing safety-yellow energy slits and a small cold-cyan central lens. Mechanical, heavy and precise, as if suspended by magnetic field. Premium realistic hard-surface game prop concept art, three-quarter front view, entire object visible with comfortable margin, compact roughly circular silhouette. Soft studio lighting with crisp rim light so it reads on dark backgrounds. Constraints: genuine transparent background, no floor, no shadow plane, no scene, no typography, no digits, no logos, no people, no watermark."
+    },
+    {
+      "name": "broadcast-array",
+      "file": "broadcast-array.webp",
+      "slot": "tacticalArt.broadcastTile",
+      "size": "1400x900, landscape, transparent background, <= 220 KB",
+      "usage": "Equipment art on the TV 直播 (BROADCAST) tile of the command-center grid, anchored bottom-right at ~90% tile height.",
+      "mode": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: transparent-background artwork for an original industrial NAS dashboard tile. One isolated futuristic heavy-industrial broadcast transmitter unit: a squat armored graphite base with white ceramic panels, a tilted lattice antenna mast with three stacked dish emitters, coiled cables, cooling fins, safety-yellow warning stripes on the base and small cyan signal lamps on the emitters. Three-quarter front perspective, entire object visible, wide stable silhouette, premium realistic hard-surface game prop. Unified art direction: desaturated graphite, white ceramic, stainless steel and industrial yellow; soft high-end studio lighting, crisp readable silhouette on charcoal and ivory. Constraints: genuine transparent background, no floor, no surrounding scene, no shadow plane, no emitted beams, no screens with content, no typography, no digits, no logos, no watermark, no people."
+    },
+    {
+      "name": "anime-archive",
+      "file": "anime-archive.webp",
+      "slot": "tacticalArt.animeTile",
+      "size": "1400x900, landscape, transparent background, <= 220 KB",
+      "usage": "Equipment art on the 番剧 (ANIME) tile of the command-center grid; must look clearly different from the projector and broadcast art.",
+      "mode": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: transparent-background artwork for an original industrial NAS dashboard tile. One isolated futuristic industrial episode archive jukebox: a tall graphite cabinet with a white ceramic armored frame holding a rotating carousel of slim storage cartridges like film reels on a vertical spindle, a robotic picker arm selecting one cartridge, safety-yellow cartridge spines, a small warm-yellow viewing lens and cyan indicator dots. Three-quarter front perspective, entire object visible, playful but still heavy-industrial, premium realistic hard-surface game prop. Unified art direction: desaturated graphite, white ceramic, stainless steel and industrial yellow; soft studio lighting, crisp readable silhouette on charcoal and ivory. Constraints: genuine transparent background, no floor, no scene, no shadow plane, no characters, no posters, no typography, no digits, no logos, no watermark."
+    }
+  ],
+  "optional": [
+    {
+      "name": "hazard-tape",
+      "file": "hazard-tape.webp",
+      "usage": "Not required: hazard stripes are drawn with CSS (--tac-hazard). Only generate if a worn, printed look is wanted; would replace the stripe gradient in .tacAccessTape and .tacBootBand.",
+      "size": "2048x64, tileable horizontally, <= 60 KB",
+      "mode": "built-in image_gen",
+      "prompt": "Use case: texture. Asset type: seamless horizontally tileable industrial hazard tape strip. Diagonal black and safety-yellow (#ffc414) warning stripes at 45 degrees on slightly worn matte vinyl, subtle scratches, dust and edge scuffs, flat front view, even lighting, stripes continue seamlessly across left and right edges. Constraints: no text, no logos, no perspective, no shadow, no watermark."
+    }
+  ]
+}

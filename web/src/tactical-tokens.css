@@ -1,0 +1,44 @@
+/* NAS Bridge / Tactical terminal palette — shared by all entry points.
+   Loaded after industrial.css so these tokens win. */
+:root, :root[data-theme="dark"] {
+  color-scheme: dark;
+  --page-bg: #07090c; --surface: #11151a; --surface-strong: #181d24;
+  --surface-muted: #0d1014; --surface-hover: #1c232b;
+  --stroke: #252d36; --stroke-strong: #46525f;
+  --text: #e9edf0; --text-soft: #a7b0ba; --text-faint: #808b97;
+  --brand: #ffc414; --brand-strong: #ffb000; --accent: #ffc414;
+  --accent-bg: #241e0c; --accent-solid: #ffc414; --on-accent: #111111;
+  --tac-cyan: #38e1ff; --tac-cyan-bg: rgba(56, 225, 255, .1); --tac-red: #ff4d3a;
+  --tac-glow: rgba(255, 196, 20, .35); --tac-panel: rgba(13, 16, 20, .86);
+  --success: #5cf0a0; --success-bg: #10291e; --danger: #ff7a68; --danger-bg: #331a17;
+  --warning: #ffb547; --warning-bg: #33260f; --overlay: rgba(3, 5, 8, .78);
+  --grid-line: rgba(140, 170, 200, .05); --shade: rgba(0, 0, 0, .22);
+  --shadow-lg: 0 24px 80px #000a; --shadow-md: 0 10px 34px #0007;
+  --radius-xl: 0; --radius-lg: 0; --radius-md: 0; --radius-sm: 0;
+  --hero-scrim: linear-gradient(90deg, rgba(5, 7, 10, .92), rgba(5, 7, 10, .35) 72%, rgba(5, 7, 10, .1));
+  --hero-copy: #f2f4f6; --hero-soft: #c3cbd3;
+  --lr-accent-rgb: 255, 196, 20;
+  --tac-font-display: "Bahnschrift", "DIN Alternate", "Barlow Condensed", "Arial Narrow", "Microsoft YaHei", "PingFang SC", sans-serif;
+  --tac-font-mono: "Cascadia Mono", "JetBrains Mono", Consolas, "SFMono-Regular", "Microsoft YaHei", monospace;
+  --tac-hazard: repeating-linear-gradient(-45deg, var(--accent-solid) 0 8px, #0b0b0b 8px 16px);
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --page-bg: #dcddd8; --surface: #f2f2ee; --surface-strong: #fafaf7;
+  --surface-muted: #e7e8e3; --surface-hover: #dfe1da;
+  --stroke: #c3c6bf; --stroke-strong: #858b85;
+  --text: #111417; --text-soft: #444b52; --text-faint: #576068;
+  --brand: #8a5d00; --brand-strong: #6b4800; --accent: #8a5d00;
+  --accent-bg: #f6e7b5; --accent-solid: #ffc414; --on-accent: #111111;
+  --tac-cyan: #00708a; --tac-cyan-bg: rgba(0, 112, 138, .1); --tac-red: #c22f1d;
+  --tac-glow: rgba(255, 176, 0, .35); --tac-panel: rgba(242, 242, 238, .9);
+  --success: #1f6b3f; --success-bg: #d9eedf; --danger: #ac3528; --danger-bg: #f7e3df;
+  --warning: #815000; --warning-bg: #f6e8ce; --overlay: rgba(20, 24, 28, .5);
+  --grid-line: rgba(20, 30, 40, .07); --shade: rgba(20, 30, 40, .05);
+  --shadow-lg: 0 24px 70px #1a222a30; --shadow-md: 0 8px 30px #1a222a1c;
+  --hero-scrim: linear-gradient(90deg, rgba(236, 236, 231, .94), rgba(236, 236, 231, .2) 80%);
+  --hero-copy: #111417; --hero-soft: #2f363c;
+  --lr-accent-rgb: 138, 93, 0;
+}
+html, body, #root { background: var(--page-bg); }
+body { font-family: var(--tac-font-display); }

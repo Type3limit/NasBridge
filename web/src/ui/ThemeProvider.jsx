@@ -24,32 +24,32 @@ export function ThemeProvider({ children }) {
   }, []);
   const theme = useMemo(() => {
     const dark = mode === "dark";
-    const brand = dark ? "#f4df32" : "#796400";
+    const brand = dark ? "#ffc414" : "#8a5d00";
     return {
       ...(dark ? webDarkTheme : webLightTheme),
-      colorBrandBackground: "#f4df32",
-      colorBrandBackgroundHover: "#ffeb58",
-      colorBrandBackgroundPressed: "#d9c526",
-      colorNeutralForegroundOnBrand: "#171913",
+      colorBrandBackground: "#ffc414",
+      colorBrandBackgroundHover: "#ffd54a",
+      colorBrandBackgroundPressed: "#e0a800",
+      colorNeutralForegroundOnBrand: "#121212",
       colorBrandForeground1: brand,
       colorBrandForeground2: brand,
       colorBrandForegroundLink: brand,
-      colorBrandForegroundLinkHover: dark ? "#fff184" : "#5f4e00",
+      colorBrandForegroundLinkHover: dark ? "#ffd54a" : "#6b4800",
       colorBrandStroke1: brand,
-      colorBrandStroke2: dark ? "#71671f" : "#bcaa43",
-      colorBrandBackground2: dark ? "#36321b" : "#f7edb8",
-      colorNeutralBackground1: dark ? "#1a1d1c" : "#f9f9f2",
-      colorNeutralBackground2: dark ? "#222625" : "#efefe6",
-      colorNeutralBackground3: dark ? "#2a2e2c" : "#e6e7dc",
-      colorNeutralBackground1Hover: dark ? "#30352f" : "#e9e9dc",
-      colorNeutralForeground1: dark ? "#eceee4" : "#202520",
-      colorNeutralForeground2: dark ? "#b8beb4" : "#565e52",
-      colorNeutralForeground3: dark ? "#9aa293" : "#646c5e",
-      colorNeutralForegroundStaticInverted: dark ? "#b8beb4" : "#565e52",
-      colorNeutralStroke1: dark ? "#4a5148" : "#afb4a6",
-      colorNeutralStroke2: dark ? "#363c34" : "#d0d3c6",
-      borderRadiusSmall: "2px", borderRadiusMedium: "2px", borderRadiusLarge: "2px",
-      borderRadiusXLarge: "2px", fontFamilyBase: '"Segoe UI", "Microsoft YaHei", sans-serif'
+      colorBrandStroke2: dark ? "#6b5410" : "#c9a54a",
+      colorBrandBackground2: dark ? "#2a2310" : "#fbefc6",
+      colorNeutralBackground1: dark ? "#13171c" : "#f3f3ef",
+      colorNeutralBackground2: dark ? "#181d23" : "#e9e9e3",
+      colorNeutralBackground3: dark ? "#1e242b" : "#dfe0d9",
+      colorNeutralBackground1Hover: dark ? "#222a32" : "#e2e2da",
+      colorNeutralForeground1: dark ? "#e9edf0" : "#15181b",
+      colorNeutralForeground2: dark ? "#aab3bd" : "#4a525a",
+      colorNeutralForeground3: dark ? "#8a95a1" : "#5c656e",
+      colorNeutralForegroundStaticInverted: dark ? "#aab3bd" : "#4a525a",
+      colorNeutralStroke1: dark ? "#3a4450" : "#a9aea8",
+      colorNeutralStroke2: dark ? "#2a323c" : "#cfd1ca",
+      borderRadiusSmall: "0px", borderRadiusMedium: "0px", borderRadiusLarge: "0px",
+      borderRadiusXLarge: "0px", fontFamilyBase: '"Bahnschrift", "DIN Alternate", "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif'
     };
   }, [mode]);
   return (

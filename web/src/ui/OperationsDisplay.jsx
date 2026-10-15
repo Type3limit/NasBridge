@@ -6,6 +6,7 @@ import vault from "../assets/exchange-vault.webp";
 import projector from "../assets/media-projector.webp";
 import consoleArt from "../assets/signal-console.webp";
 import drive from "../assets/archive-drive.webp";
+import { tacticalArt } from "./tacticalArt";
 
 export const equipmentArt = { node: nodeRack, transfer: conveyor, share: vault, media: projector, chat: consoleArt, archive: drive };
 export function EquipmentVisual({ kind = "archive", className = "" }) {
@@ -22,24 +23,60 @@ export function FieldArtwork({ label = "PRIVATE STORAGE NETWORK", compact = fals
   </div>;
 }
 
+const HOME_TILES = [
+  { page: "explorer", code: "ARCHIVE", label: "资源浏览器", art: "archive", unit: "FILES" },
+  { page: "chat", code: "COMMS", label: "通讯频道", art: "chat", unit: "CHANNEL" },
+  { page: "transfers", code: "TRANSIT", label: "传输队列", art: "transfer", unit: "TASKS" },
+  { page: "terminals", code: "NODES", label: "终端状态", art: "node", unit: "ONLINE" },
+  { page: "shares", code: "EXCHANGE", label: "分享管理", art: "share", unit: "LINKS" },
+  { page: "tv", code: "BROADCAST", label: "TV 直播", art: tacticalArt.broadcastTile, unit: "LIVE" },
+  { page: "anime", code: "ANIME", label: "番剧", art: tacticalArt.animeTile, unit: "BGM" }
+];
+
 export function OperationsOverview({ onlineCount, clients, files, shares, uploads, downloads, wsState, lastRefresh, onUpload, onDiagnostics, onRefresh, onNavigate }) {
-  const metrics = [
-    { value: String(onlineCount).padStart(2, "0"), label: "在线存储节点", unit: "NODES", page: "terminals" },
-    { value: String(files).padStart(2, "0"), label: "索引资源", unit: "FILES", page: "explorer" },
-    { value: String(uploads + downloads).padStart(2, "0"), label: "传输任务", unit: "TASKS", page: "transfers" },
-    { value: String(shares).padStart(2, "0"), label: "共享链接", unit: "LINKS", page: "shares" }
-  ];
-  return <section className="operationsOverview workspacePage">
-    <header className="operationsHeading"><div><span className="industrialEyebrow">01 / OPERATIONS CENTER</span><h1>系统概览<span>。</span></h1></div><div className="operationsActions"><button onClick={onDiagnostics}>链路诊断 ↗</button><button onClick={onRefresh}>同步索引 ↻</button><button className="solidAction" onClick={onUpload}>发起上传 +</button></div></header>
-    <div className="operationsStage">
-      <img src={hall} className="operationsHall" alt="" decoding="async"/>
-      <div className="operationsStageScrim"/>
-      <div className="operationsData"><span className="stageKicker">PRIVATE CLOUD / CONTROL CENTER</span><h2>所有节点。<br/>尽在掌握。</h2><p>从文件到媒体，从传输到协作。<br/>你的存储网络，由你掌控。</p><div className="operationsSignal"><i className={wsState === "open" ? "online" : ""}/><span>信令 {wsState || "idle"}</span><span>更新 {lastRefresh}</span></div></div>
-      <div className="operationsMachine" aria-hidden="true"><div className="machineOrbit"/><div className="machineOrbit second"/><img src={assembly} alt="" decoding="async"/><span className="machineCaption">DATA RELAY ASSEMBLY / NB—01</span><div className="machineScan"/></div>
-      <div className="stageCrosses" aria-hidden="true"><span>+</span><span>+</span></div>
+  const values = {
+    explorer: files, chat: onlineCount ? "ON" : "--", transfers: uploads + downloads,
+    terminals: `${onlineCount}/${clients.length}`, shares, tv: "ON", anime: "BGM"
+  };
+  const pad = value => typeof value === "number" ? String(value).padStart(2, "0") : value;
+  const linkUp = wsState === "open";
+  return <section className="operationsOverview workspacePage tacHome">
+    <header className="tacHomeHeading">
+      <div className="tacHomeTitle"><span className="industrialEyebrow">00 / COMMAND CENTER</span><h1 data-text="指挥中心">指挥中心</h1><span className="tacHomeSub">PRIVATE STORAGE NETWORK · OPERATIONS OVERVIEW</span></div>
+      <div className="operationsActions"><button onClick={onDiagnostics}><span>链路诊断</span><small>DIAG</small></button><button onClick={onRefresh}><span>同步索引</span><small>SYNC</small></button><button className="solidAction" onClick={onUpload}><span>发起上传</span><small>UPLOAD +</small></button></div>
+    </header>
+    <div className="tacHomeGrid">
+      <div className="tacHero">
+        <img src={tacticalArt.commandHero} className="tacHeroHall" alt="" decoding="async"/>
+        <div className="tacHeroScrim"/>
+        <div className="tacHeroRings" aria-hidden="true"><i/><i/><i/></div>
+        <img src={tacticalArt.heroMachine} className="tacHeroMachine" alt="" decoding="async"/>
+        <div className="tacHeroScan" aria-hidden="true"/>
+        <div className="tacHeroCopy">
+          <span className="tacHeroKicker">// RELAY STATUS</span>
+          <h2>所有节点<br/>尽在掌握<em>。</em></h2>
+          <div className={`tacHeroSignal${linkUp ? " online" : ""}`}><i/><span>SIGNAL {String(wsState || "idle").toUpperCase()}</span><span>SYNC {lastRefresh}</span></div>
+        </div>
+        <div className="tacHeroStats">
+          <div><strong>{pad(onlineCount)}</strong><span>在线节点 / NODES</span></div>
+          <div><strong>{pad(files)}</strong><span>索引资源 / FILES</span></div>
+          <div><strong>{pad(uploads + downloads)}</strong><span>传输任务 / TASKS</span></div>
+        </div>
+        <span className="tacHeroSerial" aria-hidden="true">NB—01</span>
+        <span className="tacCorner tl"/><span className="tacCorner br"/>
+      </div>
+      {HOME_TILES.map((tile, index) => <button key={tile.page} type="button" className={`tacTile tile-${tile.page}`} style={{ "--i": index }} onClick={() => onNavigate(tile.page)}>
+        <img src={equipmentArt[tile.art] || tile.art} className="tacTileArt" alt="" aria-hidden="true" loading="lazy" decoding="async"/>
+        <span className="tacTileIndex">{String(index + 1).padStart(2, "0")}</span>
+        <span className="tacTileCode" aria-hidden="true">{tile.code}</span>
+        <span className="tacTileBody"><strong>{tile.label}</strong><span className="tacTileValue"><b>{pad(values[tile.page])}</b><small>{tile.unit}</small></span></span>
+        <span className="tacTileArrow" aria-hidden="true">↗</span>
+      </button>)}
+      <div className="tacNodeBoard">
+        <header><span className="industrialEyebrow">CONNECTED NODES</span><span className="monoLabel">{pad(onlineCount)} ONLINE</span></header>
+        <div>{clients.length ? clients.slice(0, 5).map(client => <button onClick={() => onNavigate("terminals")} key={client.id}><i className={client.status === "online" ? "online" : ""}/><span>{client.name || client.id}</span><small>{client.status}</small></button>) : <p>等待首个存储节点接入<small>START A STORAGE CLIENT TO LINK</small></p>}</div>
+      </div>
     </div>
-    <div className="operationsMetrics">{metrics.map((metric, index) => <button key={metric.page} onClick={() => onNavigate(metric.page)}><span className="metricIndex">0{index + 1} / {metric.unit}</span><strong>{metric.value}<small>↗</small></strong><span>{metric.label}</span></button>)}</div>
-    <div className="operationsBottom"><span className="monoLabel">CONNECTED NODES / 存储网络</span><div>{clients.length ? clients.slice(0, 4).map(client => <button onClick={() => onNavigate("terminals")} key={client.id}><i className={client.status === "online" ? "online" : ""}/><span>{client.name || client.id}</span><small>{client.status}</small></button>) : <span>等待首个存储节点接入</span>}</div></div>
   </section>;
 }
 

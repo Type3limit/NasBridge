@@ -12,11 +12,14 @@ export default function AccessPage({ mode, setMode, email, setEmail, password, s
         <img className="accessArtwork" src={station} alt="" aria-hidden="true" fetchPriority="low" decoding="async"/>
         <div className="accessHeroScrim"/>
         <div className="accessHeroFrame" aria-hidden="true"/>
+        <div className="tacAccessRings" aria-hidden="true"><i/><i/><i/><b/></div>
+        <div className="tacAccessTape" aria-hidden="true"><span>RESTRICTED ACCESS // AUTHORIZED OPERATORS ONLY // RESTRICTED ACCESS // AUTHORIZED OPERATORS ONLY //</span></div>
         <div className="accessHeroTop"><span className="monoLabel">// NETWORK ACCESS · 01</span><span className="signalLabel"><i/> CONNECTION READY</span></div>
         <div className="accessHeroCopy"><span className="industrialEyebrow">YOUR DATA. YOUR FRONTIER.</span><h1>连接，<br/>无限可能<span>。</span></h1><p>将远端存储、媒体与协作，<br/>汇聚于你的私人云端。</p></div>
         <div className="accessHeroBottom"><span className="heroSerial">NB—01</span><div><strong>跨越边界 · 自由连接</strong><span>PRIVATE CLOUD / DIRECT CONNECTION</span></div><span className="heroCross">+</span></div>
       </section>
-      <section className="accessFormPanel" aria-label={register ? "创建账户" : "登录账户"}>
+      <section className="accessFormPanel tacTrace" aria-label={register ? "创建账户" : "登录账户"}>
+        <span className="tacCorner tl" aria-hidden="true"/><span className="tacCorner br" aria-hidden="true"/>
         <div className="accessFormTop"><span className="monoLabel">ACCESS TERMINAL</span><span className="terminalIndex">[ 01 ]</span></div>
         <div className="accessFormTitle"><span className="industrialEyebrow">{register ? "REGISTER / 注册" : "SIGN IN / 登录"}</span><h2>{register ? "创建你的连接" : "欢迎回到工作台"}</h2><p>{register ? "建立账户，开始管理你的存储网络。" : "连接存储节点，继续你的工作。"}</p></div>
         <div className="accessModeSwitch" role="tablist" aria-label="账户操作"><button type="button" role="tab" aria-selected={!register} onClick={() => setMode("login")}>登录 <span>01</span></button><button type="button" role="tab" aria-selected={register} onClick={() => setMode("register")}>注册 <span>02</span></button></div>

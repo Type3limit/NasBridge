@@ -5,6 +5,7 @@ import { IndustrialBackdrop } from "./ui/IndustrialChrome";
 import SharePage from "./SharePage.jsx";
 import "./styles.css";
 import "./industrial.css";
+import "./tactical-tokens.css";
 
 createRoot(document.getElementById("root")).render(
   <React.StrictMode>
