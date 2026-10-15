@@ -3381,6 +3381,11 @@ function buildPc(remotePeerId) {
     delayedCandidates = force
       ? []
       : delayedCandidates.filter((entry) => entry.releaseAt > now);
+    if (state.peers.get(remotePeerId) !== pc) {
+      // Replaced by a newer offer; these candidates belong to a dead session.
+      delayedCandidates = [];
+      return;
+    }
     for (const entry of pending) {
       if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
         continue;
@@ -4397,8 +4402,10 @@ async function handleSignal(fromId, payload) {
   }
 
   if (!pc) {
-    pc = buildPc(fromId);
-    state.peers.set(fromId, pc);
+    // Late answer/candidate for a session we already dropped. Building a PC
+    // here would only leak a connection (and its TURN allocations).
+    logInfo("[signal] stale signal ignored", fromId, payload.kind);
+    return;
   }
 
   if (payload.kind === "answer") {

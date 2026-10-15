@@ -3,6 +3,7 @@ import { samplePeerNode } from './replicas.js';
 
 const FILE_TRANSFER_TIMEOUT_MS = 300_000;
 const PEER_IDLE_CLOSE_MS = 60_000;
+const RELAY_UPGRADE_COOLDOWN_MS = 10 * 60_000;
 const DEFAULT_CHANNEL_NAMES = ["file", "thumb", "preview", "audio", "upload", "control"];
 const PEER_ROLE_ORDER = ["download", "upload", "preview", "control"];
 const PEER_ROLE_CONFIG = {
@@ -235,6 +236,9 @@ export class P2PBridge {
     this.routeSamples = new Map();
     this.lastSelectedPairLog = new Map();
     this.relayUpgradeTimers = new Map();
+    // Kept per client (not per peer) because every restart builds a new peer.
+    this.peerRestartAttempts = new Map();
+    this.relayUpgradeAt = new Map();
     this.lastClientActivity = new Map();
     this.idleSweepTimer = setInterval(() => this.sweepIdlePeers(), 15_000);
     this.diagnostics = {
@@ -765,7 +769,10 @@ export class P2PBridge {
   }
 
   maybeScheduleRelayUpgrade(clientId, peer) {
-    if (!peer?.initiator || peer.relayUpgradeAttempted || this.relayUpgradeTimers.has(clientId)) {
+    if (!peer?.initiator || this.relayUpgradeTimers.has(clientId)) {
+      return;
+    }
+    if (Date.now() - (this.relayUpgradeAt.get(clientId) || 0) < RELAY_UPGRADE_COOLDOWN_MS) {
       return;
     }
     if (String(peer.pc?.connectionState || "") !== "connected") {
@@ -777,7 +784,7 @@ export class P2PBridge {
     const timer = setTimeout(() => {
       this.relayUpgradeTimers.delete(clientId);
       const livePeer = this.peers.get(clientId);
-      if (!livePeer?.pc || !livePeer.initiator || livePeer.relayUpgradeAttempted) {
+      if (livePeer !== peer || !livePeer.pc) {
         return;
       }
       if (String(livePeer.pc.connectionState || "") !== "connected") {
@@ -786,15 +793,12 @@ export class P2PBridge {
       if (String(this.diagnostics.clients?.[clientId]?.route || "unknown") !== "relay") {
         return;
       }
-      if (this.hasActiveClientTransfer(clientId)) {
+      if (this.hasActiveClientTransfer(clientId) || this.isClientBusy(clientId)) {
         return;
       }
-      if ((livePeer.restartAttempts || 0) >= 2) {
-        return;
-      }
-      livePeer.relayUpgradeAttempted = true;
+      this.relayUpgradeAt.set(clientId, Date.now());
       this.logInfo("relay-upgrade-retry", clientId, `${this.relayUpgradeDelayMs}ms`);
-      this.restartIceAndOffer(clientId, livePeer).catch(() => {});
+      this.rebuildPeer(clientId, livePeer, "relay-upgrade").catch(() => {});
     }, this.relayUpgradeDelayMs);
     this.relayUpgradeTimers.set(clientId, timer);
   }
@@ -840,7 +844,7 @@ export class P2PBridge {
     let delayedCandidateTimer = null;
 
     const armRestartTimer = () => {
-      if (!peer.initiator || peer.restartAttempts >= 2) {
+      if (!peer.initiator || (this.peerRestartAttempts.get(clientId) || 0) >= 2) {
         return;
       }
       if (restartTimer) {
@@ -850,7 +854,7 @@ export class P2PBridge {
         if (pc.connectionState === "connected" || pc.connectionState === "closed" || pc.connectionState === "failed") {
           return;
         }
-        this.restartIceAndOffer(clientId, peer).catch(() => {});
+        this.rebuildPeer(clientId, peer, "ice-stalled").catch(() => {});
       }, 15000);
     };
 
@@ -880,6 +884,11 @@ export class P2PBridge {
       delayedCandidates = force
         ? []
         : delayedCandidates.filter((entry) => entry.releaseAt > now);
+      if (this.peers.get(clientId) !== peer) {
+        // The storage node has already moved on to a newer connection.
+        delayedCandidates = [];
+        return;
+      }
       for (const entry of pending) {
         this.sendSignal(clientId, { kind: "ice", candidate: entry.candidate }).catch(() => {});
       }
@@ -928,6 +937,7 @@ export class P2PBridge {
       this.logInfo("conn-state", clientId, pc.connectionState);
       this.updateClientDiagnostics(clientId, { connectionState: pc.connectionState });
       if (pc.connectionState === "connected") {
+        this.peerRestartAttempts.delete(clientId);
         if (disconnectTimer) {
           clearTimeout(disconnectTimer);
           disconnectTimer = null;
@@ -960,16 +970,23 @@ export class P2PBridge {
     this.startStatsTimer(clientId, pc);
   }
 
-  async restartIceAndOffer(clientId, peer) {
-    if (!peer?.pc || peer.pc.connectionState === "closed" || peer.pc.connectionState === "failed") {
+  // The storage node answers every offer with a brand-new RTCPeerConnection,
+  // so an in-place ICE restart would leave this side bound to a connection the
+  // node has already closed. Tear down and build a fresh peer on both ends.
+  async rebuildPeer(clientId, peer, reason) {
+    if (this.peers.get(clientId) !== peer) {
       return;
     }
-    peer.restartAttempts = (peer.restartAttempts || 0) + 1;
-    this.updateClientDiagnostics(clientId, { lastError: "ICE restart" });
-    this.log("ice-restart", clientId, `attempt=${peer.restartAttempts}`);
-    const offer = await peer.pc.createOffer({ iceRestart: true });
-    await peer.pc.setLocalDescription(offer);
-    await this.sendSignal(clientId, { kind: "offer", sdp: peer.pc.localDescription });
+    const attempts = (this.peerRestartAttempts.get(clientId) || 0) + 1;
+    this.peerRestartAttempts.set(clientId, attempts);
+    this.updateClientDiagnostics(clientId, { lastError: `P2P rebuild (${reason})` });
+    this.log("peer-rebuild", clientId, reason, `attempt=${attempts}`);
+    this.closePeer(clientId, true);
+    if (this.pendingPeers.has(clientId)) {
+      // A caller is still waiting on this peer; its withPeerRetry reconnects.
+      return;
+    }
+    await this.connectToPeer(clientId);
   }
 
   initPeer(clientId, { initiator }) {
@@ -984,9 +1001,7 @@ export class P2PBridge {
       channels,
       ready: Promise.resolve(),
       createdAt: Date.now(),
-      initiator: Boolean(initiator),
-      restartAttempts: 0,
-      relayUpgradeAttempted: false
+      initiator: Boolean(initiator)
     };
     this.peers.set(clientId, peer);
     this.updateClientDiagnostics(clientId, { iceState: "connecting" });
@@ -1514,6 +1529,11 @@ export class P2PBridge {
     this.log("signal-recv", { from: clientId, kind: payload?.kind });
     let peer = this.peers.get(clientId);
     if (!peer) {
+      if (payload.kind !== "offer") {
+        // Late answer/candidate for a peer we already closed.
+        this.log("signal-stale-ignored", clientId, payload.kind);
+        return;
+      }
       peer = this.initPeer(clientId, { initiator: false });
     }
 
