@@ -390,3 +390,130 @@
   .tacBackdrop *, .tacBackdrop *::before, .tacBackdrop *::after, .tacPage *, .tacPage *::before, .tacPage *::after, .accessPage *, .accessPage *::before, .accessPage *::after { animation: none !important; transition: none !important; }
   .tacWipe, .tacBoot, .tacBgScan::after { display: none !important; }
 }
+
+/* ==========================================================================
+   Round 3: titles live in the top bar, compact explorer cards, one toolbar.
+   ========================================================================== */
+
+/* Top bar: module title replaces the ticker everywhere except the command center. */
+.tacTopTitle { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 12px; height: 34px; animation: tacSlideIn .35s cubic-bezier(.2, .8, .2, 1) both; }
+.tacTopIndex { flex-shrink: 0; display: grid; place-items: center; height: 30px; padding: 0 16px 0 10px; background: var(--accent-solid); color: #111; font: 700 18px/1 var(--tac-font-display); clip-path: polygon(0 0, 100% 0, calc(100% - 9px) 100%, 0 100%); }
+.tacTopTitle strong { flex-shrink: 0; font: 700 20px/1 var(--tac-font-display); letter-spacing: 3px; color: var(--text); }
+.tacTopLabel { min-width: 0; font: 600 14px var(--tac-font-display); letter-spacing: 1px; color: var(--text-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 900px) { .tacTopLabel { display: none; } }
+
+/* Command center keeps a mast, at roughly half the old scale. */
+.tacMast { margin: 0 -34px 22px 0; gap: 18px; }
+.tacMastIndex { height: 64px; padding: 0 28px 4px 14px; font-size: 46px; letter-spacing: -1px; clip-path: polygon(0 0, 100% 0, calc(100% - 20px) 100%, 0 100%); }
+.tacMastText { gap: 8px; }
+.tacMastText small { font-size: 12px; letter-spacing: 5px; }
+.tacMastText strong { font-size: clamp(44px, 4.6vw, 76px); }
+.tacHomeHeading { min-height: 64px; }
+@media (min-width: 1181px) { .tacStage.withMast > .tacHome { margin-top: -86px; } }
+@media (max-width: 900px) { .tacMastIndex { height: 56px; font-size: 38px; } }
+
+/* Explorer: path, breadcrumbs and view / filter controls form one toolbar. */
+.tacPage .explorerTop.tacExplorerBar { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 12px 20px; min-height: 0; padding: 12px 20px; overflow: visible; isolation: auto; }
+.tacStage:not(.mobile) .tacExplorerBar .explorerTitleBlock { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.tacPage .tacExplorerBar .explorerPathBar { flex: 1 1 320px; min-width: 0; display: flex; flex-wrap: nowrap; align-items: center; justify-content: space-between; gap: 14px; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.tacPage .tacExplorerBar .explorerBreadcrumbs { flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.tacPage .tacExplorerBar .explorerPathActions { flex: 0 1 auto; min-width: 0; flex-wrap: nowrap; }
+.tacPage .tacExplorerBar .explorerPathActions .fui-Caption1 { max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-faint); }
+.tacPage .tacExplorerBar .pathBackButton { width: 34px; height: 34px; transform: rotate(180deg); }
+.tacPage .tacExplorerBar .explorerToolbar { flex: 0 0 auto; width: auto; margin: 0; position: static; flex-direction: row; }
+.tacPage .tacExplorerBar .toolbarControlGroup { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 4px; width: auto; margin: 0; padding: 3px; border: 1px solid var(--stroke); background: var(--surface-muted); }
+.tacPage .tacExplorerBar .explorerToolbarButton, .tacPage .tacExplorerBar .filterToggleButton { width: 34px; height: 34px; min-width: 34px; border: 0; background: transparent; font-size: 16px; }
+.tacPage .tacExplorerBar .explorerToolbarButton.active, .tacPage .tacExplorerBar .filterToggleButton.active { background: var(--accent-solid); color: #111; }
+.tacPage .tacExplorerBar .filterToggleWrap { position: relative; }
+.tacToolSep { width: 1px; height: 22px; margin: 0 4px; background: var(--stroke-strong); }
+
+/* Compact file / folder cards. */
+.tacPage .fileGrid { grid-template-columns: repeat(auto-fill, minmax(232px, 1fr)); gap: 20px; padding: 24px 28px; }
+.tacPage .gridItem.tacFileCard { position: relative; display: flex; flex-direction: column; gap: 0; padding: 0; overflow: hidden; cursor: pointer; clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%); }
+.tacPage .gridItem.tacFileCard::after { content: ""; display: block; position: absolute; top: 0; right: 0; width: 14px; height: 14px; z-index: 5; pointer-events: none; background: linear-gradient(225deg, transparent 9px, var(--stroke-strong) 9px, var(--stroke-strong) 10px, transparent 10px); }
+.tacPage .gridItem.tacFileCard:hover { border-color: var(--stroke-strong); }
+.tacPage .tacFileCard .fileVisualShell { position: relative; aspect-ratio: 2.1 / 1; height: auto; border: 0; border-bottom: 1px solid var(--stroke); }
+.tacPage .tacFileCard .fileVisualShell .gridThumb, .tacPage .tacFileCard > .gridThumb { width: 100%; height: 100%; border: 0; border-radius: 0; }
+.tacPage .tacFileCard > .gridThumb { aspect-ratio: 2.1 / 1; height: auto; border-bottom: 1px solid var(--stroke); }
+.tacPage .tacFileCard .thumbImg { object-fit: cover; }
+.tacPage .tacFileCard .folderCoverIconLarge { font-size: 38px; }
+.tacPage .fileTypeVisual .fileVisualCode, .tacPage .fileTypeVisual .fileVisualLabel, .tacPage .fileTypeVisual .fileVisualBarcode { display: none; }
+.tacPage .tacFileCard .fileTypeVisual { gap: 0; }
+.tacPage .tacFileCard .fileTypeVisual .equipmentVisual { height: 80%; width: auto; max-width: 70%; margin: 0; }
+.tacPlate { position: absolute; top: 0; left: 0; z-index: 4; display: inline-flex; align-items: center; height: 22px; padding: 0 10px 0 8px; border-left: 3px solid var(--accent-solid); background: var(--surface-strong); color: var(--text); font: 700 10px/1 var(--tac-font-display); letter-spacing: 2px; pointer-events: none; }
+.tacPage .tacFileCard .selectToggle { top: 4px; left: auto; right: 18px; width: 28px; height: 28px; }
+.tacPage .tacFileCard .thumbTagOverlay { left: 8px; bottom: 6px; top: auto; }
+.tacCardInfo { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 12px 14px 2px; }
+.tacPage .tacFileCard .gridName { font: 600 15px/1.3 var(--tac-font-display); }
+.tacPage .tacFileCard .gridMetaLine { font-family: var(--tac-font-display); font-size: 12px; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tacPage .tacFileCard .gridMetaLine .tacNum { color: var(--text-soft); }
+.tacCardFoot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px 12px; }
+.tacSerial { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; font: 10px var(--tac-font-mono); color: var(--text-faint); }
+.tacSerial::before { content: ""; width: 30px; height: 11px; opacity: .7; background: repeating-linear-gradient(90deg, currentColor 0 1px, transparent 1px 3px, currentColor 3px 5px, transparent 5px 6px, currentColor 6px 7px, transparent 7px 10px); }
+
+/* Keys: segmented, square, yellow when pressed. */
+.tacCardKeys { display: inline-flex; align-items: stretch; border: 1px solid var(--stroke-strong); background: var(--surface-muted); }
+.tacKey { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; background: transparent; color: var(--text); font: 600 12px var(--tac-font-display); letter-spacing: 1px; transition: background .15s, color .15s; }
+.tacKey svg { font-size: 16px; }
+.tacKey + .tacKey { border-left: 1px solid var(--stroke-strong); }
+.tacKeyMore { width: 34px; padding: 0; }
+.tacKey:hover { background: var(--surface-hover); }
+.tacKey:active, .tacKey.active { background: var(--accent-solid); color: #111; }
+
+/* Action strip: an equipment panel that slides up above the card foot. */
+.tacStrip { position: absolute; left: 0; right: 0; bottom: 54px; z-index: 6; padding: 8px 10px; background: var(--surface-strong); border-top: 1px solid var(--accent-solid); transform: translateY(10px); opacity: 0; visibility: hidden; pointer-events: none; transition: transform .22s cubic-bezier(.2, .8, .2, 1), opacity .18s, visibility 0s .22s; }
+.tacFileCard.stripOpen .tacStrip, .tacFileCard:has(:focus-visible) .tacStrip, .fileRow.stripOpen .tacStrip, .fileRow:has(:focus-visible) .tacStrip { transform: none; opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; }
+@media (hover: hover) { .tacFileCard:hover .tacStrip, .fileRow:hover .tacStrip { transform: none; opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; } }
+.tacStrip .fileActionTray { position: static; display: flex; flex-wrap: wrap; gap: 0; width: auto; padding: 0; border: 1px solid var(--stroke-strong); border-radius: 0; background: var(--surface-muted); box-shadow: none; }
+.tacStrip .actionChip { width: 34px; min-width: 34px; height: 34px; padding: 0; border: 0; border-right: 1px solid var(--stroke); border-bottom: 1px solid var(--stroke); border-radius: 0; background: transparent; color: var(--text-soft); font-size: 16px; transition: background .15s, color .15s; }
+.tacStrip .actionChip:hover { background: var(--surface-hover); color: var(--text); }
+.tacStrip .actionChip:active, .tacStrip .actionChip.active { background: var(--accent-solid); color: #111; }
+.tacStrip .actionChip:disabled { opacity: .35; }
+.tacStrip .actionChip.danger { margin-left: auto; border-left: 1px solid var(--stroke-strong); border-right: 0; color: var(--danger); }
+.tacStrip .actionChip.danger:hover { background: var(--danger-bg); }
+.tacStrip .actionChipPrimary { display: none; }
+
+/* List mode: fixed 88px rows (+8px gap = the 96px the virtualiser assumes). */
+.tacPage .fileList .fileRow { display: grid; grid-template-columns: 112px minmax(0, 1fr) auto; align-items: center; gap: 18px; height: 88px; min-height: 0; margin: 0 0 8px; padding: 8px 14px 8px 8px; overflow: hidden; border-radius: 0; }
+.tacPage .fileList .fileRow .thumbShell, .tacPage .fileList .fileRow .thumbButton { width: 112px; height: 63px; border-radius: 0; }
+.tacPage .fileList .fileRow .fileMeta { gap: 4px; }
+.tacPage .fileList .fileRow .fileName { font: 600 15px var(--tac-font-display); }
+.tacPage .fileList .fileRow .fileSub { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tacPage .fileList .fileRow .selectToggle { top: 2px; left: 2px; width: 24px; height: 24px; }
+.tacPage .fileList .fileRow .thumbTagOverlay { display: none; }
+.tacPage .fileList .fileRow .actions { gap: 0; }
+.tacPage .fileList .fileRow .tacStrip { left: auto; right: 150px; top: 50%; bottom: auto; padding: 0; border: 0; background: transparent; transform: translate(10px, -50%); }
+.tacPage .fileList .fileRow.stripOpen .tacStrip, .tacPage .fileList .fileRow:has(:focus-visible) .tacStrip { transform: translate(0, -50%); }
+@media (hover: hover) { .tacPage .fileList .fileRow:hover .tacStrip { transform: translate(0, -50%); } }
+.tacPage .fileList .fileRow .tacStrip .fileActionTray { flex-wrap: nowrap; }
+.tacPage .fileList .fileRow .tacStrip .actionChip { border-bottom: 0; }
+.tacPage .fileList:not(.fileGridScroller) { padding: 16px 28px 24px; }
+.tacPage .fileList.fileGridScroller { padding: 0; }
+.tacPage .fileList .fileSub { font-family: var(--tac-font-display); }
+
+/* Phones: no hover, so the "more" key pins the strip; toolbar wraps, never clips. */
+@media (max-width: 760px) {
+  .tacMobile .explorerTop.tacExplorerBar { padding: 16px; gap: 12px; }
+  .tacMobile .tacExplorerBar .explorerTitleBlock { flex: 1 1 100%; }
+  .tacMobile .tacExplorerBar .explorerPathBar { flex: 1 1 100%; }
+  .tacMobile .tacExplorerBar .explorerPathActions .fui-Caption1 { display: none; }
+  .tacMobile .tacExplorerBar .explorerToolbar { flex: 1 1 100%; }
+  .tacMobile .tacExplorerBar .toolbarControlGroup { width: 100%; justify-content: space-between; }
+  .tacMobile .tacExplorerBar .explorerToolbarButton, .tacMobile .tacExplorerBar .filterToggleButton { width: 44px; height: 40px; }
+  .tacMobile .fileGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 14px 12px; }
+  .tacMobile .tacCardInfo { padding: 10px 10px 2px; }
+  .tacMobile .tacCardFoot { padding: 8px 10px 10px; }
+  .tacMobile .tacKeyPrimary span { display: none; }
+  .tacMobile .tacSerial { font-size: 0; gap: 0; }
+  .tacMobile .tacKeyPrimary { width: 40px; padding: 0; }
+  .tacMobile .tacKey { height: 36px; }
+  .tacMobile .tacFileCard .tacStrip { top: 0; bottom: 58px; display: flex; align-items: flex-end; padding: 6px; border-top: 0; }
+  .tacMobile .tacStrip .fileActionTray { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); width: 100%; }
+  .tacMobile .tacStrip .actionChip { width: auto; min-width: 0; height: 36px; }
+  .tacMobile .tacStrip .actionChip.danger { grid-column: 4; margin-left: 0; }
+  .tacMobile .tacExplorerBar .explorerPathBar, .tacMobile .tacExplorerBar .explorerToolbar { width: 100%; }
+  .tacMobile .tacExplorerBar .toolbarControlGroup { flex: 1 1 auto; }
+  .tacMobile .fileList .fileRow { grid-template-columns: 80px minmax(0, 1fr) auto; height: auto; min-height: 80px; gap: 12px; }
+  .tacMobile .fileList .fileRow .thumbShell, .tacMobile .fileList .fileRow .thumbButton { width: 80px; height: 45px; }
+  .tacMobile .fileList .fileRow .tacStrip { right: 8px; left: 8px; top: auto; bottom: 4px; transform: none; }
+}

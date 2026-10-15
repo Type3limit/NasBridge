@@ -31,13 +31,18 @@ import {
   EditRegular,
   EyeRegular,
   FilterRegular,
+  FolderAddRegular,
   FolderOpenRegular,
+  GridRegular,
+  MoreHorizontalRegular,
+  PlayRegular,
   ShareRegular,
   SparkleRegular,
   StarFilled,
   StarRegular,
   StreamRegular,
   TagRegular,
+  TextBulletListLtrRegular,
   VideoRegular,
 } from "@fluentui/react-icons";
 import { apiRequest } from "./api";
@@ -620,6 +625,8 @@ export default function App() {
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   // Desktop opens on the command center; phones keep the file browser first.
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState(() => (typeof window !== "undefined" && window.innerWidth > 760 ? "overview" : "explorer"));
+  // Which explorer card / row has its action strip pinned open (key of the entry).
+  const [actionStripKey, setActionStripKey] = useState(null);
   const [navExpanded, setNavExpanded] = useState(() => typeof window !== "undefined" && window.innerWidth >= 1280);
   const [isMobileViewport, setIsMobileViewport] = useState(() => {
     if (typeof window === "undefined") {
@@ -1505,10 +1512,60 @@ export default function App() {
     return (
       <section className="workspacePage filePanel explorerPanel">
         <div className="explorerShell workspacePageCard" data-chapter="01" data-code="FILE ARCHIVE">
-          <div className="explorerTop">
+          <div className="explorerTop tacExplorerBar">
             <div className="explorerTitleBlock">
               <Subtitle1>资源浏览器</Subtitle1>
               <Caption1>浏览当前目录、切换展示模式并管理目录结构。</Caption1>
+            </div>
+            <div className="explorerPathBar">
+              <div className="explorerBreadcrumbs">
+                <button
+                  type="button"
+                  className={`explorerCrumbButton${!currentExplorerPath ? " current" : ""}`}
+                  onClick={() => openExplorerFolder("")}
+                >
+                  根目录
+                </button>
+                {(() => {
+                  const truncated = isMobile && explorerBreadcrumbs.length > 2;
+                  const visible = truncated ? explorerBreadcrumbs.slice(-2) : explorerBreadcrumbs;
+                  return (
+                    <>
+                      {truncated && (
+                        <div className="explorerCrumbItem">
+                          <ChevronRightRegular className="explorerCrumbIcon" />
+                          <span className="explorerCrumbEllipsis">…</span>
+                        </div>
+                      )}
+                      {visible.map((crumb) => (
+                        <div key={crumb.path} className="explorerCrumbItem">
+                          <ChevronRightRegular className="explorerCrumbIcon" />
+                          <button
+                            type="button"
+                            className={`explorerCrumbButton${crumb.path === currentExplorerPath ? " current" : ""}`}
+                            onClick={() => openExplorerFolder(crumb.path)}
+                          >
+                            {crumb.label}
+                          </button>
+                        </div>
+                      ))}
+                    </>
+                  );
+                })()}
+              </div>
+              <div className="explorerPathActions">
+                <Caption1>{currentExplorerPath || "当前位于根目录"}</Caption1>
+                <button
+                  type="button"
+                  className="folderEnterButton pathBackButton"
+                  disabled={!currentExplorerPath}
+                  onClick={openExplorerParentFolder}
+                  aria-label="返回上级"
+                  title="返回上级"
+                >
+                  <ArrowRightRegular />
+                </button>
+              </div>
             </div>
             <div className="explorerToolbar">
               <div className="toolbarControlGroup">
@@ -1520,8 +1577,9 @@ export default function App() {
                   onClick={() => openCreateFolderModal()}
                   disabled={!createFolderClientOptions.length}
                 >
-                  <FolderOpenRegular />
+                  <FolderAddRegular />
                 </button>
+                <span className="tacToolSep" aria-hidden="true" />
                 <button
                   type="button"
                   className={`iconActionButton explorerToolbarButton${viewMode === "grid" ? " active" : ""}`}
@@ -1529,7 +1587,7 @@ export default function App() {
                   aria-label="图标模式"
                   onClick={() => setViewMode("grid")}
                 >
-                  ▦
+                  <GridRegular />
                 </button>
                 <button
                   type="button"
@@ -1538,8 +1596,9 @@ export default function App() {
                   aria-label="列表模式"
                   onClick={() => setViewMode("details")}
                 >
-                  ☰
+                  <TextBulletListLtrRegular />
                 </button>
+                <span className="tacToolSep" aria-hidden="true" />
                 <div className="filterToggleWrap">
                   <button
                     type="button"
@@ -1556,57 +1615,6 @@ export default function App() {
                   {activeFilterCount > 0 ? <span className="filterToggleBadge">{activeFilterCount}</span> : null}
                 </div>
               </div>
-            </div>
-          </div>
-
-          <div className="explorerPathBar">
-            <div className="explorerBreadcrumbs">
-              <button
-                type="button"
-                className={`explorerCrumbButton${!currentExplorerPath ? " current" : ""}`}
-                onClick={() => openExplorerFolder("")}
-              >
-                根目录
-              </button>
-              {(() => {
-                const truncated = isMobile && explorerBreadcrumbs.length > 2;
-                const visible = truncated ? explorerBreadcrumbs.slice(-2) : explorerBreadcrumbs;
-                return (
-                  <>
-                    {truncated && (
-                      <div className="explorerCrumbItem">
-                        <ChevronRightRegular className="explorerCrumbIcon" />
-                        <span className="explorerCrumbEllipsis">…</span>
-                      </div>
-                    )}
-                    {visible.map((crumb) => (
-                      <div key={crumb.path} className="explorerCrumbItem">
-                        <ChevronRightRegular className="explorerCrumbIcon" />
-                        <button
-                          type="button"
-                          className={`explorerCrumbButton${crumb.path === currentExplorerPath ? " current" : ""}`}
-                          onClick={() => openExplorerFolder(crumb.path)}
-                        >
-                          {crumb.label}
-                        </button>
-                      </div>
-                    ))}
-                  </>
-                );
-              })()}
-            </div>
-            <div className="explorerPathActions">
-              <Caption1>{currentExplorerPath || "当前位于根目录"}</Caption1>
-              <button
-                type="button"
-                className="folderEnterButton pathBackButton"
-                disabled={!currentExplorerPath}
-                onClick={openExplorerParentFolder}
-                aria-label="返回上级"
-                title="返回上级"
-              >
-                <ArrowRightRegular />
-              </button>
             </div>
           </div>
 
@@ -1773,7 +1781,7 @@ export default function App() {
               >
                 <div style={{ paddingTop: detailPaddingTop, paddingBottom: detailPaddingBottom }}>
                   {detailSlice.map((entry) => entry.kind === "folder" ? (
-                    <div key={entry.key} className="fileRow folderRow" onDoubleClick={() => openExplorerFolder(entry.folder.path)}>
+                    <div key={entry.key} className={`fileRow folderRow${actionStripKey === entry.key ? " stripOpen" : ""}`} onDoubleClick={() => openExplorerFolder(entry.folder.path)}>
                       <div className="thumbShell">
                         <button className="thumbButton folderThumbButton" onClick={() => openExplorerFolder(entry.folder.path)}>
                           <div className="thumbFallback folderThumbFallback">
@@ -1791,12 +1799,12 @@ export default function App() {
                         </div>
                       </div>
                       <div className="actions">
-                        {renderFolderActionTray(entry.folder)}
-                        <Caption1 className="actionHint">双击目录卡片也可进入</Caption1>
+                        {renderCardKeys(entry.key, { label: "进入", icon: <ArrowRightRegular />, onClick: () => openExplorerFolder(entry.folder.path) })}
                       </div>
+                      <div className="tacStrip">{renderFolderActionTray(entry.folder)}</div>
                     </div>
                   ) : (
-                    <div key={entry.key} className="fileRow">
+                    <div key={entry.key} className={`fileRow${actionStripKey === entry.key ? " stripOpen" : ""}`}>
                       <VideoHoverPreview file={entry.file} p2p={p2p} enabled={isVideoMime(entry.file.mimeType)}>
                         <div className="thumbShell">
                           <button className="thumbButton" onClick={() => preview(entry.file)}>
@@ -1822,9 +1830,9 @@ export default function App() {
                         </div>
                       </div>
                       <div className="actions">
-                        {renderFileActionTray(entry.file)}
-                        <Caption1 className="actionHint">点击缩略图可直接预览</Caption1>
+                        {renderCardKeys(entry.key, getPrimaryFileAction(entry.file))}
                       </div>
+                      <div className="tacStrip">{renderFileActionTray(entry.file)}</div>
                     </div>
                   ))}
                 </div>
@@ -1854,24 +1862,28 @@ export default function App() {
                     </button>
                   </div>
                 ))}
-                {currentExplorerEntries.map((entry) => entry.kind === "folder" ? (
-                  <div key={entry.key} className="gridItem folderGridItem" onDoubleClick={() => openExplorerFolder(entry.folder.path)}>
-                    <button className="gridThumb folderGridThumb" onClick={() => openExplorerFolder(entry.folder.path)}>
+                {currentExplorerEntries.map((entry, entryIndex) => entry.kind === "folder" ? (
+                  <div key={entry.key} className={`gridItem folderGridItem tacFileCard${actionStripKey === entry.key ? " stripOpen" : ""}`} onClick={() => openExplorerFolder(entry.folder.path)}>
+                    <button className="gridThumb folderGridThumb" onClick={(event) => { event.stopPropagation(); openExplorerFolder(entry.folder.path); }} aria-label={`进入目录 ${entry.folder.name}`}>
                       <div className="thumbFallback folderThumbFallback">
                         <FolderOpenRegular className="folderCoverIcon folderCoverIconLarge" />
                       </div>
                     </button>
-                    <div className="gridName" title={entry.folder.name}>{entry.folder.name}</div>
-                    <Caption1 className="gridMetaLine" title={entry.folder.path}>{entry.folder.path}</Caption1>
-                    <Caption1 className="gridMetaLine">{entry.folder.fileCount} 个文件 · {formatBytes(entry.folder.totalBytes)}</Caption1>
-                    <div className="gridCardFooter">
-                      {renderFolderActionTray(entry.folder)}
+                    <span className="tacPlate">DIR</span>
+                    <div className="tacCardInfo">
+                      <div className="gridName" title={entry.folder.name}>{entry.folder.name}</div>
+                      <Caption1 className="gridMetaLine"><span className="tacNum">{entry.folder.fileCount}</span> 个文件 · <span className="tacNum">{formatBytes(entry.folder.totalBytes)}</span></Caption1>
                     </div>
+                    <div className="tacCardFoot">
+                      {renderCardKeys(entry.key, { label: "进入", icon: <ArrowRightRegular />, onClick: () => openExplorerFolder(entry.folder.path) })}
+                      <span className="tacSerial" aria-hidden="true">D-{String(entryIndex + 1).padStart(3, "0")}</span>
+                    </div>
+                    <div className="tacStrip">{renderFolderActionTray(entry.folder)}</div>
                   </div>
                 ) : (
-                  <div key={entry.key} className="gridItem">
+                  <div key={entry.key} className={`gridItem tacFileCard${actionStripKey === entry.key ? " stripOpen" : ""}`} onClick={() => preview(entry.file)}>
                     <VideoHoverPreview file={entry.file} p2p={p2p} enabled={isVideoMime(entry.file.mimeType)} className="fileVisualShell">
-                      <button className="gridThumb" onClick={() => preview(entry.file)}>
+                      <button className="gridThumb" onClick={(event) => { event.stopPropagation(); preview(entry.file); }} aria-label={`预览 ${entry.file.name}`}>
                         {thumbMap[getThumbKey(entry.file)]?.url ? <img src={thumbMap[getThumbKey(entry.file)].url} className="thumbImg" /> : <FileTypeVisual mime={entry.file.mimeType} label={isUploadingFile(entry.file) ? "上传中" : isImageMime(entry.file.mimeType) ? "图片" : isVideoMime(entry.file.mimeType) ? "视频" : "文件"} />}
                       </button>
                       {renderSelectionToggle(entry.file)}
@@ -1883,12 +1895,16 @@ export default function App() {
                         </div>
                       )}
                     </VideoHoverPreview>
-                    <div className="gridName" title={entry.file.name} style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.file.name}</span>{entry.file.replicas?.length > 1 && <Badge style={{ flexShrink: 0 }} title={entry.file.replicas.map(f => getClientDisplayName(f.clientId)).join('、')}>{entry.file.replicas.length} 个副本</Badge>}</div>
-                    <Caption1 className="gridMetaLine">{getClientDisplayName(entry.file.clientId)} · {formatBytes(entry.file.size)}</Caption1>
-                    <Caption1 className="gridMetaLine">{columnMap.get(entry.file.columnId) || "未分类"} · {formatRelativeTime(getFileCreatedAt(entry.file))}</Caption1>
-                    <div className="gridCardFooter">
-                      {renderFileActionTray(entry.file)}
+                    <span className="tacPlate">{getFilePlate(entry.file)}</span>
+                    <div className="tacCardInfo">
+                      <div className="gridName" title={entry.file.name} style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.file.name}</span>{entry.file.replicas?.length > 1 && <Badge style={{ flexShrink: 0 }} title={entry.file.replicas.map(f => getClientDisplayName(f.clientId)).join('、')}>{entry.file.replicas.length} 个副本</Badge>}</div>
+                      <Caption1 className="gridMetaLine">{getClientDisplayName(entry.file.clientId)} · <span className="tacNum">{formatBytes(entry.file.size)}</span> · {formatRelativeTime(getFileCreatedAt(entry.file))}</Caption1>
                     </div>
+                    <div className="tacCardFoot">
+                      {renderCardKeys(entry.key, getPrimaryFileAction(entry.file))}
+                      <span className="tacSerial" aria-hidden="true">F-{String(entryIndex + 1).padStart(3, "0")}</span>
+                    </div>
+                    <div className="tacStrip">{renderFileActionTray(entry.file)}</div>
                   </div>
                 ))}
               </div>
@@ -4174,6 +4190,46 @@ export default function App() {
     );
   }
 
+  function getFilePlate(file) {
+    if (isVideoMime(file.mimeType)) return "VIDEO";
+    if (isAudioMime(file.mimeType)) return "AUDIO";
+    if (isImageMime(file.mimeType)) return "IMAGE";
+    return "DOC";
+  }
+
+  function toggleActionStrip(key) {
+    setActionStripKey((prev) => (prev === key ? null : key));
+  }
+
+  function getPrimaryFileAction(file) {
+    return isVideoMime(file.mimeType) || isAudioMime(file.mimeType)
+      ? { label: "播放", icon: <PlayRegular />, onClick: () => preview(file) }
+      : { label: "预览", icon: <EyeRegular />, onClick: () => preview(file) };
+  }
+
+  // Compact card controls: one primary key plus a "more" key that pins the
+  // equipment-panel strip holding the remaining actions.
+  function renderCardKeys(key, primary) {
+    const open = actionStripKey === key;
+    return (
+      <div className="tacCardKeys" onClick={(event) => event.stopPropagation()}>
+        <button type="button" className="tacKey tacKeyPrimary" title={primary.label} onClick={primary.onClick}>
+          {primary.icon}<span>{primary.label}</span>
+        </button>
+        <button
+          type="button"
+          className={`tacKey tacKeyMore${open ? " active" : ""}`}
+          aria-expanded={open}
+          aria-label={open ? "收起操作" : "更多操作"}
+          title={open ? "收起操作" : "更多操作"}
+          onClick={() => toggleActionStrip(key)}
+        >
+          <MoreHorizontalRegular />
+        </button>
+      </div>
+    );
+  }
+
   function renderSelectionToggle(file) {
     const selected = selectedFileIds.includes(file.id);
     return (
@@ -5178,7 +5234,13 @@ export default function App() {
               </div>
             </div>
           </div>
-          <HudTicker items={tickerItems} />
+          {activeTab.id === "overview" ? <HudTicker items={tickerItems} /> : (
+            <div className="tacTopTitle" key={activeTab.id}>
+              <span className="tacTopIndex">{activeTabNumber}</span>
+              <strong>{activeTab.code}</strong>
+              <span className="tacTopLabel">/ {activeTab.label}</span>
+            </div>
+          )}
           <HudClock />
           <div className="topbarActions">
             <ThemeSwitch compact />
@@ -5248,7 +5310,7 @@ export default function App() {
           </aside>
 
           <main className="mainCanvas">
-            <TacticalStage key={activeTab.id} index={activeTabNumber} code={activeTab.code} label={activeTab.label}>
+            <TacticalStage key={activeTab.id} index={activeTabNumber} code={activeTab.code} label={activeTab.label} showMast={activeTab.id === "overview"}>
               {renderActiveWorkspacePage()}
             </TacticalStage>
           </main>

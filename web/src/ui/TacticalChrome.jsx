@@ -98,16 +98,18 @@ export function HudTicker({ items }) {
   );
 }
 
-// Keyed by the active module so each switch replays the wipe + reveal. The
-// mast is the page's display title: oversized code bleeding off the right edge
-// plus the module's slanted yellow index block.
-export function TacticalStage({ code, index, label, children }) {
+// Keyed by the active module so each switch replays the wipe + reveal. Only
+// the command center keeps a display mast (code + slanted yellow index block);
+// other modules carry their title in the top bar so the canvas goes to content.
+export function TacticalStage({ code, index, label, showMast = false, children }) {
   return (
-    <div className="tacStage">
-      <header className="tacMast" aria-hidden="true">
-        <span className="tacMastIndex">{index}</span>
-        <span className="tacMastText"><strong>{code}</strong><small>{label}</small></span>
-      </header>
+    <div className={`tacStage${showMast ? " withMast" : ""}`}>
+      {showMast && (
+        <header className="tacMast" aria-hidden="true">
+          <span className="tacMastIndex">{index}</span>
+          <span className="tacMastText"><strong>{code}</strong><small>{label}</small></span>
+        </header>
+      )}
       {children}
       <div className="tacWipe" aria-hidden="true">
         <div className="tacWipePanel"><span>{index}</span><strong>{code}</strong></div>
