@@ -1,13 +1,13 @@
 import { sceneClass, tacticalArt } from "./tacticalArt";
 // Equipment slots are grayscale line art (black strokes on white). The theme
 // recolours them in CSS (.equipmentVisual / .tacTileArt), so a swap only needs
-// the import changed. Placeholders: simple blueprint SVGs.
-import lineNode from "../assets/placeholders/line-node.svg"; // -> ../assets/line-node.webp
-import lineTransfer from "../assets/placeholders/line-transfer.svg"; // -> ../assets/line-transfer.webp
-import lineVault from "../assets/placeholders/line-vault.svg"; // -> ../assets/line-vault.webp
-import lineProjector from "../assets/placeholders/line-projector.svg"; // -> ../assets/line-projector.webp
-import lineConsole from "../assets/placeholders/line-console.svg"; // -> ../assets/line-console.webp
-import lineArchive from "../assets/placeholders/line-archive.svg"; // -> ../assets/line-archive.webp
+// the import changed. Generated from refined-imagegen-prompts.json.
+import lineNode from "../assets/line-node.webp";
+import lineTransfer from "../assets/line-transfer.webp";
+import lineVault from "../assets/line-vault.webp";
+import lineProjector from "../assets/line-projector.webp";
+import lineConsole from "../assets/line-console.webp";
+import lineArchive from "../assets/line-archive.webp";
 
 export const equipmentArt = { node: lineNode, transfer: lineTransfer, share: lineVault, media: lineProjector, chat: lineConsole, archive: lineArchive };
 export function EquipmentVisual({ kind = "archive", className = "" }) {

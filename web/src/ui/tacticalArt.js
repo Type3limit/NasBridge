@@ -1,10 +1,8 @@
-// Scene slots used by the tactical UI. Each one currently points at a
-// placeholder; when the files from src/assets/refined-imagegen-prompts.json
-// are generated, save them under src/assets/ and change only the import.
-import accessHero from "../assets/relay-station.webp"; // -> ../assets/access-hero.webp
-import commandHero from "../assets/machine-hall.webp"; // -> ../assets/command-hero.webp
-import broadcastLine from "../assets/placeholders/line-broadcast.svg"; // -> ../assets/line-broadcast.webp
-import animeLine from "../assets/placeholders/line-anime.svg"; // -> ../assets/line-anime.webp
+// Generated from src/assets/refined-imagegen-prompts.json.
+import accessHero from "../assets/access-hero.webp";
+import commandHero from "../assets/command-hero.webp";
+import broadcastLine from "../assets/line-broadcast.webp";
+import animeLine from "../assets/line-anime.webp";
 
 export const tacticalArt = {
   accessHero,
