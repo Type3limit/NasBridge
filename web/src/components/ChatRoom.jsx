@@ -9,7 +9,7 @@ import { useResolvedP2PAssetUrl } from "./p2pAsset";
 import { InlineVideoPlayer } from "./VideoViewportSurface";
 import { apiRequest, toWsUrl } from "../api";
 import { EquipmentVisual } from "../ui/OperationsDisplay";
-import { contentIdentity } from "../replicas.js";
+import { buildAttachmentFileIndex, resolveAttachmentNode } from "./chatAttachments.js";
 
 const AiStarMapCard = lazy(() => import("./AiStarMapCard").then(module => ({ default: module.AiStarMapCard })));
 
@@ -921,23 +921,6 @@ function storeNodeChoice(key, value) {
   }
 }
 
-// Chat attachments are mirrored to every node at the same path, so one whose node
-// is offline can be read from any online node. Library files fall back to an
-// online copy with the same content.
-function resolveAttachmentNode(attachment, context) {
-  if (!attachment?.clientId || !attachment.path || context.onlineIds.has(attachment.clientId)) {
-    return attachment;
-  }
-  if (String(attachment.path).startsWith(`${CHAT_ASSET_PREFIX}/`)) {
-    const clientId = context.onlineIds.has(context.preferredId) ? context.preferredId : [...context.onlineIds][0];
-    return { ...attachment, clientId, originClientId: attachment.clientId };
-  }
-  const { filesById, filesByIdentity } = context.fileIndex();
-  const identity = contentIdentity(filesById.get(attachment.id) || attachment);
-  const copy = identity ? (filesByIdentity.get(identity) || []).find((file) => context.onlineIds.has(file.clientId)) : null;
-  return copy ? { ...attachment, clientId: copy.clientId, path: copy.path, originClientId: attachment.clientId } : attachment;
-}
-
 function useAttachmentThumbnail({ attachment, p2p, enabled = true }) {
   const [thumbnailUrl, setThumbnailUrl] = useState("");
 
@@ -1130,22 +1113,14 @@ export default function ChatRoom({
     const context = {
       onlineIds,
       preferredId: hostClientId,
+      chatAssetPrefix: CHAT_ASSET_PREFIX,
       fileIndex: () => {
-        if (!index) {
-          index = { filesById: new Map(), filesByIdentity: new Map() };
-          for (const file of nasFiles || []) {
-            index.filesById.set(file.id, file);
-            const identity = contentIdentity(file);
-            if (identity) {
-              index.filesByIdentity.set(identity, [...(index.filesByIdentity.get(identity) || []), file]);
-            }
-          }
-        }
+        index = index || buildAttachmentFileIndex(nasFiles || []);
         return index;
       }
     };
     return storedMessages.map((message) => {
-      if (!message?.attachments?.length || message.attachments.every((item) => !item?.clientId || onlineIds.has(item.clientId))) {
+      if (!message?.attachments?.length) {
         return message;
       }
       const attachments = message.attachments.map((item) => resolveAttachmentNode(item, context));
@@ -2024,6 +1999,7 @@ export default function ChatRoom({
       name: attachment.name,
       path: attachment.path,
       clientId: attachment.clientId,
+      contentHash: attachment.contentHash || "",
       mimeType: attachment.mimeType,
       size: attachment.size
     });

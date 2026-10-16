@@ -559,3 +559,40 @@
   .previewModal .previewHeaderTitle { font-size: 15px !important; }
   .previewModal .previewToolbarButton { width: 34px; height: 34px; min-width: 34px; }
 }
+
+/* ---------- Phone chat: full-bleed, one-line header, messages own the screen ---------- */
+@media (max-width: 760px) {
+  .tacMobile .mobilePageContent.chatMode, .mobilePageContent.chatMode .tacStage, .mobilePageContent.chatMode .tacPage { padding: 0; margin: 0; }
+  .mobilePageContent.chatMode .chatRoomShell { border: 0; }
+  .mobilePageContent.chatMode .chatRoomHeader { display: flex; flex-direction: row; align-items: center; gap: 10px; min-height: 0; padding: 8px 12px; border-bottom: 1px solid var(--stroke); }
+  .mobilePageContent.chatMode .chatRoomHeader > .fui-Subtitle1 { position: static !important; width: auto !important; height: auto !important; clip: auto !important; flex: 0 0 auto; font: 700 16px/1 var(--tac-font-display) !important; }
+  .mobilePageContent.chatMode .chatRoomMinimalMeta { flex: 1 1 auto; display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; }
+  .mobilePageContent.chatMode .chatRoomMinimalMeta > .fui-Badge:nth-of-type(2), .mobilePageContent.chatMode .chatRoomMinimalMeta > .fui-Caption1 { display: none; }
+  .mobilePageContent.chatMode .chatRoomMinimalMeta > .fui-Badge { font-size: 11px; padding: 0 6px; height: 22px; }
+  .mobilePageContent.chatMode .chatNodeSelect { height: 26px; min-width: 0; max-width: 58%; }
+  .mobilePageContent.chatMode .chatNodeSelect select { max-width: 100%; min-width: 0; font-size: 12px; }
+
+  .mobilePageContent.chatMode .chatTimeline { padding: 10px 10px 14px; }
+  .mobilePageContent.chatMode .chatMessageRow { flex-direction: row; align-items: flex-start; gap: 8px; }
+  .mobilePageContent.chatMode .chatMessageRow.mine { flex-direction: row-reverse; }
+  .mobilePageContent.chatMode .chatMessageRail { flex: 0 0 30px; }
+  .mobilePageContent.chatMode .chatMessageAvatar { width: 30px; height: 30px; min-width: 30px; font-size: 13px; }
+  .mobilePageContent.chatMode .chatMessageAvatarSpacer { display: block; width: 30px; }
+  .mobilePageContent.chatMode .chatMessageCard { max-width: calc(100% - 38px); padding: 8px 10px; }
+  .mobilePageContent.chatMode .chatMessageRow:not(.bot) .chatMessageCard:not(.dynamic) { width: fit-content; }
+  .mobilePageContent.chatMode .chatMessageRow.bot .chatMessageCard, .mobilePageContent.chatMode .chatMessageCard.dynamic { flex: 1 1 auto; }
+  .mobilePageContent.chatMode .chatMessageMetaMain { gap: 6px; }
+  .mobilePageContent.chatMode .chatMessageMetaMain .fui-Caption1 + .fui-Caption1 { display: none; }
+  .mobilePageContent.chatMode .chatDynamicCardTitleRow .fui-Text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .mobilePageContent.chatMode .chatDynamicCardTitleBlock > .fui-Caption1 { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  /* Long-press opens the same actions as a menu, so the inline tray only costs space here. */
+  .mobilePageContent.chatMode .chatMessageActions { display: none; }
+
+  .mobilePageContent.chatMode .chatComposerBar { padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px)); }
+  .mobilePageContent.chatMode .chatComposerPanelActions { display: flex; flex-wrap: nowrap; justify-content: flex-start; gap: 6px; overflow-x: auto; scrollbar-width: none; padding-bottom: 6px; }
+  .mobilePageContent.chatMode .chatComposerPanelActions > * { flex: 0 0 auto; }
+  .mobilePageContent.chatMode .chatComposerPanelActions .chatComposerIconButton.send { position: sticky; right: 0; z-index: 1; box-shadow: -10px 0 10px var(--surface-muted); }
+  .mobilePageContent.chatMode .chatComposerIconButton, .mobilePageContent.chatMode .chatComposerBotButton { min-width: 34px; min-height: 34px; height: 34px; padding: 0 8px; }
+  .mobilePageContent.chatMode .chatNodeSelect.compact { height: 34px; max-width: 150px; }
+  .mobilePageContent.chatMode .chatComposerInput { field-sizing: content; height: auto; min-height: 40px; max-height: 22vh; padding: 9px 10px; font-size: 15px; }
+}
