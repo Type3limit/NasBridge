@@ -50,7 +50,8 @@ export function createSyncGroupManager({ storageRoot, api, clientId, sendSignal,
     reports[group.id] = { ...reports[group.id], state: 'running', message: '正在同步', revision: group.revision };
     await publish().catch(() => {});
     const total = { pushed: 0, pulled: 0, deleted: 0, conflicts: 0 }, errors = [];
-    for (const member of group.members.filter(m => m.clientId !== clientId())) {
+    // Offline members are skipped; they catch up on a later round.
+    for (const member of group.members.filter(m => m.clientId !== clientId() && m.online !== false)) {
       check();
       let peer;
       try {

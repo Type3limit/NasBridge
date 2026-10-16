@@ -84,8 +84,13 @@ export function createSyncGroupRegistry({ filename = path.resolve(process.cwd(),
       return { groups: syncChatAttachmentGroup(read()).groups.map(g => ({ ...g, reports: Object.fromEntries(g.members.map(m => [m.clientId, capability(m.clientId)?.groups?.[g.id] || null])) })), capabilities: Object.fromEntries(clients().map(c => [c.id, capability(c.id) ? { protocol: capability(c.id).protocol, seenAt: new Date(capability(c.id).time).toISOString() } : null])) };
     },
     assigned(clientId) {
-      const online = new Map(clients().map(c => [c.id, c.status !== 'disabled']));
-      return { leaseMs: 30000, groups: syncChatAttachmentGroup(read()).groups.filter(g => g.enabled && g.members.some(m => m.clientId === clientId) && g.members.every(m => online.get(m.clientId))) };
+      const all = clients();
+      const online = new Map(all.map(c => [c.id, c.status !== 'disabled']));
+      const connected = new Set(all.filter(c => c.status === 'online').map(c => c.id));
+      // `online` lets the coordinator skip members it cannot reach this round.
+      return { leaseMs: 30000, groups: syncChatAttachmentGroup(read()).groups
+        .filter(g => g.enabled && g.members.some(m => m.clientId === clientId) && g.members.every(m => online.get(m.clientId)))
+        .map(g => ({ ...g, members: g.members.map(m => ({ ...m, online: connected.has(m.clientId) })) })) };
     },
     report(clientId, body) {
       const assigned = new Set(read().groups.filter(g => g.members.some(m => m.clientId === clientId)).map(g => g.id));

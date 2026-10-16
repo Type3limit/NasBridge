@@ -429,7 +429,7 @@
 
 /* Compact file / folder cards. */
 .tacPage .fileGrid { grid-template-columns: repeat(auto-fill, minmax(232px, 1fr)); gap: 20px; padding: 24px 28px; }
-.tacPage .gridItem.tacFileCard { position: relative; display: flex; flex-direction: column; gap: 0; padding: 0; overflow: hidden; cursor: pointer; clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%); }
+.tacPage .gridItem.tacFileCard { container-type: inline-size; position: relative; display: flex; flex-direction: column; gap: 0; padding: 0; overflow: hidden; cursor: pointer; clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%); }
 .tacPage .gridItem.tacFileCard::after { content: ""; display: block; position: absolute; top: 0; right: 0; width: 14px; height: 14px; z-index: 5; pointer-events: none; background: linear-gradient(225deg, transparent 9px, var(--stroke-strong) 9px, var(--stroke-strong) 10px, transparent 10px); }
 .tacPage .gridItem.tacFileCard:hover { border-color: var(--stroke-strong); }
 .tacPage .tacFileCard .fileVisualShell { position: relative; aspect-ratio: 2.1 / 1; height: auto; border: 0; border-bottom: 1px solid var(--stroke); }
@@ -462,6 +462,8 @@
 
 /* Action strip: an equipment panel that slides up above the card foot. */
 .tacStrip { position: absolute; left: 0; right: 0; bottom: 54px; z-index: 6; padding: 8px 10px; background: var(--surface-strong); border-top: 1px solid var(--accent-solid); transform: translateY(10px); opacity: 0; visibility: hidden; pointer-events: none; transition: transform .22s cubic-bezier(.2, .8, .2, 1), opacity .18s, visibility 0s .22s; }
+/* Sit along the bottom of the 2.1:1 thumbnail so the name and actions stay readable and clickable. */
+.tacPage .tacFileCard .tacStrip { top: calc(100cqw / 2.1 - 53px); bottom: auto; }
 .tacFileCard.stripOpen .tacStrip, .tacFileCard:has(:focus-visible) .tacStrip, .fileRow.stripOpen .tacStrip, .fileRow:has(:focus-visible) .tacStrip { transform: none; opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; }
 @media (hover: hover) { .tacFileCard:hover .tacStrip, .fileRow:hover .tacStrip { transform: none; opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; } }
 .tacStrip .fileActionTray { position: static; display: flex; flex-wrap: wrap; gap: 0; width: auto; padding: 0; border: 1px solid var(--stroke-strong); border-radius: 0; background: var(--surface-muted); box-shadow: none; }

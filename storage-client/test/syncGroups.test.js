@@ -14,7 +14,7 @@ const fixture = async () => {
   const registry = createSyncGroupRegistry({ filename: path.join(root, 'groups.json'), clients: () => nodes, notify: (...args) => notices.push(args) });
   for (const c of nodes) registry.report(c.id, { protocol: 3 });
   const body = { name: 'test', coordinatorId: 'A', members: nodes.map(c => ({ clientId: c.id, directory: 'sync-test' })) };
-  return { root, registry, body, notices };
+  return { root, registry, body, notices, nodes };
 };
 const remoteStore = b => ({
   scan: () => b.scan(), stat: p => b.stat(p), remove: (p,h) => b.remove(p,h),
@@ -70,4 +70,16 @@ test('revocation discards stale in-flight configuration and cancels staged file 
     await assert.rejects(store.remove('keep.txt',stat.contentHash),/授权|取消/);
     assert.equal(await fs.readFile(path.join(f.root,'guarded/keep.txt'),'utf8'),'keep');
   } finally {manager?.stop(); await fs.rm(f.root,{recursive:true,force:true});}
+});
+test('coordinator skips members that are currently offline', async () => {
+  const f = await fixture(); let manager;
+  try {
+    const stores = {};
+    for (const id of ['A','B','C']) { await fs.mkdir(path.join(f.root,id,'sync-test'),{recursive:true}); stores[id]=new SyncStore(path.join(f.root,id),'sync-test'); }
+    const g = f.registry.create(f.body,'admin'), opened = [];
+    f.nodes[2].status = 'offline';
+    manager = createSyncGroupManager({storageRoot:path.join(f.root,'A'),clientId:()=> 'A',syncFiles:async()=>{},api:async(url,opts)=>url.endsWith('sync-control')?f.registry.report('A',JSON.parse(opts.body)):f.registry.assigned('A'),peerFactory:(id,group)=>({ remoteId:id,open:async()=>{ if (group.id===g.id) opened.push(id); },ping:async()=>{},close(){},remoteStore:()=>remoteStore(stores[id]) })});
+    f.registry.run(g.id); await manager.refresh(); await manager.tick();
+    assert.deepEqual(opened,['B']);
+  } finally { manager?.stop(); await fs.rm(f.root,{recursive:true,force:true}); }
 });

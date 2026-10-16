@@ -132,6 +132,8 @@ export function initWsHub(server) {
             );
           } else {
             log("signal-drop", { from: routeId, principalId, to: message.targetId, reason: "target-offline" });
+            // Tell the sender right away so it can fail fast instead of waiting out its ICE timeout.
+            sendToSocket(ws, { type: "signal-error", targetId: message.targetId, kind: message.payload?.kind || "", reason: "target-offline" });
           }
           return;
         }

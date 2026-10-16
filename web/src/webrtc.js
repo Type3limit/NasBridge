@@ -48,8 +48,13 @@ function pickPreferredClientDiagnostics(roleEntries) {
 
 function mergeDiagnosticsSnapshots(roleSnapshots) {
   const snapshots = roleSnapshots || {};
-  const wsStates = PEER_ROLE_ORDER.map((role) => snapshots[role]?.wsState || "idle");
+  // Role sockets other than control open on first use, so an unused ("idle") role
+  // does not make the signaling link degraded.
+  const wsStates = PEER_ROLE_ORDER.map((role) => snapshots[role]?.wsState || "idle").filter((state) => state !== "idle");
   let wsState = "idle";
+  if (!wsStates.length) {
+    wsStates.push("idle");
+  }
   if (wsStates.every((state) => state === "open")) {
     wsState = "open";
   } else if (wsStates.some((state) => state === "connecting")) {
@@ -503,6 +508,10 @@ export class P2PBridge {
               this.closePeer(message.clientId);
             }
           }
+          return;
+        }
+        if (message.type === "signal-error") {
+          this.handleSignalError(message);
           return;
         }
         if (message.type !== "signal") {
@@ -1252,9 +1261,28 @@ export class P2PBridge {
     }
   }
 
+  // The server could not deliver our offer (the node is offline or reconnecting):
+  // abort the pending connect now rather than waiting out the channel timeout.
+  handleSignalError(message) {
+    const clientId = String(message?.targetId || "");
+    this.log("signal-error", clientId, message?.kind, message?.reason);
+    const peer = this.peers.get(clientId);
+    if (!peer?.abortConnect || message?.reason !== "target-offline") {
+      return;
+    }
+    this.updateClientDiagnostics(clientId, { lastError: "storage node offline" });
+    const error = new Error("目标存储终端当前不在线，请稍后重试");
+    error.intentionalClose = true;
+    peer.abortConnect(error);
+  }
+
   async _connectPeer(clientId) {
     const peer = this.initPeer(clientId, { initiator: true });
     const pc = peer.pc;
+    const aborted = new Promise((_, reject) => {
+      peer.abortConnect = reject;
+    });
+    aborted.catch(() => {});
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -1262,7 +1290,8 @@ export class P2PBridge {
     this.logInfo("offer-sent", clientId);
     this.log("offer-sent", clientId);
 
-    await this.waitPeerChannelAvailable(peer, 35000);
+    await Promise.race([this.waitPeerChannelAvailable(peer, 35000), aborted]);
+    peer.abortConnect = null;
     this.startKeepalive(clientId);
     this.log("peer-ready", clientId);
     return peer;

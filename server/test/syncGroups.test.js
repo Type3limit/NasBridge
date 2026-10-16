@@ -45,7 +45,7 @@ test('server keeps a read-only chat attachment group across all storage nodes', 
   const chatGroup=async id=>(await(await call('/api/client/sync-groups',tokens[id])).json()).groups.find(g=>g.system==='chat-attachments');
   try {
     const group=await chatGroup('A');
-    assert.deepEqual(group.members,[{clientId:'A',directory:'.nas-chat-room/attachments'},{clientId:'B',directory:'.nas-chat-room/attachments'}]);
+    assert.deepEqual(group.members,[{clientId:'A',directory:'.nas-chat-room/attachments',online:false},{clientId:'B',directory:'.nas-chat-room/attachments',online:true}]);
     assert.equal(group.coordinatorId,'B');
     assert.equal((await chatGroup('B')).revision,group.revision);
     for(const [url,method] of [['/api/sync-groups/'+group.id,'PATCH'],['/api/sync-groups/'+group.id,'DELETE'],['/api/sync-groups/'+group.id+'/members/A','DELETE']])
