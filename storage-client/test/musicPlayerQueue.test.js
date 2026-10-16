@@ -41,3 +41,15 @@ test('a looped song can be moved up as your own request', async () => {
   assert.equal(p.state.queue[2].submittedById, 'C');
   await assert.rejects(p.control('requeue-track', { trackId: 'h2', actor: { id: 'C', name: 'Carol' } }), /秒后再试/);
 });
+
+test('search rechecks a bridge that came up after the node started', async () => {
+  const p = player([], -1);
+  let sources = [];
+  p.bridge = {
+    canHandleSource: (s) => sources.includes(s),
+    ensureReady: async () => { sources = ['qq']; return { ok: true, sources }; },
+    search: async () => ({ candidates: [{ providerTrackId: 'x1', title: 'Song' }] })
+  };
+  const results = await p.searchCandidates({ keyword: 'song', source: 'qq' });
+  assert.equal(results[0].title, 'Song');
+});

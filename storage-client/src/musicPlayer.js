@@ -1033,13 +1033,23 @@ export class GlobalMusicPlayer {
     return this.enqueueSelection({ source: first.source || source, candidate: first, submittedBy, requester });
   }
 
+  // The bridge may come up (or restart after a cookie refresh) after this node did,
+  // so ask it again before reporting a source as unavailable.
+  async bridgeHandles(providerKey) {
+    if (this.bridge.canHandleSource(providerKey)) {
+      return true;
+    }
+    await this.bridge.ensureReady({ allowStart: true, throwOnFailure: false }).catch(() => {});
+    return this.bridge.canHandleSource(providerKey);
+  }
+
   async searchCandidates({ keyword = "", source = DEFAULT_SOURCE, limit = 8 } = {}) {
     const trimmedKeyword = String(keyword || "").trim();
     const providerKey = MUSIC_SOURCES.includes(String(source || "")) ? String(source) : this.state.source;
     if (!trimmedKeyword) {
       throw new Error("请输入歌名后再搜索");
     }
-    if (this.bridge.canHandleSource(providerKey)) {
+    if (await this.bridgeHandles(providerKey)) {
       const result = await this.bridge.search({ keyword: trimmedKeyword, source: providerKey, limit });
       const candidates = Array.isArray(result?.candidates) ? result.candidates : [];
       return candidates.map((item) => normalizeCandidate(item, providerKey)).filter((item) => item.providerTrackId && item.title);
@@ -1058,7 +1068,7 @@ export class GlobalMusicPlayer {
     if (!normalizedCandidate.providerTrackId || !normalizedCandidate.title) {
       throw new Error("候选曲目信息不完整，无法入队");
     }
-    if (this.bridge.canHandleSource(providerKey)) {
+    if (await this.bridgeHandles(providerKey)) {
       const result = await this.bridge.resolve({ source: providerKey, candidate: normalizedCandidate });
       return {
         source: providerKey,
