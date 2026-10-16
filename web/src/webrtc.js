@@ -1273,6 +1273,7 @@ export class P2PBridge {
     this.updateClientDiagnostics(clientId, { lastError: "storage node offline" });
     const error = new Error("目标存储终端当前不在线，请稍后重试");
     error.intentionalClose = true;
+    error.nodeOffline = true;
     peer.abortConnect(error);
   }
 

@@ -17,9 +17,23 @@ export function groupFileReplicas(files) {
   return [...groups.values()];
 }
 
+const samePath = (left, right) => String(left || '').replace(/\\/g, '/') === String(right || '').replace(/\\/g, '/');
+
 export function findReplicas(file, onlineFiles) {
-  const identity = contentIdentity(file);
-  return onlineFiles.filter(candidate => identity ? contentIdentity(candidate) === identity : candidate.id === file.id);
+  let identity = contentIdentity(file);
+  if (!identity) {
+    // References from chat or bots may carry only a node and a path; resolve them through the index.
+    const indexed = onlineFiles.find(candidate => file.id && candidate.id === file.id)
+      || onlineFiles.find(candidate => candidate.clientId === file.clientId && samePath(candidate.path, file.path));
+    if (indexed) {
+      identity = contentIdentity(indexed);
+      if (!identity) return [indexed];
+    }
+  }
+  if (identity) return onlineFiles.filter(candidate => contentIdentity(candidate) === identity);
+  // Not indexed (yet): accept a same-path, same-size file on any online node.
+  if (!file.path) return [];
+  return onlineFiles.filter(candidate => samePath(candidate.path, file.path) && (!Number.isSafeInteger(file.size) || candidate.size === file.size));
 }
 
 export function rankReplicas(files, samples, bytes = 8 * 1024 * 1024) {
@@ -36,7 +50,11 @@ export function rankReplicas(files, samples, bytes = 8 * 1024 * 1024) {
 const measurements = new WeakMap();
 export async function selectReplica(p2p, file, onlineFiles, role, excluded = []) {
   const candidates = findReplicas(file, onlineFiles).filter(f => !excluded.includes(f.clientId));
-  if (!candidates.length) throw new Error('没有可用的在线副本');
+  if (!candidates.length) {
+    // A file the index has not picked up yet can still be read from its own node.
+    if (file.clientId && file.path && !excluded.includes(file.clientId)) return file;
+    throw new Error('没有可用的在线副本');
+  }
   if (candidates.length === 1) return candidates[0];
   let cache = measurements.get(p2p);
   if (!cache) { cache = new Map(); measurements.set(p2p, cache); }

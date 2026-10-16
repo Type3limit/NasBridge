@@ -26,3 +26,15 @@ test('selection caches probes and honors failed preview exclusions', async () =>
   await selectReplica(p2p, a, [a, b], 'preview'); assert.equal(calls, 2);
   assert.equal((await selectReplica(p2p, a, [a, b], 'preview', ['b'])).clientId, 'a');
 });
+test('node-and-path references resolve through the index to every online copy', async () => {
+  // A bot attachment carries no index id and no content hash.
+  const ref = { clientId: 'a', path: 'videos/x.mp4', name: 'x.mp4', size: 1000 };
+  assert.deepEqual(findReplicas(ref, [a, b]).map(f => f.clientId), ['a', 'b']);
+  // Its own node is offline: the same content on another node is still found.
+  assert.deepEqual(findReplicas(ref, [b]).map(f => f.clientId), ['b']);
+  // Not indexed yet: same path and size on an online node, otherwise read it from its own node.
+  const fresh = { clientId: 'c', path: 'downloads/new.mp4', size: 5 };
+  assert.deepEqual(findReplicas(fresh, [a, b]), []);
+  assert.equal(await selectReplica({}, fresh, [a, b], 'preview'), fresh);
+  await assert.rejects(selectReplica({}, fresh, [a, b], 'preview', ['c']), /没有可用的在线副本/);
+});

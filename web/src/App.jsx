@@ -2216,6 +2216,14 @@ export default function App() {
     toastTimersRef.current.set(id, timer);
   }, []);
 
+  // Reading a file only needs one online copy; its original node may be offline.
+  function ensureFileReachable(file) {
+    if (clients.some((item) => item.id === file?.clientId && item.status === "online") || findReplicas(file, onlineFiles).length) {
+      return true;
+    }
+    return ensureClientOnline(file?.clientId);
+  }
+
   function ensureClientOnline(clientId) {
     const client = clients.find((item) => item.id === clientId);
     if (!client || client.status !== "online") {
@@ -3146,7 +3154,7 @@ export default function App() {
   }
 
   async function download(file) {
-    if (!p2p || !ensureClientOnline(file.clientId)) return;
+    if (!p2p || !ensureFileReachable(file)) return;
     if (!(await ensureSignalingReady("download"))) return;
     let jobId = getDownloadJobId(file);
     const onStart = ({ requestId, channelName }) => {
@@ -3240,7 +3248,7 @@ export default function App() {
   }
 
   async function preview(file, options = {}) {
-    if (!p2p || !ensureClientOnline(file.clientId)) return;
+    if (!p2p || !ensureFileReachable(file)) return;
     if (!(await ensureSignalingReady("preview"))) return;
     const sessionId = ++previewSessionIdRef.current;
 
@@ -3561,7 +3569,7 @@ export default function App() {
       setMessage("预览已就绪");
     } catch (error) {
       if (previewSessionIdRef.current !== sessionId) return;
-      if (error?.cancelled || error?.intentionalClose) return;
+      if (error?.cancelled || (error?.intentionalClose && !error?.nodeOffline)) return;
       const excluded = [...(options.excludedReplicaIds || []), file.clientId];
       if (findReplicas(file, onlineFiles).some(candidate => !excluded.includes(candidate.clientId))) {
         setMessage('当前副本预览失败，正在切换其他节点...');
