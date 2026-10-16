@@ -1535,6 +1535,7 @@ export class P2PBridge {
       if (message.type === "music-search-result") op.onMusicSearchResult?.(message);
       if (message.type === "music-track-enqueued") op.onMusicTrackEnqueued?.(message);
       if (message.type === "music-player-control-result") op.onMusicPlayerControlResult?.(message);
+      if (message.type === "qq-music-login-result") op.onQqMusicLoginResult?.(message);
       if (message.type === "put-file-cancelled") {
         const err = new Error("上传已取消");
         err.cancelled = true;
@@ -2884,6 +2885,33 @@ export class P2PBridge {
     }));
   }
 
+  // QQ Music sign-in on the storage node: action "status" | "start" | "poll"; provider "qq" | "wechat".
+  async qqMusicLogin(clientId, action, provider = "qq") {
+    this.markClientActivity(clientId);
+    return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
+      const { channel, opChannelName } = await this.getChannelForOp(peer, "control");
+      const requestId = this.generateRequestId();
+      return new Promise((resolve, reject) => {
+        const timeout = this.createOperationTimeout(clientId, opChannelName, requestId, 30_000);
+        const opKey = this.opKey(clientId, opChannelName);
+        this.currentOp.set(opKey, {
+          requestId,
+          onQqMusicLoginResult: (message) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            resolve(message);
+          },
+          onError: (error) => {
+            clearTimeout(timeout);
+            this.currentOp.delete(opKey);
+            reject(error);
+          }
+        });
+        channel.send(JSON.stringify({ type: "qq-music-login", requestId, action, provider }));
+      });
+    }));
+  }
+
   async controlMusicPlayer(clientId, action, payload = {}) {
     this.markClientActivity(clientId);
     return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
@@ -3132,6 +3160,10 @@ export class P2PBridgePool {
 
   enqueueMusicSelection(clientId, source, candidate, submittedBy = "", requester = null) {
     return this.getBridge("control").enqueueMusicSelection(clientId, source, candidate, submittedBy, requester);
+  }
+
+  qqMusicLogin(clientId, action, provider = "qq") {
+    return this.getBridge("control").qqMusicLogin(clientId, action, provider);
   }
 
   controlMusicPlayer(clientId, action, payload = {}) {

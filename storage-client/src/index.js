@@ -3651,7 +3651,7 @@ function wireDataChannel(channel, remotePeerId = "unknown-peer") {
       return;
     }
 
-    if (["get-music-player-state", "search-music-candidates", "enqueue-music-track", "enqueue-music-selection", "control-music-player"].includes(message.type)) {
+    if (["get-music-player-state", "search-music-candidates", "enqueue-music-track", "enqueue-music-selection", "control-music-player", "qq-music-login"].includes(message.type)) {
       try {
         const player = await ensureGlobalMusicPlayer();
         const response = await player.handleControlMessage(message);

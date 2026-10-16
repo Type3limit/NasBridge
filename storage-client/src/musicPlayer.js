@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { createMusicLibBridgeClient } from "./musicBridge.js";
+import { createQqMusicLogin } from "./qqMusicLogin.js";
 import { MAX_PENDING_PER_USER, REQUEST_COOLDOWN_MS, checkRequestAllowed, normalizeActor, orderUpcoming, voteCount } from "./musicQueue.js";
 
 const MUSIC_PLAYER_DIR = "music-player";
@@ -519,6 +520,10 @@ export class GlobalMusicPlayer {
       spawnProcess: options.spawnProcess,
       logger: options.logger || (() => {})
     });
+    this.qqLogin = createQqMusicLogin({
+      envFile: path.join(this.bridge.workDir || "", ".env"),
+      logger: this.logger
+    });
   }
 
   async init() {
@@ -645,6 +650,16 @@ export class GlobalMusicPlayer {
         requestId: message.requestId || "",
         track: buildPublicTrack(track),
         state: this.snapshot()
+      };
+    }
+    if (message.type === "qq-music-login") {
+      const action = String(message.action || "status");
+      const result = action === "start" ? await this.qqLogin.start(message.provider === "wechat" ? "wechat" : "qq") : action === "poll" ? await this.qqLogin.poll() : {};
+      return {
+        type: "qq-music-login-result",
+        requestId: message.requestId || "",
+        ...result,
+        account: { ...this.qqLogin.status(), ...(result.account ? { account: result.account } : {}) }
       };
     }
     if (message.type === "control-music-player") {

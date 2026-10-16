@@ -680,3 +680,16 @@ ol.musicDeckList .musicDeckRow { grid-template-columns: auto 40px minmax(0, 1fr)
   .mobileMinimusicDeck { display: flex; align-items: center; gap: 6px; height: 32px; margin-left: 4px; padding: 0 10px; border: 0; background: var(--accent-solid); color: #111; font: 800 12px var(--tac-font-display); }
   .mobileMinimusicDeck span { min-width: 18px; padding: 0 4px; background: #111; color: var(--accent-solid); font: 700 11px var(--tac-font-mono); text-align: center; }
 }
+
+/* Jukebox account tab: QQ Music sign-in by QR code (admins only). */
+.musicAccountStatus { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--stroke); background: var(--surface-muted); }
+.musicAccountDot { flex: 0 0 auto; width: 10px; height: 10px; background: var(--danger); }
+.musicAccountDot.on { background: var(--success); }
+.musicAccountActions { display: flex; gap: 8px; margin: 12px 0; }
+.musicAccountActions .musicDeckPrimary { flex: 1 1 0; height: 36px; }
+.musicDeckPrimary.wechat { background: #07c160; color: #fff; }
+.musicAccountQr { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 16px; border: 1px dashed var(--stroke-strong); }
+.musicAccountQr img { width: 180px; height: 180px; padding: 8px; background: #fff; image-rendering: pixelated; }
+.musicAccountQr p { margin: 0; font-size: 13px; color: var(--text-soft); text-align: center; }
+.musicAccountQr.status-success p { color: var(--success); font-weight: 700; }
+.musicAccountQr.status-error p, .musicAccountQr.status-expired p { color: var(--danger); }

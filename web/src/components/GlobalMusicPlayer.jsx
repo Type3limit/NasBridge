@@ -245,6 +245,8 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
   const [popupOpen, setPopupOpen] = useState(false);
   const [deckTab, setDeckTab] = useState("queue");
   const [requestBusyId, setRequestBusyId] = useState("");
+  const [qqAccount, setQqAccount] = useState(null);
+  const [qqLogin, setQqLogin] = useState(null);
   const [searchResults, setSearchResults] = useState([]);
   const [searchError, setSearchError] = useState("");
   const [selectionBusyId, setSelectionBusyId] = useState("");
@@ -1202,6 +1204,50 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
   const maxPending = Number(playerState?.rules?.maxPendingPerUser || 2);
   const cooldownSeconds = Number(playerState?.rules?.cooldownSeconds || 30);
 
+  // Admins sign the node into QQ Music from the panel; the cookie stays on the node.
+  useEffect(() => {
+    if (!popupOpen || deckTab !== "account" || !p2p || !hostClientId) {
+      return undefined;
+    }
+    let cancelled = false;
+    p2p.qqMusicLogin(hostClientId, "status")
+      .then((result) => { if (!cancelled) setQqAccount(result?.account || null); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [popupOpen, deckTab, p2p, hostClientId]);
+
+  useEffect(() => {
+    if (!qqLogin?.qrDataUrl || !["waiting", "scanned"].includes(qqLogin.status) || !p2p || !hostClientId) {
+      return undefined;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const result = await p2p.qqMusicLogin(hostClientId, "poll");
+        setQqLogin((current) => (current ? { ...current, status: result?.status || "error", message: result?.message || "" } : current));
+        if (result?.status === "success") {
+          setQqAccount(result.account || null);
+          onToast?.("QQ 音乐已登录，点歌台会用这个账号搜索和播放", "success");
+        }
+      } catch (error) {
+        setQqLogin((current) => (current ? { ...current, status: "error", message: error?.message || "查询登录状态失败" } : current));
+      }
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [qqLogin, p2p, hostClientId]);
+
+  async function startQqLogin(provider) {
+    if (!p2p || !hostClientId) {
+      return;
+    }
+    setQqLogin({ provider, status: "loading", message: "正在获取二维码…" });
+    try {
+      const result = await p2p.qqMusicLogin(hostClientId, "start", provider);
+      setQqLogin({ provider, status: result?.status || "waiting", message: result?.message || "", qrDataUrl: result?.qrDataUrl || "" });
+    } catch (error) {
+      setQqLogin({ provider, status: "error", message: error?.message || "获取二维码失败" });
+    }
+  }
+
   function openDeck(tab = "") {
     if (tab) {
       setDeckTab(tab);
@@ -1355,6 +1401,33 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
     </div>
   );
 
+  const accountPanel = (
+    <div className="musicDeckPane">
+      <div className="musicAccountStatus">
+        <span className={`musicAccountDot${qqAccount?.loggedIn ? " on" : ""}`} aria-hidden="true" />
+        <div className="musicDeckRowText">
+          <span className="musicDeckRowTitle">{qqAccount?.loggedIn ? `已登录 ${qqAccount.account || ""}` : "未登录 QQ 音乐"}</span>
+          <span className="musicDeckRowMeta">
+            {qqAccount?.loggedIn
+              ? `${qqAccount.provider === "wechat" ? "微信" : "QQ"} 扫码 · ${qqAccount.refreshedAt ? new Date(qqAccount.refreshedAt).toLocaleString() : "手动填写"}${qqAccount.expiresAt ? ` · ${new Date(qqAccount.expiresAt).toLocaleDateString()} 到期` : ""}`
+              : "登录后才能搜索和播放 QQ 音乐的大部分歌曲"}
+          </span>
+        </div>
+      </div>
+      <div className="musicAccountActions">
+        <button type="button" className="musicDeckPrimary" disabled={qqLogin?.status === "loading"} onClick={() => startQqLogin("qq")}>QQ 扫码登录</button>
+        <button type="button" className="musicDeckPrimary wechat" disabled={qqLogin?.status === "loading"} onClick={() => startQqLogin("wechat")}>微信扫码登录</button>
+      </div>
+      {qqLogin ? (
+        <div className={`musicAccountQr status-${qqLogin.status}`}>
+          {qqLogin.qrDataUrl && !["success", "expired"].includes(qqLogin.status) ? <img src={qqLogin.qrDataUrl} alt={`${qqLogin.provider === "wechat" ? "微信" : "QQ"} 登录二维码`} /> : null}
+          <p>{qqLogin.message}</p>
+        </div>
+      ) : null}
+      <p className="musicDeckHint">登录凭证只保存在当前存储节点（写入音乐桥 .env），不会上传到服务器。</p>
+    </div>
+  );
+
   return (
     <MusicPlayerContext.Provider value={{
       currentTrack,
@@ -1431,12 +1504,13 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
             </section>
             {audioError ? <p className="musicDeckError">{audioError}</p> : null}
             <nav className="musicDeckTabs" role="tablist">
-              {[["search", "搜索"], ["queue", `队列 ${upcomingTracks.length}`], ["lyrics", "歌词"]].map(([key, label]) => (
+              {[["search", "搜索"], ["queue", `队列 ${upcomingTracks.length}`], ["lyrics", "歌词"], ...(isAdmin ? [["account", "账号"]] : [])].map(([key, label]) => (
                 <button key={key} type="button" role="tab" aria-selected={deckTab === key} className={`musicDeckTab${deckTab === key ? " active" : ""}`} onClick={() => setDeckTab(key)}>{label}</button>
               ))}
             </nav>
             {deckTab === "search" ? searchPanel : null}
             {deckTab === "queue" ? queuePanel : null}
+            {deckTab === "account" && isAdmin ? accountPanel : null}
             {deckTab === "lyrics" ? (
               <div className="musicDeckPane"><pre className="musicDeckLyrics">{currentTrack?.lyrics || "当前曲目没有可用歌词。"}</pre></div>
             ) : null}
