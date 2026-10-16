@@ -1660,13 +1660,24 @@ export default function PreviewModal({
     );
   }
 
+  const previewKind = previewMime.startsWith("video/")
+    ? { tag: "PLAY", channel: "PLAYBACK", label: "VIDEO" }
+    : previewMime.startsWith("audio/")
+      ? { tag: "PLAY", channel: "PLAYBACK", label: "AUDIO" }
+      : previewMime.startsWith("image/")
+        ? { tag: "VIEW", channel: "INSPECT", label: "IMAGE" }
+        : { tag: "VIEW", channel: "INSPECT", label: "FILE" };
+
   return (
     <div className="overlay previewOverlay">
       <div ref={previewModalRef} className={`modalWindow previewModal${pageFillActive ? " pageFillActive" : ""}`} onClick={(event) => event.stopPropagation()} tabIndex={-1}>
         <div className="previewTopBar">
           <div className="previewHeaderMeta">
-            <Subtitle1 className="previewHeaderTitle" title={previewName || "文件"}>{previewName || "文件"}</Subtitle1>
-            <Caption1 className="previewHeaderMime">{previewMime || "未知类型"}</Caption1>
+            <span className="previewHeaderTag" aria-hidden="true">{previewKind.tag}</span>
+            <div className="previewHeaderText">
+              <Caption1 className="previewHeaderEyebrow">{`${previewKind.channel} // ${previewKind.label}`}<span className="previewHeaderMime">{previewMime || "未知类型"}</span></Caption1>
+              <Subtitle1 className="previewHeaderTitle" truncate wrap={false} block title={previewName || "文件"}>{previewName || "文件"}</Subtitle1>
+            </div>
           </div>
           <div className="previewToolbar">
             {previewHlsSource && availableHlsProfiles.length > 1 ? (
@@ -1998,7 +2009,10 @@ export default function PreviewModal({
           <aside className="previewSidePanel">
             <div className="previewPanelSection commentsPanel">
               <div className="commentsHeader" title={canUseComments ? "已登录，可评论、回复、点赞和发送弹幕" : authToken ? "当前文件暂不可评论" : "登录后可评论、回复和发送弹幕"}>
-                <Subtitle1>文件评论</Subtitle1>
+                <div className="commentsHeaderText">
+                  <Caption1 className="previewHeaderEyebrow">COMMS // FEEDBACK</Caption1>
+                  <Subtitle1>文件评论</Subtitle1>
+                </div>
                 <Badge appearance="outline" color="informative">{comments.length}</Badge>
               </div>
 
