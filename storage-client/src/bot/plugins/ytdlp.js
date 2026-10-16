@@ -325,6 +325,7 @@ export function createYtDlpDownloaderPlugin() {
             mimeType: imported.mimeType,
             size: imported.size,
             path: imported.relativePath,
+            contentHash: imported.contentHash || "",
             clientId: context?.chat?.hostClientId || "",
             kind: String(imported.mimeType || "").startsWith("video/") ? "video" : "file"
           }],

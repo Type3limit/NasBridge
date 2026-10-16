@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import mime from "mime-types";
+import { getContentHash } from "../../contentHash.js";
 
 function normalizeRelativePath(value = "") {
   return String(value || "").trim().replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+/g, "/");
@@ -66,7 +67,9 @@ export async function importFileIntoLibrary(options = {}) {
     relativePath,
     fileName: path.basename(uniqueTargetPath),
     size: Number(stat.size || 0),
-    mimeType: mime.lookup(uniqueTargetPath) || "application/octet-stream"
+    mimeType: mime.lookup(uniqueTargetPath) || "application/octet-stream",
+    // Lets chat cards find the file again after it is moved or copied to another node.
+    contentHash: await getContentHash(uniqueTargetPath).catch(() => "")
   };
 }
 

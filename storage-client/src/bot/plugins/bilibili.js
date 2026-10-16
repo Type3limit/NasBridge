@@ -2078,7 +2078,7 @@ export function createBilibiliDownloaderPlugin() {
         id: getBilibiliReplyMessageId(context),
         createdAt: context.createdAt,
         text: "",
-        attachments: [{ id: attachmentId, name: imported.fileName, mimeType: imported.mimeType, size: imported.size, path: imported.relativePath, clientId: context.chat.hostClientId, kind: String(imported.mimeType || "").startsWith("video/") ? "video" : "file" }],
+        attachments: [{ id: attachmentId, name: imported.fileName, mimeType: imported.mimeType, size: imported.size, path: imported.relativePath, contentHash: imported.contentHash || "", clientId: context.chat.hostClientId, kind: String(imported.mimeType || "").startsWith("video/") ? "video" : "file" }],
         card: buildBilibiliCard({ metadata, imported, source, attachmentId })
       });
 

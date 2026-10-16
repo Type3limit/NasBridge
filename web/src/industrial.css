@@ -39,7 +39,10 @@
 }
 html, body, #root { background: var(--page-bg); color: var(--text); }
 body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; -webkit-font-smoothing: antialiased; }
-.industrialProvider { min-height: 100dvh; background: transparent !important; color: var(--text); }
+/* Only the app root fills the viewport; Fluent copies this class onto its body-level portal
+   layer, which must stay zero-size or it swallows clicks above everything (z-index 1e6). */
+.industrialProvider { background: transparent !important; color: var(--text); }
+#root > .industrialProvider { min-height: 100dvh; }
 button, a, input, textarea, select { -webkit-tap-highlight-color: transparent; }
 button, input, select, textarea { font-family: inherit; }
 button { cursor: pointer; }
