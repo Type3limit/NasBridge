@@ -1,10 +1,8 @@
 import { createContext, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Button, Caption1, Input, Spinner, Text } from "@fluentui/react-components";
 import {
-  ChevronLeftRegular,
   ChevronRightRegular,
-  DeleteRegular,
-  MoreHorizontalRegular,
   PauseRegular,
   PlayRegular
 } from "@fluentui/react-icons";
@@ -40,54 +38,6 @@ function formatProgressLabel(track = null) {
 
 function chooseHostClient(clients = []) {
   return clients.find((item) => item.status === "online") || null;
-}
-
-function removeTrackFromPlayerState(state, trackId) {
-  if (!state || !trackId) {
-    return state;
-  }
-  const queue = Array.isArray(state.queue) ? [...state.queue] : [];
-  const index = queue.findIndex((item) => String(item?.id || "") === trackId);
-  if (index < 0) {
-    return state;
-  }
-
-  const currentIndex = Number(state.currentIndex ?? -1);
-  const wasCurrent = index === currentIndex;
-  queue.splice(index, 1);
-
-  let nextCurrentIndex = currentIndex;
-  let nextIsPlaying = Boolean(state.isPlaying);
-  let nextPositionSeconds = Number(state.positionSeconds || 0);
-  if (!queue.length) {
-    nextCurrentIndex = -1;
-    nextIsPlaying = false;
-    nextPositionSeconds = 0;
-  } else if (wasCurrent) {
-    nextCurrentIndex = Math.max(0, Math.min(index, queue.length - 1));
-    nextPositionSeconds = 0;
-  } else if (index < currentIndex) {
-    nextCurrentIndex = Math.max(0, currentIndex - 1);
-  }
-
-  const normalizedQueue = queue.map((item, queueIndex) => ({
-    ...item,
-    index: queueIndex
-  }));
-  const nextCurrentTrack = nextCurrentIndex >= 0 && nextCurrentIndex < normalizedQueue.length
-    ? normalizedQueue[nextCurrentIndex]
-    : null;
-
-  return {
-    ...state,
-    queue: normalizedQueue,
-    currentIndex: nextCurrentIndex,
-    currentTrack: nextCurrentTrack,
-    isPlaying: nextIsPlaying,
-    positionSeconds: nextPositionSeconds,
-    updatedAt: new Date().toISOString(),
-    lastError: ""
-  };
 }
 
 function pickLatestPlayerState(currentState, nextState) {
@@ -258,7 +208,7 @@ function saveFloatingPosition(position = null) {
   }
 }
 
-export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onToast }) {
+export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onToast, children = null }) {
   const hostClient = useMemo(() => chooseHostClient(clients), [clients]);
   const hostClientId = hostClient?.id || "";
   const shellRef = useRef(null);
@@ -272,7 +222,6 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
   const objectUrlRef = useRef("");
   const objectReleaseRef = useRef(null);
   const seekTimerRef = useRef(null);
-  const queueListRef = useRef(null);
   const previousTrackIdRef = useRef("");
   const floatingPositionRef = useRef({ x: FLOATING_EDGE_MARGIN, y: 92, side: "right" });
   const dragRef = useRef(null);
@@ -294,10 +243,11 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
   const [pendingSeek, setPendingSeek] = useState(null);
   const [searching, setSearching] = useState(false);
   const [popupOpen, setPopupOpen] = useState(false);
+  const [deckTab, setDeckTab] = useState("queue");
+  const [requestBusyId, setRequestBusyId] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searchError, setSearchError] = useState("");
   const [selectionBusyId, setSelectionBusyId] = useState("");
-  const [removingTrackId, setRemovingTrackId] = useState("");
   const [visibleQueueCount, setVisibleQueueCount] = useState(QUEUE_PAGE_SIZE);
   const [floatingPosition, setFloatingPosition] = useState({ x: FLOATING_EDGE_MARGIN, y: 92, side: "right" });
   const [cardPinnedOpen, setCardPinnedOpen] = useState(false);
@@ -306,6 +256,8 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
   const [dragging, setDragging] = useState(false);
 
   const queueItems = Array.isArray(playerState?.queue) ? playerState.queue : [];
+  // Who is requesting, liking or withdrawing; the storage node applies the queue rules per person.
+  const musicActor = useMemo(() => (user?.id ? { id: String(user.id), name: user.displayName || user.email || "", role: user.role || "user" } : null), [user?.id, user?.displayName, user?.email, user?.role]);
   const currentQueueIndex = Number(playerState?.currentIndex ?? -1);
   const derivedCurrentTrack = currentQueueIndex >= 0 && currentQueueIndex < queueItems.length
     ? queueItems[currentQueueIndex]
@@ -320,38 +272,12 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
   const progressValue = pendingSeek ?? (audioTrackId && audioTrackId === currentTrackId ? localTime : (trackWaitingForPlayback ? 0 : transportPosition));
   const progressPercent = currentDuration > 0 ? Math.max(0, Math.min(100, (progressValue / currentDuration) * 100)) : 0;
   const queueCount = queueItems.length;
-  const visibleQueueItems = queueItems.slice(0, visibleQueueCount);
   const queuedCandidateKeys = useMemo(() => new Set(queueItems.map((item) => `${String(item?.source || "")}:${String(item?.providerTrackId || "")}`)), [queueItems]);
   const cardOpen = !dragging && (cardPinnedOpen || popupOpen);
   const showFloatingCard = cardRendered;
 
   function getCandidateQueueKey(candidate = null) {
     return `${String(candidate?.source || currentSource || "")}:${String(candidate?.providerTrackId || "")}`;
-  }
-
-  function renderCompactVisual() {
-    if (showCompactCover) {
-      return (
-        <div className={`globalMusicCoverArtShell${playerState?.isPlaying ? " spinning" : ""}`}>
-          <img
-            className="globalMusicCoverArt"
-            src={currentTrack.coverUrl}
-            alt=""
-            draggable={false}
-            referrerPolicy="no-referrer"
-            onError={() => setCoverLoadErrorTrackId(currentTrackId)}
-          />
-          <span className="globalMusicCoverArtCenter" />
-        </div>
-      );
-    }
-    return (
-      <div className={`globalMusicDisc${playerState?.isPlaying ? " spinning" : ""}`}>
-        <span className="globalMusicDiscGroove grooveA" />
-        <span className="globalMusicDiscGroove grooveB" />
-        <span className="globalMusicDiscLabel" />
-      </div>
-    );
   }
 
   async function tryResumeAudioPlayback(options = {}) {
@@ -1116,7 +1042,8 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
         hostClientId,
         candidate.source || currentSource,
         candidate,
-        user?.displayName || user?.email || "web"
+        user?.displayName || user?.email || "web",
+        musicActor
       );
       applyIncomingPlayerState(result?.state || null);
       resetSearchState();
@@ -1143,7 +1070,8 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
             ...payload
           };
       const result = await p2p.controlMusicPlayer(hostClientId, action, {
-        ...nextPayload
+        ...nextPayload,
+        actor: musicActor
       });
       applyIncomingPlayerState(result?.state || null);
       return result?.state || null;
@@ -1184,165 +1112,8 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
     await sendControl("play");
   }
 
-  async function handleRemoveTrack(trackId = "", queueIndex = -1, track = null) {
-    const normalizedTrackId = String(trackId || "").trim();
-    if (!normalizedTrackId || !p2p || !hostClientId || removingTrackId) {
-      return;
-    }
-    const removedTrack = track || queueItems.find((item) => String(item?.id || "") === normalizedTrackId) || null;
-    const previousState = playerState;
-    setRemovingTrackId(normalizedTrackId);
-    setPlayerState((current) => removeTrackFromPlayerState(current, normalizedTrackId));
-    try {
-      await sendControl("remove-track", {
-        trackId: normalizedTrackId,
-        queueIndex,
-        providerTrackId: removedTrack?.providerTrackId || "",
-        relativePath: removedTrack?.relativePath || "",
-        title: removedTrack?.title || "",
-        source: removedTrack?.source || ""
-      }, {
-        includeCurrentTrackId: false,
-        silentError: true,
-        throwOnError: true
-      });
-
-      const confirmedState = await refreshState({ force: true });
-      const trackStillExists = Array.isArray(confirmedState?.queue)
-        && confirmedState.queue.some((item) => String(item?.id || "") === normalizedTrackId);
-      if (trackStillExists) {
-        throw new Error("移除没有生效，请稍后重试");
-      }
-
-      if (removedTrack?.title) {
-        onToast?.(`已移除: ${removedTrack.title}`, "success");
-      }
-    } catch (error) {
-      setPlayerState(previousState);
-      const message = error?.message || "移除失败";
-      updateAudioError(message);
-      onToast?.(message, "error");
-    } finally {
-      setRemovingTrackId("");
-    }
-  }
-
-  async function handleActivateTrack(track = null, queueIndex = -1) {
-    if (!track?.id || queueIndex < 0 || !p2p || !hostClientId) {
-      return;
-    }
-    updateAudioError("");
-    if (track.id === currentTrackId) {
-      await sendControl("play", {}, { silentError: true });
-      return;
-    }
-    clearLoadedAudio();
-    await sendControl("play-track", {
-      queueIndex,
-      trackId: track.id
-    }, {
-      includeCurrentTrackId: false,
-      silentError: true
-    });
-  }
-
-  function handleQueueScroll(event) {
-    const element = event.currentTarget;
-    if (element.scrollTop + element.clientHeight < element.scrollHeight - 120) {
-      return;
-    }
-    setVisibleQueueCount((current) => Math.min(queueItems.length, current + QUEUE_PAGE_SIZE));
-  }
-
-  function handleFloatingButtonPointerDown(event) {
-    if (event.button !== undefined && event.button !== 0) {
-      return;
-    }
-    dragRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      originX: floatingPositionRef.current.x,
-      originY: floatingPositionRef.current.y,
-      moved: false
-    };
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-  }
-
-  function handleFloatingButtonPointerMove(event) {
-    const dragState = dragRef.current;
-    if (!dragState || dragState.pointerId !== event.pointerId || typeof window === "undefined") {
-      return;
-    }
-    const dx = event.clientX - dragState.startX;
-    const dy = event.clientY - dragState.startY;
-    if (!dragState.moved && Math.hypot(dx, dy) >= 4) {
-      dragState.moved = true;
-      suppressToggleRef.current = true;
-      setDragging(true);
-      setCardPinnedOpen(false);
-      setPopupOpen(false);
-    }
-    if (!dragState.moved) {
-      return;
-    }
-    updateFloatingPosition(clampFloatingPosition(
-      {
-        x: dragState.originX + dx,
-        y: dragState.originY + dy
-      },
-      window.innerWidth,
-      window.innerHeight,
-      getFloatingFootprint(floatingSurfaceRef.current)
-    ));
-  }
-
-  function finishFloatingDrag(event) {
-    const dragState = dragRef.current;
-    if (!dragState || dragState.pointerId !== event.pointerId || typeof window === "undefined") {
-      return;
-    }
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
-    dragRef.current = null;
-    if (!dragState.moved) {
-      return;
-    }
-    const snapped = snapFloatingPosition(
-      floatingPositionRef.current,
-      window.innerWidth,
-      window.innerHeight,
-      getFloatingFootprint(floatingSurfaceRef.current)
-    );
-    updateFloatingPosition(snapped);
-    saveFloatingPosition(snapped);
-    window.setTimeout(() => {
-      setDragging(false);
-      suppressToggleRef.current = false;
-    }, 0);
-  }
-
-  function handleFloatingButtonClick() {
-    if (suppressToggleRef.current) {
-      suppressToggleRef.current = false;
-      return;
-    }
-    setCardPinnedOpen((value) => !value);
-  }
-
-  return (
-    <MusicPlayerContext.Provider value={{
-      currentTrack,
-      isPlaying: Boolean(playerState?.isPlaying),
-      togglePlay: handlePlayButtonClick,
-      nextTrack: () => sendControl("next"),
-      prevTrack: () => sendControl("previous"),
-    }}>
-    <>
-      <div
-        ref={shellRef}
-        className={`globalMusicPlayerShell floating side-${floatingPosition.side}${showFloatingCard ? " cardOpen" : ""}${popupOpen ? " popupOpen" : ""}${dragging ? " dragging" : ""}`}
-        style={{ left: `${floatingPosition.x}px`, top: `${floatingPosition.y}px` }}
-      >
+  // The <video> element is the audio engine; it stays mounted while the bar and panel change.
+  const mediaElement = (
         <video
             ref={audioRef}
             preload="auto"
@@ -1418,124 +1189,229 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
               sendControl("complete").catch(() => {});
             }}
           />
-        {!showFloatingCard ? (
+  );
+
+  const currentIndexValue = Number(playerState?.currentIndex ?? -1);
+  const upcomingTracks = queueItems.slice(currentIndexValue + 1);
+  const playedTracks = queueItems.slice(0, Math.max(0, currentIndexValue)).reverse();
+  const nextUpTrack = upcomingTracks[0] || null;
+  const myId = musicActor?.id || "";
+  const isAdmin = musicActor?.role === "admin";
+  const myPendingCount = upcomingTracks.filter((track) => track.submittedById && track.submittedById === myId).length;
+  const maxPending = Number(playerState?.rules?.maxPendingPerUser || 2);
+  const cooldownSeconds = Number(playerState?.rules?.cooldownSeconds || 30);
+
+  function openDeck(tab = "") {
+    if (tab) {
+      setDeckTab(tab);
+    }
+    setPopupOpen(true);
+  }
+
+  async function handleRequestAction(action, track, successText = "") {
+    if (!track?.id || requestBusyId) {
+      return;
+    }
+    setRequestBusyId(`${action}:${track.id}`);
+    const state = await sendControl(action, { trackId: track.id }, { includeCurrentTrackId: false });
+    setRequestBusyId("");
+    if (state && successText) {
+      onToast?.(successText, "success");
+    }
+  }
+
+  function renderTrackCover(track, className) {
+    return track?.coverUrl
+      ? <img className={className} src={track.coverUrl} alt="" />
+      : <span className={`${className} empty`} aria-hidden="true">♪</span>;
+  }
+
+  function renderUpcomingRow(track, position) {
+    const mine = Boolean(myId) && track.submittedById === myId;
+    const liked = Array.isArray(track.votedBy) && track.votedBy.includes(myId);
+    const busyPrefix = requestBusyId.split(":")[1] === track.id ? requestBusyId.split(":")[0] : "";
+    return (
+      <li key={track.id} className={`musicDeckRow${mine ? " mine" : ""}${track.pinned ? " pinned" : ""}`}>
+        <span className="musicDeckRank">{String(position + 1).padStart(2, "0")}</span>
+        {renderTrackCover(track, "musicDeckCover")}
+        <div className="musicDeckRowText">
+          <span className="musicDeckRowTitle" title={track.title}>{track.title}</span>
+          <span className="musicDeckRowMeta">
+            {track.artist}
+            {track.submittedBy ? ` · ${mine ? "我" : track.submittedBy} 点的` : ""}
+            {track.pinned ? " · 管理员插队" : ""}
+          </span>
+        </div>
+        <div className="musicDeckRowActions">
           <button
-            ref={floatingSurfaceRef}
             type="button"
-            className={`globalMusicFloatButton${cardPinnedOpen ? " active" : ""}`}
-            onPointerDown={handleFloatingButtonPointerDown}
-            onPointerMove={handleFloatingButtonPointerMove}
-            onPointerUp={finishFloatingDrag}
-            onPointerCancel={finishFloatingDrag}
-            onClick={handleFloatingButtonClick}
-            aria-label={cardOpen ? "收起悬浮播放器" : "展开悬浮播放器"}
-            title={cardOpen ? "收起悬浮播放器" : "展开悬浮播放器"}
+            className={`musicDeckLike${liked ? " active" : ""}`}
+            disabled={mine || !myId || Boolean(requestBusyId)}
+            title={mine ? "自己点的歌不能点赞" : liked ? "取消点赞" : "点赞，让它在本轮更靠前"}
+            onClick={() => handleRequestAction(liked ? "unvote-track" : "vote-track", track)}
           >
-            <div className="globalMusicPlayerVisual floatingButton" aria-hidden="true">
-              {renderCompactVisual()}
-            </div>
+            {busyPrefix.endsWith("vote-track") ? <Spinner size="extra-tiny" /> : <span aria-hidden="true">▲</span>}
+            <span className="musicDeckLikeCount">{track.votes || 0}</span>
           </button>
-        ) : null}
+          {isAdmin && !track.pinned ? (
+            <button type="button" className="musicDeckIconButton" disabled={Boolean(requestBusyId)} title="插队到下一首（管理员）" onClick={() => handleRequestAction("pin-track", track, `已插队：${track.title}`)}>
+              置顶
+            </button>
+          ) : null}
+          {mine || isAdmin ? (
+            <button type="button" className="musicDeckIconButton danger" disabled={Boolean(requestBusyId)} title={mine ? "撤回我点的歌" : "移除（管理员）"} onClick={() => handleRequestAction("withdraw-track", track, `已撤回：${track.title}`)}>
+              {busyPrefix === "withdraw-track" ? <Spinner size="extra-tiny" /> : mine ? "撤回" : "移除"}
+            </button>
+          ) : null}
+        </div>
+      </li>
+    );
+  }
 
-        {showFloatingCard ? (
-          <div ref={floatingSurfaceRef} className={`globalMusicPlayerCard compact floating${cardVisible ? " isVisible" : " isHidden"}${popupOpen ? " detailOpen" : ""}`}>
-            <div
-              className="globalMusicPlayerVisual inCard globalMusicDragHandle"
-              aria-hidden="true"
-              onDragStart={(event) => event.preventDefault()}
-              onPointerDown={handleFloatingButtonPointerDown}
-              onPointerMove={handleFloatingButtonPointerMove}
-              onPointerUp={finishFloatingDrag}
-              onPointerCancel={finishFloatingDrag}
-            >
-              {renderCompactVisual()}
-            </div>
-            <div className="globalMusicPlayerMain">
-            <div className="globalMusicTopRow compactOnly">
-              <Text weight="semibold" className="globalMusicTrackTitle compactOnly" title={currentTrack?.title || "等待点歌"}>
-                {currentTrack?.title || "等待点歌"}
-              </Text>
-              <div className="globalMusicInlineActions compactOnly">
-                <button
-                  type="button"
-                  className="globalMusicIconButton iconOnly compact"
-                  onClick={() => sendControl("previous")}
-                  disabled={!currentTrackId}
-                  aria-label="上一曲"
-                  title="上一曲"
-                >
-                  <ChevronLeftRegular />
-                </button>
-                <button
-                  type="button"
-                  className="globalMusicPlayButton"
-                  onClick={() => handlePlayButtonClick()}
-                  disabled={!currentTrackId || audioLoading}
-                >
-                  {audioLoading ? <Spinner size="tiny" /> : playerState?.isPlaying ? <PauseRegular /> : <PlayRegular />}
-                </button>
-                <button
-                  type="button"
-                  className="globalMusicIconButton iconOnly compact"
-                  onClick={() => sendControl("next")}
-                  disabled={!currentTrackId}
-                  aria-label="下一曲"
-                  title="下一曲"
-                >
-                  <ChevronRightRegular />
-                </button>
-                <button
-                  type="button"
-                  className={`globalMusicExpandButton${popupOpen ? " active" : ""}`}
-                  onClick={() => {
-                    if (popupOpen) {
-                      closePopup({ preserveKeyword: true });
-                      return;
-                    }
-                    setCardPinnedOpen(true);
-                    setPopupOpen(true);
-                  }}
-                  aria-label={popupOpen ? "收起播放器详情" : "展开播放器详情"}
-                  title={popupOpen ? "收起播放器详情" : "展开播放器详情"}
-                >
-                  <MoreHorizontalRegular />
-                </button>
+  const searchPanel = (
+    <div className="musicDeckPane">
+      <form className="musicDeckSearch" onSubmit={handleSearchSubmit}>
+        <Input
+          className="musicDeckSearchInput"
+          placeholder={hostClientId ? "输入歌名或歌手，回车搜索 QQ 音乐" : "等待存储终端上线"}
+          value={keyword}
+          onChange={(_, data) => {
+            setKeyword(data.value);
+            if (!data.value.trim()) {
+              resetSearchState({ preserveKeyword: true });
+            }
+          }}
+          disabled={!hostClientId || searching}
+        />
+        <button type="submit" className="musicDeckPrimary" disabled={!hostClientId || searching || !keyword.trim()}>
+          {searching ? <Spinner size="tiny" /> : "搜索"}
+        </button>
+      </form>
+      <p className="musicDeckHint">每人最多同时排 {maxPending} 首，{cooldownSeconds} 秒内只能点一首；你现在排了 {myPendingCount} 首。</p>
+      {searchError ? <p className="musicDeckError">{searchError}</p> : null}
+      <ul className="musicDeckList">
+        {searchResults.map((candidate) => {
+          const candidateId = String(candidate.providerTrackId || "");
+          const busy = selectionBusyId && selectionBusyId === candidateId;
+          const alreadyQueued = queuedCandidateKeys.has(getCandidateQueueKey(candidate));
+          return (
+            <li key={candidateId || `${candidate.source}-${candidate.title}`} className="musicDeckRow">
+              {renderTrackCover(candidate, "musicDeckCover")}
+              <div className="musicDeckRowText">
+                <span className="musicDeckRowTitle" title={candidate.title}>{candidate.title}</span>
+                <span className="musicDeckRowMeta">{candidate.artist || "未知艺术家"} · {formatDuration(candidate.duration)}</span>
               </div>
-            </div>
+              {alreadyQueued ? (
+                <span className="musicDeckTag">已在队列</span>
+              ) : (
+                <button type="button" className="musicDeckPrimary" onClick={() => handleSelectCandidate(candidate)} disabled={Boolean(selectionBusyId) || myPendingCount >= maxPending && !isAdmin}>
+                  {busy ? "点歌中" : "点这首"}
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
 
-            <div className="globalMusicBottomRow compactOnly">
-              <div className="globalMusicProgressBlock compact minimal">
-                <input
-                  className="globalMusicRange"
-                  type="range"
-                  min={0}
-                  max={Math.max(1, currentDuration || 1)}
-                  step="1"
-                  value={Math.max(0, Math.min(currentDuration || 1, progressValue || 0))}
-                  onChange={handleSeekChange}
-                  disabled={!currentDuration || !currentTrackId}
-                  style={{ "--music-progress": `${progressPercent}%` }}
-                />
+  const queuePanel = (
+    <div className="musicDeckPane">
+      <p className="musicDeckHint">按轮流顺序播放：每人一首为一轮，同一轮里点赞多的先播。</p>
+      {upcomingTracks.length ? (
+        <ol className="musicDeckList">{upcomingTracks.map((track, position) => renderUpcomingRow(track, position))}</ol>
+      ) : (
+        <div className="musicDeckEmpty">
+          <span>队列空了</span>
+          <button type="button" className="musicDeckPrimary" onClick={() => setDeckTab("search")}>去点一首</button>
+        </div>
+      )}
+    </div>
+  );
+
+  const historyPanel = (
+    <div className="musicDeckPane">
+      {playedTracks.length ? (
+        <ul className="musicDeckList">
+          {playedTracks.slice(0, 50).map((track) => (
+            <li key={track.id} className="musicDeckRow played">
+              {renderTrackCover(track, "musicDeckCover")}
+              <div className="musicDeckRowText">
+                <span className="musicDeckRowTitle" title={track.title}>{track.title}</span>
+                <span className="musicDeckRowMeta">{track.artist}{track.submittedBy ? ` · ${track.submittedBy} 点的` : ""}</span>
               </div>
-            </div>
+              <button
+                type="button"
+                className="musicDeckIconButton"
+                disabled={Boolean(selectionBusyId) || queuedCandidateKeys.has(getCandidateQueueKey(track))}
+                onClick={() => handleSelectCandidate({ ...track, extra: {} })}
+              >
+                {queuedCandidateKeys.has(getCandidateQueueKey(track)) && track.id !== currentTrackId ? "已在队列" : "再点一次"}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="musicDeckEmpty"><span>还没有播放记录</span></div>
+      )}
+    </div>
+  );
 
-            {audioError ? <Caption1 className="globalMusicErrorText">{audioError}</Caption1> : null}
-            {!audioError && audioNotice ? <Caption1 className={audioNoticeLevel === "warn" ? "globalMusicWarningText" : ""}>{audioNotice}</Caption1> : null}
-            </div>
-              <div className={`globalMusicExpandedPanel${popupOpen ? " isVisible" : ""}`} onClick={(event) => event.stopPropagation()}>
-            <div className="globalMusicPopupHeader">
-              <Text weight="semibold">播放器详情</Text>
-              <div className="globalMusicPopupBadgesInline">
-                <span className="globalMusicStatusPill">{currentTrack?.status === "ready" ? "就绪" : formatProgressLabel(currentTrack)}</span>
-                <span className="globalMusicSourcePill">{(currentSource || "bilibili").toUpperCase()}</span>
-                <span className="globalMusicQueuePill">队列 {queueCount}</span>
+  return (
+    <MusicPlayerContext.Provider value={{
+      currentTrack,
+      isPlaying: Boolean(playerState?.isPlaying),
+      togglePlay: handlePlayButtonClick,
+      nextTrack: () => sendControl("next"),
+      prevTrack: () => sendControl("previous"),
+      openDeck,
+      upcomingCount: upcomingTracks.length
+    }}>
+      {/* Portaled to <body>: the top bar that mounts this has a backdrop filter, which would pin a fixed child to the bar. */}
+      {createPortal(<div ref={shellRef} className={`musicShell${popupOpen ? " deckOpen" : ""}`}>
+        {mediaElement}
+        <div className={`musicDock${currentTrack ? "" : " idle"}${playerState?.isPlaying ? " playing" : ""}`} role="region" aria-label="正在播放">
+          <span className="musicDockProgress" style={{ "--music-progress": `${progressPercent}%` }} aria-hidden="true" />
+          {renderTrackCover(currentTrack, "musicDockCover")}
+          <div className="musicDockInfo">
+            <span className="musicDockTitle" title={currentTrack?.title || ""}>{currentTrack?.title || "还没有人点歌"}</span>
+            <span className="musicDockMeta">
+              {currentTrack
+                ? `${currentTrack.artist || ""}${currentTrack.submittedBy ? ` · ${currentTrack.submittedBy} 点的` : ""}${nextUpTrack ? ` · 下一首：${nextUpTrack.title}` : ""}`
+                : "打开点歌台，搜一首大家一起听"}
+            </span>
+          </div>
+          <span className="musicDockEq" aria-hidden="true"><i /><i /><i /><i /></span>
+          <div className="musicDockControls">
+            <button type="button" className="musicDockButton" onClick={() => handlePlayButtonClick()} disabled={!currentTrackId || audioLoading} aria-label={playerState?.isPlaying ? "暂停" : "播放"} title={playerState?.isPlaying ? "暂停" : "播放"}>
+              {audioLoading ? <Spinner size="tiny" /> : playerState?.isPlaying ? <PauseRegular /> : <PlayRegular />}
+            </button>
+            <button type="button" className="musicDockButton" onClick={() => sendControl("next")} disabled={!nextUpTrack} aria-label="下一首" title="下一首">
+              <ChevronRightRegular />
+            </button>
+          </div>
+          <button type="button" className={`musicDockOpen${popupOpen ? " active" : ""}`} onClick={() => (popupOpen ? closePopup({ preserveKeyword: true }) : openDeck(upcomingTracks.length ? "queue" : "search"))}>
+            <span>点歌台</span>
+            <span className="musicDockCount">{upcomingTracks.length}</span>
+          </button>
+        </div>
+
+        {popupOpen ? (
+          <aside className="musicDeck" role="dialog" aria-label="点歌台" onClick={(event) => event.stopPropagation()}>
+            <header className="musicDeckHeader">
+              <div className="musicDeckHeaderText">
+                <span className="musicDeckEyebrow">JUKEBOX // QQ 音乐</span>
+                <span className="musicDeckTitle">点歌台</span>
               </div>
-            </div>
-
-            <div className="globalMusicPopupNowPlaying">
-              <div className="globalMusicProgressMeta popup">
-                <Caption1>{formatDuration(progressValue)}</Caption1>
-                <div className="globalMusicProgressBlock popupDetail">
+              <button type="button" className="musicDeckClose" onClick={() => closePopup({ preserveKeyword: true })} aria-label="关闭点歌台">×</button>
+            </header>
+            <section className="musicDeckNow">
+              {renderTrackCover(currentTrack, "musicDeckNowCover")}
+              <div className="musicDeckNowText">
+                <span className="musicDeckRowTitle">{currentTrack?.title || "等待点歌"}</span>
+                <span className="musicDeckRowMeta">{currentTrack ? `${currentTrack.artist || ""}${currentTrack.submittedBy ? ` · ${currentTrack.submittedBy} 点的` : ""}` : "队列为空"}</span>
+                <div className="musicDeckSeek">
+                  <span>{formatDuration(progressValue)}</span>
                   <input
                     className="globalMusicRange"
                     type="range"
@@ -1547,161 +1423,30 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
                     disabled={!currentDuration || !currentTrackId}
                     style={{ "--music-progress": `${progressPercent}%` }}
                   />
+                  <span>{formatDuration(currentDuration)}</span>
                 </div>
-                <Caption1>{formatDuration(currentDuration)}</Caption1>
               </div>
-            </div>
-
-            <div className="globalMusicPopupSection controls">
-              <label className="globalMusicVolumeControl popup">
-                <Caption1>音量</Caption1>
-                <input
-                  className="globalMusicVolumeRange"
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="1"
-                  value={volume}
-                  onChange={(event) => setVolume(Number(event.target.value || 0))}
-                  style={{ "--music-progress": `${volume}%` }}
-                />
+              <label className="musicDeckVolume" title="音量（只影响你自己）">
+                <span aria-hidden="true">VOL</span>
+                <input className="globalMusicVolumeRange" type="range" min="0" max="100" step="1" value={volume} onChange={(event) => setVolume(Number(event.target.value || 0))} style={{ "--music-progress": `${volume}%` }} />
               </label>
-              <select
-                className="musicSourceSelect"
-                value={currentSource}
-                onChange={(event) => sendControl("set-source", { source: event.target.value })}
-                disabled={!hostClientId}
-              >
-                {(playerState?.supportedSources || []).map((item) => (
-                  <option key={item.value} value={item.value}>{item.label}</option>
-                ))}
-              </select>
-              <button type="button" className="globalMusicTextButton" onClick={() => setLyricsOpen((prev) => !prev)}>
-                {lyricsOpen ? "隐藏歌词" : "显示歌词"}
-              </button>
-            </div>
-
-            <form className="globalMusicComposer popup" onSubmit={handleSearchSubmit}>
-              <Input
-                className="globalMusicInput"
-                placeholder={hostClientId ? "输入歌名，先搜候选再入队" : "等待 storage-client 在线"}
-                value={keyword}
-                onChange={(_, data) => {
-                  const nextValue = data.value;
-                  setKeyword(nextValue);
-                  if (!nextValue.trim()) {
-                    resetSearchState({ preserveKeyword: true });
-                  }
-                }}
-                disabled={!hostClientId || searching}
-              />
-              <div className="globalMusicComposerActions">
-                <button
-                  type="button"
-                  className="globalMusicIconButton iconOnly"
-                  onClick={() => resetSearchState()}
-                  disabled={!keyword.trim() && !searchResults.length && !searchError}
-                  aria-label="清空搜索"
-                  title="清空搜索"
-                >
-                  <span className="globalMusicButtonGlyph" aria-hidden="true">×</span>
-                </button>
-                <button
-                  type="submit"
-                  className="globalMusicIconButton iconOnly primary"
-                  disabled={!hostClientId || searching || !keyword.trim()}
-                  aria-label={searching ? "搜索中" : "搜索"}
-                  title={searching ? "搜索中" : "搜索"}
-                >
-                  {searching ? <Spinner size="tiny" /> : <span className="globalMusicButtonGlyph" aria-hidden="true">⌕</span>}
-                </button>
-              </div>
-            </form>
-
-            {searchError ? <div className="musicSearchStatusText error">{searchError}</div> : null}
-
-            {searchResults.length ? (
-              <div className="musicSearchResultList popup">
-                {searchResults.map((candidate) => {
-                  const candidateId = String(candidate.providerTrackId || "");
-                  const busy = selectionBusyId && selectionBusyId === candidateId;
-                  const alreadyQueued = queuedCandidateKeys.has(getCandidateQueueKey(candidate));
-                  return (
-                    <div key={candidateId || `${candidate.source}-${candidate.title}`} className="musicSearchResultCard compact">
-                      {candidate.coverUrl ? (
-                        <img className="musicSearchCover" src={candidate.coverUrl} alt={candidate.title} />
-                      ) : (
-                        <div className="musicSearchCover fallback" aria-hidden="true" />
-                      )}
-                      <div className="musicSearchResultBody">
-                        <Text className="musicSearchResultTitle" title={candidate.title}>{candidate.title}</Text>
-                        <Caption1>{candidate.artist || "未知艺术家"}</Caption1>
-                        <Caption1>{candidate.album || candidate.sourceLabel || candidate.source} · {formatDuration(candidate.duration)}</Caption1>
-                      </div>
-                      {alreadyQueued ? (
-                        <Caption1 className="musicSearchResultStateText">已在队列</Caption1>
-                      ) : (
-                        <Button appearance="primary" onClick={() => handleSelectCandidate(candidate)} disabled={Boolean(selectionBusyId && selectionBusyId !== candidateId) || busy}>
-                          {busy ? "入队中" : "加入队列"}
-                        </Button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+            </section>
+            {audioError ? <p className="musicDeckError">{audioError}</p> : null}
+            <nav className="musicDeckTabs" role="tablist">
+              {[["search", "搜索"], ["queue", `队列 ${upcomingTracks.length}`], ["history", "历史"], ["lyrics", "歌词"]].map(([key, label]) => (
+                <button key={key} type="button" role="tab" aria-selected={deckTab === key} className={`musicDeckTab${deckTab === key ? " active" : ""}`} onClick={() => setDeckTab(key)}>{label}</button>
+              ))}
+            </nav>
+            {deckTab === "search" ? searchPanel : null}
+            {deckTab === "queue" ? queuePanel : null}
+            {deckTab === "history" ? historyPanel : null}
+            {deckTab === "lyrics" ? (
+              <div className="musicDeckPane"><pre className="musicDeckLyrics">{currentTrack?.lyrics || "当前曲目没有可用歌词。"}</pre></div>
             ) : null}
-
-            {lyricsOpen ? (
-              <div className="globalMusicLyricsPanel popup">
-                <Caption1 className="globalMusicLyricsLabel">歌词</Caption1>
-                <div className="globalMusicLyricsBody">
-                  {currentTrack?.lyrics ? currentTrack.lyrics : "当前曲目没有可用歌词。"}
-                </div>
-              </div>
-            ) : null}
-
-            <div ref={queueListRef} className="globalMusicQueueStrip popup" onScroll={handleQueueScroll}>
-              {queueItems.length ? visibleQueueItems.map((track, index) => (
-                <div
-                  key={track.id}
-                  className={`globalMusicQueueItem musicSearchResultCard compact${index === Number(playerState?.currentIndex ?? -1) ? " active" : ""}`}
-                  onDoubleClick={() => handleActivateTrack(track, index)}
-                  title="双击切换到这首歌"
-                >
-                  {track.coverUrl ? (
-                    <img className="globalMusicQueueCover musicSearchCover" src={track.coverUrl} alt={track.title} />
-                  ) : (
-                    <div className="globalMusicQueueCover musicSearchCover fallback" aria-hidden="true" />
-                  )}
-                  <div className="globalMusicQueueItemBody musicSearchResultBody">
-                    <Text className="globalMusicQueueItemTitle musicSearchResultTitle" title={track.title}>{track.title}</Text>
-                    <Caption1 title={track.artist || track.sourceLabel || track.source}>{track.artist || track.sourceLabel || track.source}</Caption1>
-                    <Caption1 className="globalMusicQueueItemMeta" title={`${track.album || track.sourceLabel || track.source} · ${track.status === "ready" ? "已缓冲完成" : formatProgressLabel(track)}`}>
-                      {track.album || track.sourceLabel || track.source} · {track.status === "ready" ? "已缓冲完成" : formatProgressLabel(track)}
-                    </Caption1>
-                  </div>
-                  <button
-                    type="button"
-                    className="globalMusicQueueRemoveButton"
-                    onClick={() => handleRemoveTrack(track.id, index, track)}
-                    disabled={Boolean(removingTrackId)}
-                    aria-label={`移除 ${track.title}`}
-                    title={`移除 ${track.title}`}
-                  >
-                    {removingTrackId === track.id ? <Spinner size="tiny" /> : <DeleteRegular />}
-                  </button>
-                </div>
-              )) : (
-                <div className="globalMusicQueueEmpty">
-                  <Caption1>还没有人在点歌，先搜一首再入队。</Caption1>
-                </div>
-              )}
-            </div>
-              </div>
-          </div>
+          </aside>
         ) : null}
-      </div>
-    </>
+      </div>, document.body)}
+      {children}
     </MusicPlayerContext.Provider>
   );
 }

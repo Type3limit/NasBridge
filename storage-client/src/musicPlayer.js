@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { createMusicLibBridgeClient } from "./musicBridge.js";
+import { MAX_PENDING_PER_USER, REQUEST_COOLDOWN_MS, checkRequestAllowed, normalizeActor, orderUpcoming, voteCount } from "./musicQueue.js";
 
 const MUSIC_PLAYER_DIR = "music-player";
 const MUSIC_PLAYER_STATE_FILE = "state.json";
@@ -177,6 +178,8 @@ function chooseBestBilibiliAudio(items = []) {
     .sort((left, right) => Number(right?.bandwidth || right?.id || 0) - Number(left?.bandwidth || left?.id || 0))[0] || null;
 }
 
+const REQUEST_ACTIONS = ["vote-track", "unvote-track", "withdraw-track", "pin-track"];
+
 function createDefaultState() {
   const now = getNowIso();
   return {
@@ -233,6 +236,11 @@ function buildPublicTrack(track = {}, index = 0) {
     requestedKeyword: String(track.requestedKeyword || ""),
     submittedAt: String(track.submittedAt || ""),
     submittedBy: String(track.submittedBy || ""),
+    submittedById: String(track.submittedById || ""),
+    votes: voteCount(track),
+    votedBy: Array.isArray(track.votes) ? track.votes.map(String) : [],
+    pinned: Boolean(track.pinnedAt),
+    round: Number.isInteger(track.round) ? track.round : 0,
     readyAt: String(track.readyAt || ""),
     lyrics: String(track.lyrics || ""),
     progress,
@@ -503,6 +511,8 @@ export class GlobalMusicPlayer {
     this.prepareTasks = new Map();
     this.activeDownloads = new Map();
     this.cancelledTracks = new Set();
+    // Last request time per user, for the request cooldown (memory only).
+    this.lastRequestAt = new Map();
     this.logger = typeof options.logger === "function" ? options.logger : () => {};
     this.onTrackReady = typeof options.onTrackReady === "function" ? options.onTrackReady : null;
     this.bridge = createMusicLibBridgeClient({
@@ -575,6 +585,7 @@ export class GlobalMusicPlayer {
       updatedAt: this.state.updatedAt,
       lastError: String(this.state.lastError || ""),
       currentTrack: currentTrack ? buildPublicTrack(currentTrack, this.state.currentIndex) : null,
+      rules: { maxPendingPerUser: MAX_PENDING_PER_USER, cooldownSeconds: REQUEST_COOLDOWN_MS / 1000 },
       supportedSources: this.getSupportedSources().map((value) => ({
         value,
         label: getSourceLabel(value)
@@ -599,7 +610,8 @@ export class GlobalMusicPlayer {
       const track = await this.enqueueTrack({
         keyword: message.keyword,
         source: message.source,
-        submittedBy: message.submittedBy
+        submittedBy: message.submittedBy,
+        requester: message.requester
       });
       return {
         type: "music-track-enqueued",
@@ -625,7 +637,8 @@ export class GlobalMusicPlayer {
       const track = await this.enqueueSelection({
         source: message.source,
         candidate: message.candidate,
-        submittedBy: message.submittedBy
+        submittedBy: message.submittedBy,
+        requester: message.requester
       });
       return {
         type: "music-track-enqueued",
@@ -650,7 +663,12 @@ export class GlobalMusicPlayer {
     const currentTrack = this.getCurrentTrack();
     const currentId = String(currentTrack?.id || "");
     const requestedTrackId = String(payload.currentTrackId || currentId || "");
-    if (requestedTrackId && currentId && requestedTrackId !== currentId && !["set-source", "remove-track", "play-track"].includes(action)) {
+    if (requestedTrackId && currentId && requestedTrackId !== currentId && !["set-source", "remove-track", "play-track", ...REQUEST_ACTIONS].includes(action)) {
+      return;
+    }
+
+    if (REQUEST_ACTIONS.includes(action)) {
+      await this.applyRequestAction(action, payload || {});
       return;
     }
 
@@ -726,7 +744,67 @@ export class GlobalMusicPlayer {
       }
     }
 
+    this.reorderUpcoming();
     this.state.updatedAt = nowIso;
+    this.state.lastError = "";
+    await this.persist();
+    this.ensurePreparation();
+  }
+
+  getUpcomingTracks() {
+    return this.state.queue.slice(Number(this.state.currentIndex ?? -1) + 1);
+  }
+
+  reorderUpcoming() {
+    const start = Number(this.state.currentIndex ?? -1) + 1;
+    if (start >= this.state.queue.length) {
+      return;
+    }
+    this.state.queue = [
+      ...this.state.queue.slice(0, start),
+      ...orderUpcoming(this.state.queue.slice(start), { playing: this.getCurrentTrack() })
+    ];
+  }
+
+  // Likes, withdrawals and admin pins only touch songs that have not started.
+  async applyRequestAction(action, payload = {}) {
+    const actor = normalizeActor(payload.actor);
+    if (!actor) {
+      throw new Error("缺少点歌人信息，请刷新页面后重试");
+    }
+    const start = Number(this.state.currentIndex ?? -1) + 1;
+    const index = this.state.queue.findIndex((item, position) => position >= start && String(item?.id || "") === String(payload.trackId || ""));
+    if (index < 0) {
+      throw new Error("这首歌已经开始播放或不在队列里了");
+    }
+    const track = this.state.queue[index];
+    if (action === "withdraw-track") {
+      if (String(track.submittedById || "") !== actor.id && !actor.isAdmin) {
+        throw new Error("只能撤回自己点的歌");
+      }
+      await this.removeTrack({ trackId: track.id });
+      return;
+    }
+    if (action === "pin-track") {
+      if (!actor.isAdmin) {
+        throw new Error("只有管理员可以插队");
+      }
+      track.pinnedAt = getNowIso();
+      track.pinnedBy = actor.name || actor.id;
+    } else {
+      if (String(track.submittedById || "") === actor.id) {
+        throw new Error("不能给自己点的歌点赞");
+      }
+      const votes = new Set(Array.isArray(track.votes) ? track.votes : []);
+      if (action === "vote-track") {
+        votes.add(actor.id);
+      } else {
+        votes.delete(actor.id);
+      }
+      track.votes = [...votes];
+    }
+    this.reorderUpcoming();
+    this.state.updatedAt = getNowIso();
     this.state.lastError = "";
     await this.persist();
     this.ensurePreparation();
@@ -843,6 +921,10 @@ export class GlobalMusicPlayer {
       throw new Error("未找到要移除的队列项");
     }
     const track = this.state.queue[index];
+    const actor = normalizeActor(payload.actor);
+    if (actor && !actor.isAdmin && track.submittedById && String(track.submittedById) !== actor.id) {
+      throw new Error("只能移除自己点的歌");
+    }
     const wasCurrent = index === Number(this.state.currentIndex ?? -1);
     const wasPlaying = Boolean(this.state.isPlaying);
     await this.cancelTrackPreparation(track);
@@ -867,7 +949,7 @@ export class GlobalMusicPlayer {
     this.ensurePreparation();
   }
 
-  async enqueueTrack({ keyword = "", source = DEFAULT_SOURCE, submittedBy = "" } = {}) {
+  async enqueueTrack({ keyword = "", source = DEFAULT_SOURCE, submittedBy = "", requester = null } = {}) {
     const trimmedKeyword = String(keyword || "").trim();
     if (!trimmedKeyword) {
       throw new Error("请输入歌名后再提交");
@@ -877,7 +959,7 @@ export class GlobalMusicPlayer {
     if (!first) {
       throw new Error("未找到可入队曲目");
     }
-    return this.enqueueSelection({ source: first.source || source, candidate: first, submittedBy });
+    return this.enqueueSelection({ source: first.source || source, candidate: first, submittedBy, requester });
   }
 
   async searchCandidates({ keyword = "", source = DEFAULT_SOURCE, limit = 8 } = {}) {
@@ -929,9 +1011,20 @@ export class GlobalMusicPlayer {
     return legacy(normalizedCandidate);
   }
 
-  async enqueueSelection({ source = DEFAULT_SOURCE, candidate = null, submittedBy = "" } = {}) {
+  async enqueueSelection({ source = DEFAULT_SOURCE, candidate = null, submittedBy = "", requester = null } = {}) {
     const providerKey = MUSIC_SOURCES.includes(String(source || "")) ? String(source) : this.state.source;
     const normalizedCandidate = normalizeCandidate(candidate, providerKey);
+    const actor = normalizeActor(requester);
+    const refusal = checkRequestAllowed({
+      upcoming: this.getUpcomingTracks(),
+      current: this.getCurrentTrack(),
+      actor,
+      candidate: normalizedCandidate,
+      lastRequestAt: actor ? this.lastRequestAt.get(actor.id) || 0 : 0
+    });
+    if (refusal) {
+      throw new Error(refusal);
+    }
     const resolved = await this.resolveCandidate({ source: providerKey, candidate: normalizedCandidate });
     const lyrics = String(resolved.lyrics || "").trim() || await lookupLyrics(resolved);
     const trackId = crypto.randomUUID();
@@ -959,7 +1052,9 @@ export class GlobalMusicPlayer {
       relativePath,
       requestedKeyword: normalizedCandidate.title || "",
       submittedAt: getNowIso(),
-      submittedBy: String(submittedBy || ""),
+      submittedBy: String(actor?.name || submittedBy || ""),
+      submittedById: actor?.id || "",
+      votes: [],
       readyAt: "",
       lyrics,
       status: "queued",
@@ -972,12 +1067,16 @@ export class GlobalMusicPlayer {
       error: ""
     };
     this.state.queue.push(track);
+    if (actor) {
+      this.lastRequestAt.set(actor.id, Date.now());
+    }
     if (this.state.currentIndex < 0) {
       this.state.currentIndex = 0;
       this.state.positionSeconds = 0;
       this.state.positionUpdatedAt = getNowIso();
       this.state.isPlaying = true;
     }
+    this.reorderUpcoming();
     this.state.updatedAt = getNowIso();
     this.state.lastError = "";
     await this.persist();

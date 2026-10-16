@@ -5,16 +5,16 @@ import { PauseRegular, PlayRegular, NextRegular } from "@fluentui/react-icons";
 export default function MiniMusicBar() {
   const ctx = useContext(MusicPlayerContext);
 
-  // If no context (player not mounted) or no track, don't render
-  if (!ctx || !ctx.currentTrack) return null;
+  // No player mounted: nothing to show.
+  if (!ctx) return null;
 
-  const { currentTrack, isPlaying, togglePlay, nextTrack } = ctx;
+  const { currentTrack, isPlaying, togglePlay, nextTrack, openDeck, upcomingCount = 0 } = ctx;
 
   return (
-    <div className="mobileMinimusicBar" role="region" aria-label="正在播放">
+    <div className={`mobileMinimusicBar${isPlaying ? " playing" : ""}`} role="region" aria-label="正在播放" onClick={() => openDeck?.(upcomingCount ? "queue" : "search")}>
       {/* Cover art */}
       <div className="mobileMinimusicCover" aria-hidden="true">
-        {currentTrack.coverUrl ? (
+        {currentTrack?.coverUrl ? (
           <img src={currentTrack.coverUrl} alt="" />
         ) : (
           <span className="mobileMinimusicCoverPlaceholder">♪</span>
@@ -23,27 +23,41 @@ export default function MiniMusicBar() {
 
       {/* Track info */}
       <div className="mobileMinimusicInfo">
-        <span className="mobileMinimusicTitle">{currentTrack.title || "未知曲目"}</span>
-        {currentTrack.artist ? <span className="mobileMinimusicArtist">{currentTrack.artist}</span> : null}
+        <span className="mobileMinimusicTitle">{currentTrack?.title || "还没有人点歌"}</span>
+        <span className="mobileMinimusicArtist">
+          {currentTrack ? `${currentTrack.artist || ""}${currentTrack.submittedBy ? ` · ${currentTrack.submittedBy} 点的` : ""}` : "点这里打开点歌台"}
+        </span>
       </div>
 
       {/* Controls */}
       <div className="mobileMinimusicControls">
+        {currentTrack ? (
+          <>
+            <button
+              type="button"
+              className="mobileMinimusicBtn"
+              onClick={(e) => { e.stopPropagation(); togglePlay(); }}
+              aria-label={isPlaying ? "暂停" : "播放"}
+            >
+              {isPlaying ? <PauseRegular /> : <PlayRegular />}
+            </button>
+            <button
+              type="button"
+              className="mobileMinimusicBtn"
+              onClick={(e) => { e.stopPropagation(); nextTrack(); }}
+              aria-label="下一首"
+            >
+              <NextRegular />
+            </button>
+          </>
+        ) : null}
         <button
           type="button"
-          className="mobileMinimusicBtn"
-          onClick={(e) => { e.stopPropagation(); togglePlay(); }}
-          aria-label={isPlaying ? "暂停" : "播放"}
+          className="mobileMinimusicDeck"
+          onClick={(e) => { e.stopPropagation(); openDeck?.(upcomingCount ? "queue" : "search"); }}
+          aria-label="打开点歌台"
         >
-          {isPlaying ? <PauseRegular /> : <PlayRegular />}
-        </button>
-        <button
-          type="button"
-          className="mobileMinimusicBtn"
-          onClick={(e) => { e.stopPropagation(); nextTrack(); }}
-          aria-label="下一首"
-        >
-          <NextRegular />
+          点歌 <span>{upcomingCount}</span>
         </button>
       </div>
     </div>

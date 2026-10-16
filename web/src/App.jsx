@@ -5086,8 +5086,8 @@ export default function App() {
     return (
       <div className="page tacPage">
         {renderToastViewport()}
-        {/* GlobalMusicPlayer 保持挂载以维持音频实例，CSS 隐藏悬浮 UI */}
-        <GlobalMusicPlayer p2p={p2p} clients={clients} user={user} onToast={setMessage} />
+        {/* GlobalMusicPlayer 保持挂载以维持音频实例；手机布局作为其子节点，迷你播放条才能拿到播放器 context */}
+        <GlobalMusicPlayer p2p={p2p} clients={clients} user={user} onToast={setMessage}>
         <div className="mobileApp tacMobile">
           {/* 顶栏 */}
           <header className="mobileTopbar">
@@ -5156,6 +5156,7 @@ export default function App() {
             moreBadge={activeBadge > 0 ? String(activeBadge) : null}
           />
         </div>
+        </GlobalMusicPlayer>
 
         {/* 更多抽屉（Portal 到 body） */}
         <MobileMoreSheet

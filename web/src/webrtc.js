@@ -2847,7 +2847,7 @@ export class P2PBridge {
     }));
   }
 
-  async enqueueMusicSelection(clientId, source, candidate, submittedBy = "") {
+  async enqueueMusicSelection(clientId, source, candidate, submittedBy = "", requester = null) {
     this.markClientActivity(clientId);
     return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
       const { channel, opChannelName } = await this.getChannelForOp(peer, "control");
@@ -2877,7 +2877,8 @@ export class P2PBridge {
           requestId,
           source,
           candidate,
-          submittedBy
+          submittedBy,
+          requester
         }));
       });
     }));
@@ -3129,8 +3130,8 @@ export class P2PBridgePool {
     return this.getBridge("control").searchMusicCandidates(clientId, keyword, source, limit);
   }
 
-  enqueueMusicSelection(clientId, source, candidate, submittedBy = "") {
-    return this.getBridge("control").enqueueMusicSelection(clientId, source, candidate, submittedBy);
+  enqueueMusicSelection(clientId, source, candidate, submittedBy = "", requester = null) {
+    return this.getBridge("control").enqueueMusicSelection(clientId, source, candidate, submittedBy, requester);
   }
 
   controlMusicPlayer(clientId, action, payload = {}) {
