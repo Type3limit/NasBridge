@@ -1202,6 +1202,9 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
   const isAdmin = musicActor?.role === "admin";
   const myPendingCount = upcomingTracks.filter((track) => track.submittedById && track.submittedById === myId).length;
   const maxPending = Number(playerState?.rules?.maxPendingPerUser || 2);
+  const nodeFeatures = Array.isArray(playerState?.features) ? playerState.features : [];
+  const nodeOutdated = Boolean(playerState) && !nodeFeatures.includes("qq-login");
+  const outdatedNotice = "当前存储节点版本较旧：请在该节点 git pull 并重启存储端后再用这个功能";
   const cooldownSeconds = Number(playerState?.rules?.cooldownSeconds || 30);
 
   // Admins sign the node into QQ Music from the panel; the cookie stays on the node.
@@ -1387,8 +1390,8 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
                 <button
                   type="button"
                   className="musicDeckIconButton"
-                  disabled={!myId || Boolean(requestBusyId)}
-                  title="把这首放进点歌队列，按轮流顺序播放"
+                  disabled={!myId || Boolean(requestBusyId) || !nodeFeatures.includes("loop")}
+                  title={nodeFeatures.includes("loop") ? "把这首放进点歌队列，按轮流顺序播放" : outdatedNotice}
                   onClick={() => handleRequestAction("requeue-track", track, `已提前：${track.title}`)}
                 >
                   {requestBusyId === `requeue-track:${track.id}` ? <Spinner size="extra-tiny" /> : "提前"}
@@ -1414,9 +1417,10 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
           </span>
         </div>
       </div>
+      {nodeOutdated ? <p className="musicDeckError">{outdatedNotice}</p> : null}
       <div className="musicAccountActions">
-        <button type="button" className="musicDeckPrimary" disabled={qqLogin?.status === "loading"} onClick={() => startQqLogin("qq")}>QQ 扫码登录</button>
-        <button type="button" className="musicDeckPrimary wechat" disabled={qqLogin?.status === "loading"} onClick={() => startQqLogin("wechat")}>微信扫码登录</button>
+        <button type="button" className="musicDeckPrimary" disabled={nodeOutdated || qqLogin?.status === "loading"} onClick={() => startQqLogin("qq")}>QQ 扫码登录</button>
+        <button type="button" className="musicDeckPrimary wechat" disabled={nodeOutdated || qqLogin?.status === "loading"} onClick={() => startQqLogin("wechat")}>微信扫码登录</button>
       </div>
       {qqLogin ? (
         <div className={`musicAccountQr status-${qqLogin.status}`}>
@@ -1502,6 +1506,7 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
                 <input className="globalMusicVolumeRange" type="range" min="0" max="100" step="1" value={volume} onChange={(event) => setVolume(Number(event.target.value || 0))} style={{ "--music-progress": `${volume}%` }} />
               </label>
             </section>
+            {nodeOutdated ? <p className="musicDeckError">存储节点「{hostClient?.name || hostClientId}」还在运行旧版本，循环播放、提前和扫码登录需要更新并重启它。</p> : null}
             {audioError ? <p className="musicDeckError">{audioError}</p> : null}
             <nav className="musicDeckTabs" role="tablist">
               {[["search", "搜索"], ["queue", `队列 ${upcomingTracks.length}`], ["lyrics", "歌词"], ...(isAdmin ? [["account", "账号"]] : [])].map(([key, label]) => (

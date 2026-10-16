@@ -591,6 +591,8 @@ export class GlobalMusicPlayer {
       lastError: String(this.state.lastError || ""),
       currentTrack: currentTrack ? buildPublicTrack(currentTrack, this.state.currentIndex) : null,
       rules: { maxPendingPerUser: MAX_PENDING_PER_USER, cooldownSeconds: REQUEST_COOLDOWN_MS / 1000 },
+      // Lets the page tell an outdated node apart from one that is just slow.
+      features: ["fair-queue", "loop", "qq-login"],
       supportedSources: this.getSupportedSources().map((value) => ({
         value,
         label: getSourceLabel(value)
