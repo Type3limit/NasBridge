@@ -178,7 +178,7 @@ function chooseBestBilibiliAudio(items = []) {
     .sort((left, right) => Number(right?.bandwidth || right?.id || 0) - Number(left?.bandwidth || left?.id || 0))[0] || null;
 }
 
-const REQUEST_ACTIONS = ["vote-track", "unvote-track", "withdraw-track", "pin-track"];
+const REQUEST_ACTIONS = ["vote-track", "unvote-track", "withdraw-track", "pin-track", "requeue-track"];
 
 function createDefaultState() {
   const now = getNowIso();
@@ -667,6 +667,10 @@ export class GlobalMusicPlayer {
       return;
     }
 
+    if (action === "requeue-track") {
+      await this.requeuePlayedTrack(payload || {});
+      return;
+    }
     if (REQUEST_ACTIONS.includes(action)) {
       await this.applyRequestAction(action, payload || {});
       return;
@@ -716,7 +720,11 @@ export class GlobalMusicPlayer {
     }
     if (action === "next") {
       if (this.state.queue.length) {
-        this.state.currentIndex = clamp(Number(this.state.currentIndex ?? 0) + 1, 0, this.state.queue.length - 1);
+        if (Number(this.state.currentIndex ?? 0) >= this.state.queue.length - 1) {
+          this.loopToOldestPlayed();
+        } else {
+          this.state.currentIndex = clamp(Number(this.state.currentIndex ?? 0) + 1, 0, this.state.queue.length - 1);
+        }
         this.state.positionSeconds = 0;
         this.state.positionUpdatedAt = nowIso;
         this.state.isPlaying = true;
@@ -732,20 +740,66 @@ export class GlobalMusicPlayer {
       }
     }
     if (action === "complete") {
-      if (this.state.queue.length && Number(this.state.currentIndex ?? 0) < this.state.queue.length - 1) {
-        this.state.currentIndex += 1;
+      if (this.state.queue.length) {
+        // With no new requests left the queue loops: played songs come round again.
+        if (Number(this.state.currentIndex ?? 0) < this.state.queue.length - 1) {
+          this.state.currentIndex += 1;
+        } else {
+          this.loopToOldestPlayed();
+        }
         this.state.positionSeconds = 0;
         this.state.positionUpdatedAt = nowIso;
         this.state.isPlaying = true;
-      } else {
-        this.state.isPlaying = false;
-        this.state.positionSeconds = Number(currentTrack?.duration || effectivePosition || 0);
-        this.state.positionUpdatedAt = nowIso;
       }
     }
 
     this.reorderUpcoming();
     this.state.updatedAt = nowIso;
+    this.state.lastError = "";
+    await this.persist();
+    this.ensurePreparation();
+  }
+
+  // Moves the oldest played song behind the current one and makes it current, so
+  // the queue cycles; with a single song it simply starts over.
+  loopToOldestPlayed() {
+    const currentIndex = Number(this.state.currentIndex ?? 0);
+    if (currentIndex <= 0) {
+      return;
+    }
+    const [oldest] = this.state.queue.splice(0, 1);
+    this.state.queue.push(oldest);
+    this.state.currentIndex = this.state.queue.length - 1;
+  }
+
+  // A played song goes back into the requests as the actor's own pick (file already cached).
+  async requeuePlayedTrack(payload = {}) {
+    const actor = normalizeActor(payload.actor);
+    if (!actor) {
+      throw new Error("缺少点歌人信息，请刷新页面后重试");
+    }
+    const currentIndex = Number(this.state.currentIndex ?? -1);
+    const index = this.state.queue.findIndex((item, position) => position < currentIndex && String(item?.id || "") === String(payload.trackId || ""));
+    if (index < 0) {
+      throw new Error("这首歌已经在待播队列里了");
+    }
+    const track = this.state.queue[index];
+    const refusal = checkRequestAllowed({
+      upcoming: this.getUpcomingTracks(),
+      current: this.getCurrentTrack(),
+      actor,
+      candidate: { providerTrackId: track.providerTrackId },
+      lastRequestAt: this.lastRequestAt.get(actor.id) || 0
+    });
+    if (refusal) {
+      throw new Error(refusal);
+    }
+    this.state.queue.splice(index, 1);
+    this.state.currentIndex = currentIndex - 1;
+    this.state.queue.push({ ...track, submittedBy: actor.name || actor.id, submittedById: actor.id, submittedAt: getNowIso(), votes: [], pinnedAt: "", pinnedBy: "" });
+    this.lastRequestAt.set(actor.id, Date.now());
+    this.reorderUpcoming();
+    this.state.updatedAt = getNowIso();
     this.state.lastError = "";
     await this.persist();
     this.ensurePreparation();

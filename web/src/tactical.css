@@ -653,7 +653,8 @@
 ol.musicDeckList .musicDeckRow { grid-template-columns: auto 40px minmax(0, 1fr) auto; }
 .musicDeckRow.mine { border-left: 3px solid var(--accent-solid); }
 .musicDeckRow.pinned { background: var(--accent-bg); }
-.musicDeckRow.played { opacity: .85; }
+.musicDeckRow.looped { opacity: .85; }
+.musicDeckSection { margin: 16px 0 8px; padding-top: 12px; border-top: 1px dashed var(--stroke); font: 700 11px var(--tac-font-mono); letter-spacing: 1.4px; color: var(--text-faint); }
 .musicDeckRank { font: 700 12px var(--tac-font-mono); color: var(--text-faint); }
 .musicDeckCover { width: 40px; height: 40px; }
 .musicDeckRowActions { display: flex; gap: 4px; }

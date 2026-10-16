@@ -1193,8 +1193,9 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
 
   const currentIndexValue = Number(playerState?.currentIndex ?? -1);
   const upcomingTracks = queueItems.slice(currentIndexValue + 1);
-  const playedTracks = queueItems.slice(0, Math.max(0, currentIndexValue)).reverse();
-  const nextUpTrack = upcomingTracks[0] || null;
+  // Played songs loop back once the requests run out, oldest first.
+  const loopTracks = queueItems.slice(0, Math.max(0, currentIndexValue));
+  const nextUpTrack = upcomingTracks[0] || loopTracks[0] || null;
   const myId = musicActor?.id || "";
   const isAdmin = musicActor?.role === "admin";
   const myPendingCount = upcomingTracks.filter((track) => track.submittedById && track.submittedById === myId).length;
@@ -1322,38 +1323,35 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
         <ol className="musicDeckList">{upcomingTracks.map((track, position) => renderUpcomingRow(track, position))}</ol>
       ) : (
         <div className="musicDeckEmpty">
-          <span>队列空了</span>
+          <span>{loopTracks.length ? "没有新点的歌，正在循环播放下面的列表" : "队列空了"}</span>
           <button type="button" className="musicDeckPrimary" onClick={() => setDeckTab("search")}>去点一首</button>
         </div>
       )}
-    </div>
-  );
-
-  const historyPanel = (
-    <div className="musicDeckPane">
-      {playedTracks.length ? (
-        <ul className="musicDeckList">
-          {playedTracks.slice(0, 50).map((track) => (
-            <li key={track.id} className="musicDeckRow played">
-              {renderTrackCover(track, "musicDeckCover")}
-              <div className="musicDeckRowText">
-                <span className="musicDeckRowTitle" title={track.title}>{track.title}</span>
-                <span className="musicDeckRowMeta">{track.artist}{track.submittedBy ? ` · ${track.submittedBy} 点的` : ""}</span>
-              </div>
-              <button
-                type="button"
-                className="musicDeckIconButton"
-                disabled={Boolean(selectionBusyId) || queuedCandidateKeys.has(getCandidateQueueKey(track))}
-                onClick={() => handleSelectCandidate({ ...track, extra: {} })}
-              >
-                {queuedCandidateKeys.has(getCandidateQueueKey(track)) && track.id !== currentTrackId ? "已在队列" : "再点一次"}
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <div className="musicDeckEmpty"><span>还没有播放记录</span></div>
-      )}
+      {loopTracks.length ? (
+        <>
+          <p className="musicDeckSection">循环播放 · {loopTracks.length} 首</p>
+          <ul className="musicDeckList">
+            {loopTracks.map((track) => (
+              <li key={track.id} className="musicDeckRow looped">
+                {renderTrackCover(track, "musicDeckCover")}
+                <div className="musicDeckRowText">
+                  <span className="musicDeckRowTitle" title={track.title}>{track.title}</span>
+                  <span className="musicDeckRowMeta">{track.artist}{track.submittedBy ? ` · ${track.submittedBy} 点的` : ""}</span>
+                </div>
+                <button
+                  type="button"
+                  className="musicDeckIconButton"
+                  disabled={!myId || Boolean(requestBusyId)}
+                  title="把这首放进点歌队列，按轮流顺序播放"
+                  onClick={() => handleRequestAction("requeue-track", track, `已提前：${track.title}`)}
+                >
+                  {requestBusyId === `requeue-track:${track.id}` ? <Spinner size="extra-tiny" /> : "提前"}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
     </div>
   );
 
@@ -1377,7 +1375,7 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
             <span className="musicDockTitle" title={currentTrack?.title || ""}>{currentTrack?.title || "还没有人点歌"}</span>
             <span className="musicDockMeta">
               {currentTrack
-                ? `${currentTrack.artist || ""}${currentTrack.submittedBy ? ` · ${currentTrack.submittedBy} 点的` : ""}${nextUpTrack ? ` · 下一首：${nextUpTrack.title}` : ""}`
+                ? `${currentTrack.artist || ""}${currentTrack.submittedBy ? ` · ${currentTrack.submittedBy} 点的` : ""}${nextUpTrack ? ` · 下一首：${nextUpTrack.title}${upcomingTracks.length ? "" : "（循环）"}` : ""}`
                 : "打开点歌台，搜一首大家一起听"}
             </span>
           </div>
@@ -1433,13 +1431,12 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
             </section>
             {audioError ? <p className="musicDeckError">{audioError}</p> : null}
             <nav className="musicDeckTabs" role="tablist">
-              {[["search", "搜索"], ["queue", `队列 ${upcomingTracks.length}`], ["history", "历史"], ["lyrics", "歌词"]].map(([key, label]) => (
+              {[["search", "搜索"], ["queue", `队列 ${upcomingTracks.length}`], ["lyrics", "歌词"]].map(([key, label]) => (
                 <button key={key} type="button" role="tab" aria-selected={deckTab === key} className={`musicDeckTab${deckTab === key ? " active" : ""}`} onClick={() => setDeckTab(key)}>{label}</button>
               ))}
             </nav>
             {deckTab === "search" ? searchPanel : null}
             {deckTab === "queue" ? queuePanel : null}
-            {deckTab === "history" ? historyPanel : null}
             {deckTab === "lyrics" ? (
               <div className="musicDeckPane"><pre className="musicDeckLyrics">{currentTrack?.lyrics || "当前曲目没有可用歌词。"}</pre></div>
             ) : null}
