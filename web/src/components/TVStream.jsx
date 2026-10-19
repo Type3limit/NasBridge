@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Hls from "hls.js";
+import { getMediaToken } from "../media/streamToken";
 import { EquipmentVisual } from "../ui/OperationsDisplay";
 import { Spinner } from "@fluentui/react-components";
 import {
@@ -11,6 +12,10 @@ import {
 
 // ─── LocalStorage fallback cache ───────────────────────────
 const TV_SOURCES_KEY = "tv_sources_v2";
+const TV_ACTIVE_SOURCE_KEY = "tv_active_source";
+
+// Channel list the server builds from community playlists and re-checks every few hours
+const BUILTIN_SOURCE = { id: "builtin", label: "社区精选（自动更新）", builtin: true };
 
 function cacheLoad() {
   try { return JSON.parse(localStorage.getItem(TV_SOURCES_KEY) || "[]"); } catch { return []; }
@@ -71,10 +76,37 @@ function parseTxt(text) {
   return channels;
 }
 
+// Same name in the same group = one channel with several lines to fall back between
+function mergeLines(flat) {
+  const map = new Map();
+  for (const c of flat) {
+    const key = `${c.group}::${c.name}`;
+    if (!map.has(key)) map.set(key, { ...c, key, lines: [] });
+    map.get(key).lines.push({ url: c.url });
+  }
+  return [...map.values()];
+}
+
 function parsePlaylist(text) {
-  const channels = text.includes("#EXTINF") ? parseM3U(text) : parseTxt(text);
+  const channels = mergeLines(text.includes("#EXTINF") ? parseM3U(text) : parseTxt(text));
   const groups = [...new Set(channels.map((c) => c.group))];
   return { channels, groups };
+}
+
+// Ordered ways to play a channel. https lines play straight from the source; http lines
+// (blocked as mixed content) and lines without CORS go through /api/tv/stream, which
+// costs bandwidth on the public server, so they come after direct attempts of the same line.
+// `direct` is known for built-in lines (the server checked them); user lines try both.
+function buildAttempts(channel) {
+  if (!channel) return [];
+  const attempts = [];
+  channel.lines.forEach((line, lineIdx) => {
+    if (!/^https?:\/\//i.test(line.url)) return;
+    const https = line.url.startsWith("https:");
+    if (https && line.direct !== false) attempts.push({ url: line.url, lineIdx, proxy: false });
+    if (!https || line.direct !== true) attempts.push({ url: line.url, lineIdx, proxy: true });
+  });
+  return attempts;
 }
 
 // ─── Aggregation format {"urls":[{name, url}]} ───────────────
@@ -107,6 +139,8 @@ export default function TVStream({ authToken, setMessage }) {
   const [groups, setGroups] = useState([]);
   const [expandedGroups, setExpandedGroups] = useState(new Set());
   const [selectedChannel, setSelectedChannel] = useState(null);
+  const [attemptIdx, setAttemptIdx] = useState(0);
+  const [builtinMeta, setBuiltinMeta] = useState(null); // { updatedAt, channelCount }
   // "idle" | "loading" | "playing" | "paused" | "error"
   const [playState, setPlayState] = useState("idle");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -139,87 +173,108 @@ export default function TVStream({ authToken, setMessage }) {
           const { sources: serverSources } = await res.json();
           setSources(serverSources);
           cacheSave(serverSources);
-          if (serverSources.length > 0) applySource(serverSources[0]);
-          else setLoadingHistory(false);
+          applySource(rememberedSource(serverSources));
           return;
         }
       } catch {}
       const cached = cacheLoad();
       setSources(cached);
-      if (cached.length > 0) applySource(cached[0]);
-      else setLoadingHistory(false);
+      applySource(rememberedSource(cached));
     }
     loadHistory();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function rememberedSource(list) {
+    let id = null;
+    try { id = localStorage.getItem(TV_ACTIVE_SOURCE_KEY); } catch {}
+    return list.find((s) => s.id === id) || BUILTIN_SOURCE;
+  }
+
+  function selectChannel(channel) {
+    setSelectedChannel(channel);
+    setAttemptIdx(0);
+  }
 
   // ── Sidebar auto-collapse/expand + track failed channels ──
   useEffect(() => {
     if (playState === "playing") setSidebarCollapsed(true);
     else if (playState !== "loading") setSidebarCollapsed(false);
     if (playState === "error" && selectedChannel) {
-      setFailedChannels((prev) => new Set([...prev, selectedChannel.url]));
+      setFailedChannels((prev) => new Set([...prev, selectedChannel.key]));
     }
   }, [playState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── HLS / native video player ──
+  // Plays attempts[attemptIdx]; on error or a 12s stall it moves to the next attempt,
+  // and only shows the error state once every line of the channel has failed.
+  const attempts = useMemo(() => buildAttempts(selectedChannel), [selectedChannel]);
+  const currentAttempt = attempts[attemptIdx] ?? null;
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !selectedChannel) return;
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
-    setPlayState("loading");
-    const { url } = selectedChannel;
-
-    // Reject non-http(s) URLs immediately (e.g. javascript://, tvbox://, etc.)
-    if (!/^https?:\/\//i.test(url)) {
+    const attempt = attempts[attemptIdx];
+    if (!attempt) {
       setPlayState("error");
       return;
     }
+    setPlayState("loading");
+    let done = false;
+    const fail = () => {
+      if (done) return;
+      done = true;
+      if (attemptIdx + 1 < attempts.length) setAttemptIdx(attemptIdx + 1);
+      else setPlayState("error");
+    };
+    const stallTimer = setTimeout(fail, 12_000);
+    const onPlaying = () => clearTimeout(stallTimer);
+    video.addEventListener("playing", onPlaying);
 
-    // Only proxy http:// streams — browsers block mixed content (http resource on https page).
-    // https:// streams are played directly to avoid CDN auth/CORS issues introduced by proxying.
-    const needsProxy = /^http:\/\//i.test(url);
-    const playUrl = needsProxy ? `/api/tv/stream?url=${encodeURIComponent(url)}` : url;
-    const looksLikeHls = /\.m3u8($|\?)/i.test(url.split("?")[0]) || /m3u8/i.test(url);
-
-    if (looksLikeHls && Hls.isSupported()) {
-      const hlsCfg = { enableWorker: true, lowLatencyMode: true };
-      // Only inject auth header for same-origin proxy requests (not external CDN URLs)
-      if (needsProxy && authToken) {
-        hlsCfg.xhrSetup = (xhr) => xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
+    (async () => {
+      let src = attempt.url;
+      if (attempt.proxy) {
+        const st = await getMediaToken(authToken).catch(() => null);
+        if (!st) return fail();
+        src = `/api/tv/stream?url=${encodeURIComponent(attempt.url)}&st=${encodeURIComponent(st)}`;
       }
-      const hls = new Hls(hlsCfg);
-      hlsRef.current = hls;
-      hls.loadSource(playUrl);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => setPlayState("paused")); });
-      hls.on(Hls.Events.ERROR, (_, data) => { if (data.fatal) setPlayState("error"); });
-    } else if (looksLikeHls && video.canPlayType("application/vnd.apple.mpegurl")) {
-      // Safari native HLS
-      video.src = playUrl;
-      video.play().catch(() => setPlayState("paused"));
-    } else {
-      // Non-HLS stream (FLV, MP4, TS, etc.)
-      video.src = playUrl;
-      video.play().catch(() => setPlayState("paused"));
-    }
+      if (done) return;
+      const looksLikeHls = /m3u8/i.test(attempt.url);
+      if (looksLikeHls && Hls.isSupported()) {
+        const hls = new Hls({ enableWorker: true, manifestLoadingMaxRetry: 1, levelLoadingMaxRetry: 1 });
+        hlsRef.current = hls;
+        hls.loadSource(src);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => setPlayState("paused")); });
+        hls.on(Hls.Events.ERROR, (_, data) => { if (data.fatal) fail(); });
+      } else {
+        // Safari native HLS, or a non-HLS stream (FLV, MP4, TS, etc.)
+        video.onerror = fail;
+        video.src = src;
+        video.play().catch(() => setPlayState("paused"));
+      }
+    })();
 
     return () => {
+      done = true;
+      clearTimeout(stallTimer);
+      video.removeEventListener("playing", onPlaying);
+      video.onerror = null;
       if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
-      video.src = "";
+      video.removeAttribute("src");
     };
-  }, [selectedChannel, authToken]);
+  }, [selectedChannel, attemptIdx]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function switchLine() {
+    if (!currentAttempt) return;
+    const next = attempts.findIndex((a, i) => i > attemptIdx && a.lineIdx !== currentAttempt.lineIdx);
+    setAttemptIdx(next >= 0 ? next : 0);
+  }
 
   // Cleanup HLS on unmount
   useEffect(() => {
     return () => { if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; } };
   }, []);
-
-  // Loading timeout: if stuck in "loading" for 15s without playback, mark as error
-  useEffect(() => {
-    if (playState !== "loading") return;
-    const timer = setTimeout(() => setPlayState("error"), 15_000);
-    return () => clearTimeout(timer);
-  }, [playState]);
 
   // ── Apply a source: parse or fetch its content ──
   async function applySource(source) {
@@ -232,7 +287,22 @@ export default function TVStream({ authToken, setMessage }) {
     setAggregationList(null);
     setFailedSubSources(new Set());
     setChannels([]); setGroups([]);
+    setBuiltinMeta(null);
+    try { localStorage.setItem(TV_ACTIVE_SOURCE_KEY, source.id); } catch {}
     try {
+      if (source.builtin) {
+        const res = await fetch("/api/tv/builtin", { headers: { Authorization: `Bearer ${authToken}` } });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setMessage?.(data.error || "社区直播源加载失败", "error");
+          return;
+        }
+        setChannels(data.channels);
+        setGroups(data.groups);
+        setExpandedGroups(new Set(data.groups.slice(0, 2)));
+        setBuiltinMeta({ updatedAt: data.updatedAt, channelCount: data.channels.length });
+        return;
+      }
       let text;
       if (source.content) {
         text = source.content;
@@ -438,13 +508,7 @@ export default function TVStream({ authToken, setMessage }) {
     setSources(next);
     cacheSave(next);
     if (activeSourceId === id) {
-      const fallback = next[0] ?? null;
-      if (fallback) applySource(fallback);
-      else {
-        setActiveSourceId(null);
-        setChannels([]); setGroups([]);
-        setSelectedChannel(null); setPlayState("idle");
-      }
+      applySource(next[0] ?? BUILTIN_SOURCE);
     }
   }
 
@@ -491,12 +555,14 @@ export default function TVStream({ authToken, setMessage }) {
                   className="tvSourceSelect"
                   value={activeSourceId || ""}
                   onChange={(e) => {
-                    const src = sources.find((s) => s.id === e.target.value);
+                    const src = e.target.value === BUILTIN_SOURCE.id
+                      ? BUILTIN_SOURCE
+                      : sources.find((s) => s.id === e.target.value);
                     if (src) applySource(src);
                   }}
                   disabled={fetchingPlaylist || loadingHistory}
                 >
-                  {sources.length === 0 && <option value="">暂无直播源</option>}
+                  <option value={BUILTIN_SOURCE.id}>{BUILTIN_SOURCE.label}</option>
                   {sources.map((s) => (
                     <option key={s.id} value={s.id} title={s.savedAt ? new Date(s.savedAt).toLocaleString() : ""}>
                       {s.label}{s.channelCount ? ` (${s.channelCount})` : ""}
@@ -511,7 +577,7 @@ export default function TVStream({ authToken, setMessage }) {
                 >
                   <AddRegular />
                 </button>
-                {activeSourceId && (
+                {activeSourceId && activeSourceId !== BUILTIN_SOURCE.id && (
                   <button
                     type="button"
                     className="tvIconBtn tvIconBtnDanger"
@@ -576,6 +642,11 @@ export default function TVStream({ authToken, setMessage }) {
                 </div>
               )}
 
+              {builtinMeta && !fetchingPlaylist && (
+                <div className="tvFetchingBar" title="来源：vbskycn/iptv、Guovin/iptv-api、fanmingming/live、iptv-org">
+                  <span>{builtinMeta.channelCount} 个频道 · 服务器每 6 小时重新检测，更新于 {new Date(builtinMeta.updatedAt).toLocaleString()}</span>
+                </div>
+              )}
               {(fetchingPlaylist || loadingHistory) && (
                 <div className="tvFetchingBar">
                   <Spinner size="tiny" />
@@ -639,15 +710,15 @@ export default function TVStream({ authToken, setMessage }) {
                         .filter((c) => c.group === group)
                         .map((channel) => (
                           <button
-                            key={channel.url + channel.name}
+                            key={channel.key}
                             type="button"
                             className={[
                               "tvChannelItem",
-                              selectedChannel?.url === channel.url ? "tvChannelItemActive" : "",
-                              failedChannels.has(channel.url) ? "tvChannelItemFailed" : "",
+                              selectedChannel?.key === channel.key ? "tvChannelItemActive" : "",
+                              failedChannels.has(channel.key) ? "tvChannelItemFailed" : "",
                             ].filter(Boolean).join(" ")}
-                            onClick={() => { if (!failedChannels.has(channel.url)) setSelectedChannel(channel); }}
-                            title={failedChannels.has(channel.url) ? `${channel.name}（无法播放）` : channel.name}
+                            onClick={() => selectChannel(channel)}
+                            title={failedChannels.has(channel.key) ? `${channel.name}（上次所有线路都失败了，可再试）` : channel.name}
                           >
                             {channel.logo ? (
                               <img
@@ -660,6 +731,7 @@ export default function TVStream({ authToken, setMessage }) {
                               <span className="tvChannelLogoPlaceholder" />
                             )}
                             <span className="tvChannelName">{channel.name}</span>
+                            {channel.lines.length > 1 && <span className="tvGroupCount">{channel.lines.length}</span>}
                           </button>
                         ))}
                     </div>
@@ -689,7 +761,6 @@ export default function TVStream({ authToken, setMessage }) {
               onTimeUpdate={() => setPlayState((s) => s === "loading" ? "playing" : s)}
               onPause={() => setPlayState((s) => s !== "loading" ? "paused" : s)}
               onWaiting={() => setPlayState((s) => s === "playing" ? "loading" : s)}
-              onError={() => setPlayState("error")}
               onEnded={() => setPlayState("idle")}
             />
             {playState === "loading" && (
@@ -699,7 +770,7 @@ export default function TVStream({ authToken, setMessage }) {
             )}
             {playState === "error" && (
               <div className="tvOverlay tvOverlayError">
-                <span>加载失败，请尝试其他频道</span>
+                <span>{selectedChannel.lines.length > 1 ? `${selectedChannel.lines.length} 条线路都无法播放，请换个频道` : "加载失败，请尝试其他频道"}</span>
               </div>
             )}
           </div>
@@ -708,6 +779,11 @@ export default function TVStream({ authToken, setMessage }) {
           <div className="tvNowPlaying">
             <span className="tvNowPlayingName">{selectedChannel.name}</span>
             {playState === "playing" && <span className="tvLiveBadge">LIVE</span>}
+            {currentAttempt && selectedChannel.lines.length > 1 && (
+              <button type="button" className="tvBtn" onClick={switchLine} title={currentAttempt.proxy ? "经服务器中转" : "直连"}>
+                线路 {currentAttempt.lineIdx + 1}/{selectedChannel.lines.length} · 换线路
+              </button>
+            )}
           </div>
         )}
       </div>

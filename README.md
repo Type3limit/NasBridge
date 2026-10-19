@@ -293,6 +293,16 @@ storage-client 现在会打印三类更直接的 HLS 日志：
 - 转码依赖 ffmpeg，请先在存储机安装并确保命令可执行。
 - 对于超大文件，可继续扩展为分片断点续传、并行 DataChannel、多连接限速等能力。
 
+## 5.1 TV 直播与番剧源（自动更新）
+
+- TV 默认显示「社区精选（自动更新）」：Server 每 6 小时拉取 vbskycn/iptv、Guovin/iptv-api、fanmingming/live、iptv-org 的公开直播源，逐条检测可用性，把同名频道合并成多条线路后缓存到 `server/data/tv-feeds.json`。播放失败会自动换下一条线路。
+  - `TV_FEED_URLS=名称|https://a.m3u,名称2|https://b.txt`：用自己的订阅替换默认列表
+  - `TV_FEED_REFRESH_HOURS=6`：重新检测间隔
+  - 管理员可 `POST /api/tv/builtin/refresh` 立即刷新；`GET /api/tv/builtin/status` 查看各订阅状态
+- 番剧站点来自 animeko 社区订阅（`https://sub.creamycake.org/v1/css1.json`），每小时刷新，最后一次成功的结果存于 `server/data/anime-subscription.json`。`ANIME_SUBSCRIPTION_URLS` 可追加或替换订阅（逗号分隔，animeko 导出格式）。
+- 搜索结果会逐条检测线路：失效线路在选择器里显示删除线；支持跨域的线路由浏览器直连 CDN，不占公网 Server 带宽，其余经 Server 中转（附带 Referer）。播放失败自动切换到下一条可用线路，HLS 中插入的广告片段会被过滤。
+- `http://` 直播线路在 HTTPS 页面里只能经 Server 中转，会占用公网带宽。
+
 ## 6. 目录结构
 
 ```text

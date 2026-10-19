@@ -9646,6 +9646,10 @@ button.chatAttachmentTile:disabled {
   color: var(--text);
   font-weight: 600;
 }
+.animeRoutePill.dead:not(.active) {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
 
 /* ── Blocked/captcha sites notice ─────────────────────────────────────── */
 .animeBlockedSites {

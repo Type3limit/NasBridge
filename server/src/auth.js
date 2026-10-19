@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 const USER_TOKEN_EXPIRES_IN = "7d";
 const CLIENT_TOKEN_EXPIRES_IN = "14d";
 const SHARE_TOKEN_EXPIRES_IN = "7d";
+const MEDIA_TOKEN_EXPIRES_IN = "12h";
 
 export function signUserToken(user) {
   return jwt.sign(
@@ -49,6 +50,12 @@ export function signShareToken(share, file, options = {}) {
     process.env.JWT_SECRET,
     { expiresIn }
   );
+}
+
+// Playback-only token for the TV/anime stream proxies. <video src> and native HLS
+// cannot send an Authorization header, so these URLs carry it as ?st=.
+export function signMediaToken(userId) {
+  return jwt.sign({ sub: userId, type: "media" }, process.env.JWT_SECRET, { expiresIn: MEDIA_TOKEN_EXPIRES_IN });
 }
 
 export function verifyToken(token) {

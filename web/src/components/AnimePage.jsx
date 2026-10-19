@@ -10,6 +10,8 @@ import {
   StarFilled,
 } from "@fluentui/react-icons";
 import Hls from "hls.js";
+import { createAdFilterLoader } from "../media/hlsAdFilter";
+import { getMediaToken } from "../media/streamToken";
 import { EquipmentVisual } from "../ui/OperationsDisplay";
 import { apiRequest } from "../api";
 import VideoPlayerControls, { VideoDanmakuComposer } from "./VideoPlayerControls";
@@ -635,6 +637,8 @@ function AnimePlayerPage({ playerState, authToken, p2p, clients, onBack }) {
   const videoRef = useRef(null);
   const hlsRef = useRef(null);
   const routesAccumRef = useRef([]); // accumulates routes during SSE for caching
+  const failedRoutesRef = useRef(new Set()); // route indexes that failed for the current episode
+  const [autoSwitchNote, setAutoSwitchNote] = useState("");
 
   // ── Custom player state ────────────────────────────────────────────────
   const [videoCurrentTime, setVideoCurrentTime] = useState(0);
@@ -799,7 +803,7 @@ function AnimePlayerPage({ playerState, authToken, p2p, clients, onBack }) {
     const map = new Map();
     routes.forEach((r, i) => {
       if (!map.has(r.site)) map.set(r.site, []);
-      map.get(r.site).push({ route: r.route, idx: i });
+      map.get(r.site).push({ route: r.route, idx: i, dead: r.health?.ok === false });
     });
     return [...map.entries()].map(([site, siteRoutes]) => ({ site, routes: siteRoutes }));
   }, [routes]);
@@ -831,14 +835,16 @@ function AnimePlayerPage({ playerState, authToken, p2p, clients, onBack }) {
     if (cached && cached.length > 0) {
       setRoutes(cached);
       setSearchLoading(false);
-      const eps = cached[0].episodes || [];
+      const firstHealthy = Math.max(0, cached.findIndex((r) => r.health?.ok !== false));
+      setCurrentRouteIdx(firstHealthy);
+      const eps = cached[firstHealthy].episodes || [];
       const cmsHintEp = hintEp != null ? bgmToCms(hintEp) : (eps[0]?.ep ?? 1);
       setCurrentEp(eps.find((e) => e.ep === cmsHintEp) ? cmsHintEp : (eps[0]?.ep ?? 1));
       return;
     }
 
     const controller = new AbortController();
-    const hardTimer = setTimeout(() => controller.abort(), 50_000);
+    const hardTimer = setTimeout(() => controller.abort(), 65_000);
 
     (async () => {
       try {
@@ -870,9 +876,11 @@ function AnimePlayerPage({ playerState, authToken, p2p, clients, onBack }) {
               if (!cancelled) {
                 routesAccumRef.current = [...routesAccumRef.current, msg.source];
                 setRoutes((prev) => [...prev, msg.source]);
-                if (firstRoute) {
+                // Start on the first route whose probe passed; dead ones stay listed for manual tries
+                if (firstRoute && msg.source.health?.ok !== false) {
                   firstRoute = false;
                   setSearchLoading(false);
+                  setCurrentRouteIdx(routesAccumRef.current.length - 1);
                   const eps = msg.source.episodes || [];
                   const cmsHintEp = hintEp != null ? bgmToCms(hintEp) : (eps[0]?.ep ?? 1);
                   setCurrentEp(eps.find((e) => e.ep === cmsHintEp) ? cmsHintEp : (eps[0]?.ep ?? 1));
@@ -884,7 +892,10 @@ function AnimePlayerPage({ playerState, authToken, p2p, clients, onBack }) {
               if (!cancelled) setBlockedSites((prev) => [...prev, { site: msg.site, url: msg.url }]);
             } else if (msg.type === "done") {
               if (!cancelled) {
-                if (firstRoute) setPlayerError("未找到可用播放源");
+                if (firstRoute && routesAccumRef.current.length > 0) {
+                  firstRoute = false;
+                  setPlayerError("所有线路检测都未通过，可以手动选择线路再试");
+                } else if (firstRoute) setPlayerError("未找到可用播放源");
                 setSearchLoading(false);
                 if (msg.total) setSitesTotal(msg.total);
                 setCachedRoutes(animeName, routesAccumRef.current);
@@ -892,7 +903,10 @@ function AnimePlayerPage({ playerState, authToken, p2p, clients, onBack }) {
             }
           }
         }
-        if (!cancelled && firstRoute) { setPlayerError("未找到可用播放源"); setSearchLoading(false); }
+        if (!cancelled && firstRoute) {
+          setPlayerError(routesAccumRef.current.length > 0 ? "所有线路检测都未通过，可以手动选择线路再试" : "未找到可用播放源");
+          setSearchLoading(false);
+        }
         if (!cancelled) setCachedRoutes(animeName, routesAccumRef.current);
       } catch (e) {
         if (!cancelled) {
@@ -907,8 +921,9 @@ function AnimePlayerPage({ playerState, authToken, p2p, clients, onBack }) {
   }, [searchKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load video whenever the active episode changes.
-  // All streams are routed through /api/anime/proxy-stream which injects the
-  // correct Referer header, bypassing CDN Referer checks that cause manifestLoadError.
+  // Routes the server marked `direct` play straight from the CDN (no load on the 2 Mbps
+  // server). Otherwise, or if direct playback fails, go through /api/anime/proxy-stream,
+  // which sends the Referer CDNs check. If both fail, switch to the next healthy route.
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !currentEpisode?.url) return;
@@ -917,6 +932,71 @@ function AnimePlayerPage({ playerState, authToken, p2p, clients, onBack }) {
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
 
     let cancelled = false;
+    let stallTimer = null;
+    const health = currentRoute?.health;
+
+    function teardown() {
+      clearTimeout(stallTimer);
+      video.onerror = null;
+      video.oncanplay = null;
+      if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+    }
+
+    function failRoute(reason) {
+      teardown();
+      if (cancelled) return;
+      failedRoutesRef.current.add(currentRouteIdx);
+      const next = findNextRoute();
+      if (next === null) {
+        setAutoSwitchNote("");
+        setPlayerError(`播放失败：${reason}`);
+        return;
+      }
+      setAutoSwitchNote(`「${currentRoute?.site} · ${currentRoute?.route}」无法播放，已切换到「${routes[next].site} · ${routes[next].route}」`);
+      handleRouteSwitch(next);
+    }
+
+    // Next route after the current one that has this episode, passed its probe and has not failed yet.
+    function findNextRoute() {
+      for (let step = 1; step < routes.length; step++) {
+        const idx = (currentRouteIdx + step) % routes.length;
+        const route = routes[idx];
+        if (failedRoutesRef.current.has(idx) || route.health?.ok === false) continue;
+        if (route.episodes?.some((e) => e.ep === currentEpisode.ep)) return idx;
+      }
+      return null;
+    }
+
+    function play(src, isMp4, viaProxy, onFail) {
+      teardown();
+      if (cancelled) return;
+      // A stream that never becomes playable counts as failed
+      stallTimer = setTimeout(() => onFail("加载超时"), 20_000);
+      video.oncanplay = () => clearTimeout(stallTimer);
+      const nativeHls = !isMp4 && !Hls.isSupported() && video.canPlayType("application/vnd.apple.mpegurl");
+      if (isMp4 || nativeHls) {
+        video.onerror = () => onFail(video.error?.message || "未知错误");
+        video.src = src;
+        video.play().catch(() => {});
+        return;
+      }
+      if (!Hls.isSupported()) {
+        clearTimeout(stallTimer);
+        setPlayerError("当前浏览器不支持 HLS 播放");
+        return;
+      }
+      const hls = new Hls({
+        enableWorker: false,
+        fragLoadingMaxRetry: viaProxy ? 2 : 1,
+        manifestLoadingMaxRetry: 1,
+        pLoader: createAdFilterLoader(Hls, (count) => console.info(`[anime] removed ${count} ad segments`)),
+      });
+      hlsRef.current = hls;
+      hls.loadSource(src);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => { if (!cancelled) video.play().catch(() => {}); });
+      hls.on(Hls.Events.ERROR, (_, data) => { if (data.fatal && !cancelled) onFail(data.details); });
+    }
 
     async function loadStream() {
       let streamUrl = currentEpisode.url;
@@ -933,7 +1013,7 @@ function AnimePlayerPage({ playerState, authToken, p2p, clients, onBack }) {
           if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
           if (data.url) { streamUrl = data.url; streamReferer = data.referer || streamReferer; }
         } catch (e) {
-          if (!cancelled) setPlayerError(`链接解析失败：${e.message}`);
+          if (!cancelled) failRoute(`链接解析失败：${e.message}`);
           return;
         }
       }
@@ -944,52 +1024,36 @@ function AnimePlayerPage({ playerState, authToken, p2p, clients, onBack }) {
       resolvedStreamRef.current = { url: streamUrl, referer: streamReferer };
 
       const isMp4 = currentEpisode.type === "mp4" || /\.(mp4|flv|mkv)(\?|$)/i.test(streamUrl);
+      let mediaToken;
+      try {
+        mediaToken = await getMediaToken(authToken);
+      } catch (e) {
+        if (!cancelled) setPlayerError(`播放授权失败：${e.message}`);
+        return;
+      }
+      if (cancelled) return;
+      const proxied = `/api/anime/proxy-stream?url=${encodeURIComponent(streamUrl)}&ref=${encodeURIComponent(streamReferer)}&st=${encodeURIComponent(mediaToken)}`;
+      const playProxied = () => play(proxied, isMp4, true, failRoute);
 
-      // Route all CDN requests through our server proxy so the correct Referer is sent.
-      // HLS.js segment requests also go through the proxy via the rewritten m3u8 URLs.
-      const proxied = `/api/anime/proxy-stream?url=${encodeURIComponent(streamUrl)}&ref=${encodeURIComponent(streamReferer)}`;
-
-      if (isMp4) {
-        video.src = proxied;
-        video.play().catch(() => {});
-        video.onerror = () => { if (!cancelled) setPlayerError(`播放失败：${video.error?.message || "未知错误"}`); };
-      } else if (Hls.isSupported()) {
-        const hls = new Hls({
-          enableWorker: false,
-          fragLoadingMaxRetry: 1,
-          manifestLoadingMaxRetry: 1,
-          // All HLS.js requests (manifest + segments) go through our proxy endpoint
-          // which requires auth, so we inject the Bearer token here.
-          xhrSetup: (xhr) => {
-            xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
-          },
-        });
-        hlsRef.current = hls;
-        hls.loadSource(proxied);
-        hls.attachMedia(video);
-        hls.on(Hls.Events.MANIFEST_PARSED, () => { if (!cancelled) video.play().catch(() => {}); });
-        hls.on(Hls.Events.ERROR, (_, data) => {
-          if (data.fatal && !cancelled) {
-            setPlayerError(`播放失败：${data.details}`);
-            hls.destroy();
-            hlsRef.current = null;
-          }
-        });
-      } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-        video.src = proxied;
-        video.play().catch(() => {});
-        video.onerror = () => { if (!cancelled) setPlayerError(`播放失败：${video.error?.message || "未知错误"}`); };
+      if (health?.direct && !currentEpisode.vipWrapped) {
+        play(streamUrl, isMp4, false, playProxied);
       } else {
-        setPlayerError("当前浏览器不支持 HLS 播放");
+        playProxied();
       }
     }
 
     loadStream();
     return () => {
       cancelled = true;
-      if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+      teardown();
     };
   }, [currentEpisode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A new episode or a new search gets a fresh set of routes to try
+  useEffect(() => {
+    failedRoutesRef.current = new Set();
+    setAutoSwitchNote("");
+  }, [currentEp, searchKey]);
 
   function handleRouteSwitch(idx) {
     if (idx === currentRouteIdx) return;
@@ -1303,7 +1367,7 @@ function AnimePlayerPage({ playerState, authToken, p2p, clients, onBack }) {
               <div className="animePlayerOverlay">
                 <Spinner size="small" />
                 <div className="animePlayerOverlayText">正在解析资源链接</div>
-                <div className="animePlayerOverlaySub">通常几秒内完成，否则请切换数据源</div>
+                <div className="animePlayerOverlaySub">{autoSwitchNote || "通常几秒内完成，失败会自动切换线路"}</div>
               </div>
             )}
 
@@ -1468,9 +1532,10 @@ function AnimePlayerPage({ playerState, authToken, p2p, clients, onBack }) {
                   </span>
                   <span className="animeSourceSiteName">{site}</span>
                   <div className="animeSourceRoutePills">
-                    {siteRoutes.map(({ route, idx }) => (
+                    {siteRoutes.map(({ route, idx, dead }) => (
                       <button key={idx} type="button"
-                        className={`animeRoutePill${idx === currentRouteIdx ? " active" : ""}`}
+                        className={`animeRoutePill${idx === currentRouteIdx ? " active" : ""}${dead ? " dead" : ""}`}
+                        title={dead ? "检测未通过，可能无法播放" : undefined}
                         onClick={() => { handleRouteSwitch(idx); setManualSelectOpen(false); }}>
                         {route}
                       </button>

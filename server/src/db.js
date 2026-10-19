@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { nanoid } from "nanoid";
 
-const dataDir = path.resolve(process.cwd(), "server/data");
+export const dataDir = path.resolve(process.cwd(), "server/data");
 const dbPath = path.join(dataDir, "db.json");
 
 const defaultDb = {

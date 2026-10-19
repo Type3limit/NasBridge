@@ -10,3 +10,7 @@ storage-client/data
 
 # Local UI previews, diagnostic captures and deployment archives.
 /local/
+
+# Server-side caches of the community TV and anime feeds
+**/data/tv-feeds.json
+**/data/anime-subscription.json

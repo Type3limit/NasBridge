@@ -63,10 +63,12 @@ import {
   createAnimeDanmaku,
   listTvSources,
   saveTvSource,
-  deleteTvSource
+  deleteTvSource,
+  dataDir
 } from "./db.js";
-import { signUserToken, signClientToken, signShareToken } from "./auth.js";
-import { requireAuth, requireRole } from "./middleware.js";
+import { signUserToken, signClientToken, signShareToken, signMediaToken } from "./auth.js";
+import { requireAuth, requireAuthOrMediaToken, requireRole } from "./middleware.js";
+import { refreshTvFeeds, sendTvFeeds, startTvFeedRefresher, tvFeedStatus } from "./tvFeeds.js";
 import { installSyncGroupRoutes } from './syncGroups.js';
 import { initWsHub } from "./wsHub.js";
 import { listChatMessagesByDay, persistChatMessage } from "./chatDb.js";
@@ -509,6 +511,25 @@ app.post("/api/file-danmaku", requireAuth, (req, res) => {
   });
 });
 
+// Rewritten playlist URLs must carry the media token, otherwise native HLS players
+// (Safari, iOS) lose auth on the second request.
+function mediaTokenParam(req) {
+  return req.query.st ? `&st=${encodeURIComponent(String(req.query.st))}` : "";
+}
+
+app.get("/api/media/token", requireAuth, (req, res) => {
+  return res.json({ token: signMediaToken(req.auth.sub), expiresInSec: 12 * 60 * 60 });
+});
+
+app.get("/api/tv/builtin", requireAuth, (req, res) => sendTvFeeds(req, res));
+
+app.get("/api/tv/builtin/status", requireAuth, (req, res) => res.json(tvFeedStatus()));
+
+app.post("/api/tv/builtin/refresh", requireAuth, requireRole("admin"), (req, res) => {
+  refreshTvFeeds();
+  return res.json(tvFeedStatus());
+});
+
 app.get("/api/tv/sources", requireAuth, (req, res) => {
   return res.json({ sources: listTvSources() });
 });
@@ -546,7 +567,7 @@ app.delete("/api/tv/sources/:id", requireAuth, (req, res) => {
 
 // HLS stream proxy — fetches any HLS resource server-side, rewrites M3U8 segment URLs
 // to go through this proxy so the browser avoids CORS/mixed-content issues.
-app.get("/api/tv/stream", requireAuth, async (req, res) => {
+app.get("/api/tv/stream", requireAuthOrMediaToken, async (req, res) => {
   const raw = String(req.query.url || "").trim();
   if (!raw) return res.status(400).json({ error: "url required" });
   let parsed;
@@ -585,7 +606,7 @@ app.get("/api/tv/stream", requireAuth, async (req, res) => {
       if (/^\s*<!DOCTYPE|^\s*<html/i.test(text)) {
         const realUrl = extractVideoUrlFromHtml(text, raw);
         if (realUrl && realUrl !== raw) {
-          return res.redirect(302, `/api/tv/stream?url=${encodeURIComponent(realUrl)}`);
+          return res.redirect(302, `/api/tv/stream?url=${encodeURIComponent(realUrl)}${mediaTokenParam(req)}`);
         }
         return res.status(422).json({ error: "not an m3u8 stream (got HTML player page)" });
       }
@@ -604,7 +625,7 @@ app.get("/api/tv/stream", requireAuth, async (req, res) => {
         else if (urlStr.startsWith("//")) { abs = `https:${urlStr}`; }
         else if (urlStr.startsWith("/")) { abs = `${parsed.protocol}//${parsed.host}${urlStr}`; }
         else { abs = base + urlStr; }
-        return `/api/tv/stream?url=${encodeURIComponent(abs)}`;
+        return `/api/tv/stream?url=${encodeURIComponent(abs)}${mediaTokenParam(req)}`;
       };
       const rewritten = text.split(/\r?\n/).map((line) => {
         const t = line.trim();
@@ -1184,23 +1205,52 @@ const CMS_ANIME_SITES_FALLBACK = [
 // Dynamic subscription loader — fetches animeko's datasource subscriptions.
 // The css1.json format mirrors animeko's web-selector entries with searchUrl hosting
 // the same 苹果CMS sites we query via JSON API (/api.php/provide/vod/).
-const SUB_ONLINE_URL = "https://sub.creamycake.org/v1/css1.json";
+// ANIME_SUBSCRIPTION_URLS (comma-separated) adds or replaces animeko-format subscriptions;
+// sources from all of them are merged.
+const SUB_ONLINE_URLS = String(process.env.ANIME_SUBSCRIPTION_URLS || "https://sub.creamycake.org/v1/css1.json")
+  .split(",").map((u) => u.trim()).filter(Boolean);
+// Last good subscription, so a restart while the subscription host is down still has
+// community-maintained sites instead of the stale hardcoded list.
+const SUB_DISK_CACHE = path.join(dataDir, "anime-subscription.json");
 let subSitesCache = null;
 let subSitesCacheTime = 0;
 const SUB_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+async function fetchSubscriptionSources() {
+  const all = [];
+  for (const url of SUB_ONLINE_URLS) {
+    try {
+      const r = await fetch(url, {
+        signal: AbortSignal.timeout(10_000),
+        headers: { "User-Agent": CMS_HEADERS["User-Agent"] },
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      all.push(...(data?.exportedMediaSourceDataList?.mediaSources ?? []));
+    } catch (e) {
+      console.warn(`[anime] Subscription ${url} failed: ${e.message}`);
+    }
+  }
+  if (all.length > 0) {
+    try { fs.writeFileSync(SUB_DISK_CACHE, JSON.stringify(all), "utf-8"); } catch {}
+    return all;
+  }
+  try {
+    const cached = JSON.parse(fs.readFileSync(SUB_DISK_CACHE, "utf-8"));
+    if (Array.isArray(cached) && cached.length) {
+      console.warn("[anime] Using last saved subscription");
+      return cached;
+    }
+  } catch {}
+  throw new Error("all subscriptions unavailable");
+}
 
 async function loadSubscriptionSites(forceRefresh = false) {
   if (!forceRefresh && subSitesCache && Date.now() - subSitesCacheTime < SUB_CACHE_TTL_MS) {
     return subSitesCache;
   }
   try {
-    const r = await fetch(SUB_ONLINE_URL, {
-      signal: AbortSignal.timeout(10_000),
-      headers: { "User-Agent": CMS_HEADERS["User-Agent"] },
-    });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data = await r.json();
-    const mediaSources = data?.exportedMediaSourceDataList?.mediaSources ?? [];
+    const mediaSources = await fetchSubscriptionSources();
     const sites = mediaSources
       .filter((entry) => entry?.factoryId === "web-selector" && entry?.arguments?.searchConfig?.searchUrl)
       .map((entry) => {
@@ -1964,6 +2014,40 @@ function parseAllRoutes(vodPlayUrl, vodPlayFrom, siteBase) {
   return routes;
 }
 
+// Quick check of a route's first episode so the player can skip dead routes and play
+// CORS-friendly ones straight from the CDN instead of through this server.
+// Returns { ok, direct } or null when the URL still needs player-page resolution.
+async function probeAnimeEpisode(episode) {
+  if (!episode?.url || episode.vipWrapped || !/^https?:\/\//i.test(episode.url)) return null;
+  const isMp4 = episode.type === "mp4" || /\.(mp4|mkv|flv)(\?|$)/i.test(episode.url);
+  async function attempt(extraHeaders) {
+    try {
+      const r = await fetch(episode.url, {
+        signal: AbortSignal.timeout(6_000),
+        headers: {
+          ...CMS_HEADERS,
+          Origin: "https://nas-bridge.invalid",
+          ...(isMp4 ? { Range: "bytes=0-1023" } : {}),
+          ...extraHeaders,
+        },
+      });
+      if (!r.ok) { r.body?.cancel().catch(() => {}); return null; }
+      const reader = r.body.getReader();
+      const { value } = await reader.read();
+      reader.cancel().catch(() => {});
+      const head = Buffer.from(value || []).subarray(0, 16).toString("utf8");
+      if (!isMp4 && !head.startsWith("#EXTM3U")) return null;
+      return { cors: Boolean(r.headers.get("access-control-allow-origin")) };
+    } catch { return null; }
+  }
+  const https = episode.url.startsWith("https:");
+  const plain = await attempt({});
+  // <video src> needs no CORS but hls.js does; http URLs would be blocked as mixed content.
+  if (plain) return { ok: true, direct: https && (isMp4 || plain.cors) };
+  if (episode.referer && await attempt({ Referer: episode.referer })) return { ok: true, direct: false };
+  return { ok: false, direct: false };
+}
+
 app.get("/api/anime/find-stream", requireAuth, async (req, res) => {
   const name = String(req.query.name || "").trim();
   const nameFallback = String(req.query.nameFallback || "").trim();
@@ -1981,10 +2065,12 @@ app.get("/api/anime/find-stream", requireAuth, async (req, res) => {
   const seen = new Set(); // deduplicate source by site+route key
   const blockedSeen = new Set(); // deduplicate blocked events by site name
 
-  function sendSource(src) {
+  async function sendSource(src) {
     const key = `${src.site}:::${src.route}`;
     if (finished || seen.has(key)) return;
     seen.add(key);
+    src.health = await probeAnimeEpisode(src.episodes[0]);
+    if (finished) return;
     res.write(`data: ${JSON.stringify({ type: "source", source: src })}\n\n`);
   }
   function sendChecked(siteName) {
@@ -2094,9 +2180,7 @@ app.get("/api/anime/find-stream", requireAuth, async (req, res) => {
           }
 
           console.log(`[anime] ${site.name}: "${vodName}" — ${allRoutes.map((r) => `${r.route}(${r.episodes.length}ep)`).join(", ")}`);
-          for (const { route, episodes } of allRoutes) {
-            sendSource({ site: site.name, route, vodName, episodes });
-          }
+          await Promise.all(allRoutes.map(({ route, episodes }) => sendSource({ site: site.name, route, vodName, episodes })));
           return;
         }
         console.log(`[anime] ${site.name}: "${vodName}" — JSON play data has no usable URLs, trying HTML routes`);
@@ -2128,9 +2212,7 @@ app.get("/api/anime/find-stream", requireAuth, async (req, res) => {
 
       const vodName = detail?.vod_name || hit.vod_name || fullName;
       console.log(`[anime] ${site.name}: "${vodName}" (HTML) — ${allRoutes.map((r) => `${r.route}(${r.episodes.length}ep)`).join(", ")}`);
-      for (const { route, episodes } of allRoutes) {
-        sendSource({ site: site.name, route, vodName, episodes });
-      }
+      await Promise.all(allRoutes.map(({ route, episodes }) => sendSource({ site: site.name, route, vodName, episodes })));
     } catch (e) {
       console.log(`[anime] ${site.name}: ${e.message?.slice(0, 80) ?? e}`);
     } finally { clearTimeout(timer); sendChecked(site.name); }
@@ -2142,7 +2224,7 @@ app.get("/api/anime/find-stream", requireAuth, async (req, res) => {
     return t;
   });
 
-  const hardTimer = setTimeout(done, 55_000); // 55s: 20s search+detail + 15s player resolution + buffer
+  const hardTimer = setTimeout(done, 62_000); // 20s search+detail + 15s player resolution + 6s route probe + buffer
   Promise.allSettled(tasks).then(() => { clearTimeout(hardTimer); done(); });
 });
 
@@ -2265,7 +2347,7 @@ app.post("/api/anime/danmaku/:episodeId", requireAuth, (req, res) => {
 // For m3u8 playlists: rewrites all segment/child-playlist URLs through this
 // endpoint so every subsequent request also carries the correct Referer.
 // Required because browser security prevents setting arbitrary Referer headers.
-app.get("/api/anime/proxy-stream", requireAuth, async (req, res) => {
+app.get("/api/anime/proxy-stream", requireAuthOrMediaToken, async (req, res) => {
   const rawUrl = String(req.query.url || "").trim();
   const referer = String(req.query.ref || "").trim();
   if (!rawUrl) return res.status(400).end("url required");
@@ -2274,9 +2356,11 @@ app.get("/api/anime/proxy-stream", requireAuth, async (req, res) => {
   function makeProxyUrl(childUrl) {
     let absolute;
     try { absolute = new URL(childUrl, rawUrl).href; } catch { absolute = childUrl; }
-    return `/api/anime/proxy-stream?url=${encodeURIComponent(absolute)}&ref=${encodeURIComponent(referer)}`;
+    return `/api/anime/proxy-stream?url=${encodeURIComponent(absolute)}&ref=${encodeURIComponent(referer)}${mediaTokenParam(req)}`;
   }
 
+  const controller = new AbortController();
+  res.on("close", () => controller.abort());
   try {
     const fetchHeaders = {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
@@ -2287,11 +2371,12 @@ app.get("/api/anime/proxy-stream", requireAuth, async (req, res) => {
       fetchHeaders["Referer"] = referer;
       try { fetchHeaders["Origin"] = new URL(referer).origin; } catch {}
     }
+    // Forward Range so mp4 episodes can seek instead of downloading from the start
+    if (req.headers.range) fetchHeaders["Range"] = req.headers.range;
 
-    const upstream = await fetch(rawUrl, {
-      signal: AbortSignal.timeout(20_000),
-      headers: fetchHeaders,
-    });
+    const timer = setTimeout(() => controller.abort(), 20_000);
+    const upstream = await fetch(rawUrl, { signal: controller.signal, headers: fetchHeaders });
+    clearTimeout(timer);
 
     if (!upstream.ok) return res.status(upstream.status).end();
 
@@ -2317,17 +2402,20 @@ app.get("/api/anime/proxy-stream", requireAuth, async (req, res) => {
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Cache-Control", "no-store");
       return res.end(out);
-    } else {
-      // Binary segment (.ts, .m4s, .aac, etc.) — pipe through
-      res.setHeader("Content-Type", ct || "video/MP2T");
-      res.setHeader("Access-Control-Allow-Origin", "*");
-      const cl = upstream.headers.get("content-length");
-      if (cl) res.setHeader("Content-Length", cl);
-      const buf = Buffer.from(await upstream.arrayBuffer());
-      return res.end(buf);
     }
+    // Binary segment or mp4 — stream it through instead of buffering the whole file
+    res.status(upstream.status);
+    res.setHeader("Content-Type", ct || "video/MP2T");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    for (const name of ["content-length", "content-range", "accept-ranges"]) {
+      const value = upstream.headers.get(name);
+      if (value) res.setHeader(name, value);
+    }
+    const { Readable } = await import("node:stream");
+    Readable.fromWeb(upstream.body).on("error", () => res.destroy()).pipe(res);
   } catch (e) {
-    return res.status(502).end(e.message || "proxy error");
+    if (!res.headersSent) return res.status(502).end(e.message || "proxy error");
+    res.destroy();
   }
 });
 
@@ -2666,6 +2754,7 @@ async function bootstrap() {
   server.listen(port, () => {
     console.log(`NAS server listening on :${port}`);
   });
+  startTvFeedRefresher();
 }
 
 bootstrap();
