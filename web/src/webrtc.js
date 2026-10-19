@@ -2749,7 +2749,8 @@ export class P2PBridge {
     }));
   }
 
-  async getMusicPlayerState(clientId) {
+  // `listener` ({ id }) lets the node count who is listening, for skip votes.
+  async getMusicPlayerState(clientId, listener = null) {
     this.markClientActivity(clientId);
     return this.enqueueClientTask(clientId, "control", async () => this.withPeerRetry(clientId, async (peer) => {
       const { channel, opChannelName } = await this.getChannelForOp(peer, "control");
@@ -2771,7 +2772,7 @@ export class P2PBridge {
           }
         };
         this.currentOp.set(opKey, ctx);
-        channel.send(JSON.stringify({ type: "get-music-player-state", requestId }));
+        channel.send(JSON.stringify({ type: "get-music-player-state", requestId, ...(listener?.id ? { listener: { id: String(listener.id) } } : {}) }));
       });
     }));
   }
@@ -3146,8 +3147,8 @@ export class P2PBridgePool {
     return this.getBridge("control").cancelBotJob(clientId, jobId);
   }
 
-  getMusicPlayerState(clientId) {
-    return this.getBridge("control").getMusicPlayerState(clientId);
+  getMusicPlayerState(clientId, listener = null) {
+    return this.getBridge("control").getMusicPlayerState(clientId, listener);
   }
 
   enqueueMusicTrack(clientId, keyword, source, submittedBy = "") {

@@ -3633,7 +3633,7 @@ function wireDataChannel(channel, remotePeerId = "unknown-peer") {
 
     const message = JSON.parse(event.data);
 
-    if (isSharePeer(remotePeerId) && ["put-file-cancel", "put-file-start", "put-file-end", "delete-file", "rename-file", "delete-folder", "rename-folder", "create-folder", "append-chat-message", "get-bot-catalog", "invoke-bot", "get-bot-job", "get-bot-job-log", "cancel-bot-job", "get-music-player-state", "search-music-candidates", "enqueue-music-track", "enqueue-music-selection", "control-music-player"].includes(message.type)) {
+    if (isSharePeer(remotePeerId) && ["put-file-cancel", "put-file-start", "put-file-end", "delete-file", "rename-file", "delete-folder", "rename-folder", "create-folder", "append-chat-message", "get-bot-catalog", "invoke-bot", "get-bot-job", "get-bot-job-log", "cancel-bot-job", "get-music-player-state", "search-music-candidates", "enqueue-music-track", "enqueue-music-selection", "control-music-player", "qq-music-login"].includes(message.type)) {
       safeSend(JSON.stringify({ type: "error", requestId: message.requestId, message: "share link is read-only" }), "share-read-only");
       return;
     }

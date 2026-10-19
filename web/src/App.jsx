@@ -5221,115 +5221,117 @@ export default function App() {
   ];
 
   return (
-    <div className="page tacPage">
-      {renderToastViewport()}
-      <div className="shell appShell">
-        <header className="appTopbar tacTopbar">
-          <div className="topbarStart">
-            <button
-              type="button"
-              className={`workspaceFlyoutTrigger topbarFlyoutTrigger${navExpanded ? " active" : ""}`}
-              aria-label={navExpanded ? "收起工作区导航" : "展开工作区导航"}
-              title={navExpanded ? "收起工作区导航" : "展开工作区导航"}
-              onClick={() => setNavExpanded((prev) => !prev)}
-            >
-              <AppsListRegular />
-            </button>
-            <div className="brandBlock">
-              <div className="brandIdentity compact">
-                <BridgeMark />
-                <span className="tacBrandText"><Title3>NAS BRIDGE</Title3><small>TACTICAL STORAGE TERMINAL</small></span>
-                <GlobalMusicPlayer p2p={p2p} clients={clients} user={user} onToast={setMessage} />
+    // The player wraps the page so the command center can read it; its dock is portaled to <body>.
+    <GlobalMusicPlayer p2p={p2p} clients={clients} user={user} onToast={setMessage}>
+      <div className="page tacPage">
+        {renderToastViewport()}
+        <div className="shell appShell">
+          <header className="appTopbar tacTopbar">
+            <div className="topbarStart">
+              <button
+                type="button"
+                className={`workspaceFlyoutTrigger topbarFlyoutTrigger${navExpanded ? " active" : ""}`}
+                aria-label={navExpanded ? "收起工作区导航" : "展开工作区导航"}
+                title={navExpanded ? "收起工作区导航" : "展开工作区导航"}
+                onClick={() => setNavExpanded((prev) => !prev)}
+              >
+                <AppsListRegular />
+              </button>
+              <div className="brandBlock">
+                <div className="brandIdentity compact">
+                  <BridgeMark />
+                  <span className="tacBrandText"><Title3>NAS BRIDGE</Title3><small>TACTICAL STORAGE TERMINAL</small></span>
+                </div>
               </div>
             </div>
-          </div>
-          {activeTab.id === "overview" ? <HudTicker items={tickerItems} /> : (
-            <div className="tacTopTitle" key={activeTab.id}>
-              <span className="tacTopIndex">{activeTabNumber}</span>
-              <strong>{activeTab.code}</strong>
-              <span className="tacTopLabel">/ {activeTab.label}</span>
+            {activeTab.id === "overview" ? <HudTicker items={tickerItems} /> : (
+              <div className="tacTopTitle" key={activeTab.id}>
+                <span className="tacTopIndex">{activeTabNumber}</span>
+                <strong>{activeTab.code}</strong>
+                <span className="tacTopLabel">/ {activeTab.label}</span>
+              </div>
+            )}
+            <HudClock />
+            <div className="topbarActions">
+              <ThemeSwitch compact />
+              <button type="button" className="profileTrigger" onClick={() => setProfileOpen(true)}>
+                <AvatarFace
+                  className="profileTriggerAvatar"
+                  displayName={user.displayName}
+                  avatarUrl={user.avatarUrl}
+                  avatarClientId={user.avatarClientId}
+                  avatarPath={user.avatarPath}
+                  avatarFileId={user.avatarFileId}
+                  p2p={p2p}
+                />
+                <span className="profileTriggerText">
+                  <Text>{user.displayName} · {user.role === "admin" ? "管理员" : "成员"}</Text>
+                  <Caption1>{user.email}</Caption1>
+                </span>
+              </button>
+              <button type="button" className="iconActionButton topbarIconButton" title="切换到大屏模式" aria-label="切换到大屏模式" onClick={() => { const w = window.open("/living-room.html", "nas_living_room"); w?.focus(); }}>
+                <StreamRegular />
+              </button>
+              <button type="button" className="iconActionButton topbarIconButton" title="上传文件" aria-label="上传文件" onClick={() => setUploadOpen(true)}>
+                <ArrowDownloadRegular className="topbarUploadIcon" />
+              </button>
+              <button type="button" className="iconActionButton topbarIconButton" title="同步索引" aria-label="同步索引" onClick={() => refreshAll()}>
+                {loading ? <Spinner size="tiny" /> : <ArrowSwapRegular />}
+              </button>
+              <button type="button" className="iconActionButton topbarIconButton" title="退出" aria-label="退出" onClick={logout}>
+                <ArrowRightRegular />
+              </button>
             </div>
-          )}
-          <HudClock />
-          <div className="topbarActions">
-            <ThemeSwitch compact />
-            <button type="button" className="profileTrigger" onClick={() => setProfileOpen(true)}>
-              <AvatarFace
-                className="profileTriggerAvatar"
-                displayName={user.displayName}
-                avatarUrl={user.avatarUrl}
-                avatarClientId={user.avatarClientId}
-                avatarPath={user.avatarPath}
-                avatarFileId={user.avatarFileId}
-                p2p={p2p}
-              />
-              <span className="profileTriggerText">
-                <Text>{user.displayName} · {user.role === "admin" ? "管理员" : "成员"}</Text>
-                <Caption1>{user.email}</Caption1>
-              </span>
-            </button>
-            <button type="button" className="iconActionButton topbarIconButton" title="切换到大屏模式" aria-label="切换到大屏模式" onClick={() => { const w = window.open("/living-room.html", "nas_living_room"); w?.focus(); }}>
-              <StreamRegular />
-            </button>
-            <button type="button" className="iconActionButton topbarIconButton" title="上传文件" aria-label="上传文件" onClick={() => setUploadOpen(true)}>
-              <ArrowDownloadRegular className="topbarUploadIcon" />
-            </button>
-            <button type="button" className="iconActionButton topbarIconButton" title="同步索引" aria-label="同步索引" onClick={() => refreshAll()}>
-              {loading ? <Spinner size="tiny" /> : <ArrowSwapRegular />}
-            </button>
-            <button type="button" className="iconActionButton topbarIconButton" title="退出" aria-label="退出" onClick={logout}>
-              <ArrowRightRegular />
-            </button>
-          </div>
-        </header>
+          </header>
 
-        <div className={`workspaceLayout${navExpanded ? " navExpanded" : ""}`}>
-          <aside className={`controlRail navRail tacSpine${navExpanded ? " expanded" : ""}`}>
-            <div className="workspaceNavCard">
-              <div className="workspaceNavHeader">
-                <span className="tacSpineTitle">工作区 / MODULES</span>
-                <span className="tacSpineSub">{String(workspaceTabs.length).padStart(2, "0")} UNITS · PRIVATE NETWORK</span>
-              </div>
-              <div className="workspaceNavList" role="tablist" aria-orientation="vertical">
-                {workspaceTabs.map((tab, index) => (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    role="tab"
-                    aria-selected={activeWorkspaceTab === tab.id}
-                    className={`workspaceNavButton${activeWorkspaceTab === tab.id ? " active" : ""}`}
-                    style={{ "--i": index }}
-                    onClick={() => handleWorkspaceTabSelect(tab.id)}
-                    title={tab.label}
-                  >
-                    <span className="tacNavIndex">{String(index + 1).padStart(2, "0")}</span>
-                    <span className="workspaceNavButtonMain">
-                      <span className="railSectionIcon workspaceNavIcon" aria-hidden="true">{tab.icon}</span>
-                      <span className="workspaceNavText">
-                        <span className="workspaceNavLabel">{tab.label}</span>
-                        <span className="tacNavCode">{tab.code}</span>
+          <div className={`workspaceLayout${navExpanded ? " navExpanded" : ""}`}>
+            <aside className={`controlRail navRail tacSpine${navExpanded ? " expanded" : ""}`}>
+              <div className="workspaceNavCard">
+                <div className="workspaceNavHeader">
+                  <span className="tacSpineTitle">工作区 / MODULES</span>
+                  <span className="tacSpineSub">{String(workspaceTabs.length).padStart(2, "0")} UNITS · PRIVATE NETWORK</span>
+                </div>
+                <div className="workspaceNavList" role="tablist" aria-orientation="vertical">
+                  {workspaceTabs.map((tab, index) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeWorkspaceTab === tab.id}
+                      className={`workspaceNavButton${activeWorkspaceTab === tab.id ? " active" : ""}`}
+                      style={{ "--i": index }}
+                      onClick={() => handleWorkspaceTabSelect(tab.id)}
+                      title={tab.label}
+                    >
+                      <span className="tacNavIndex">{String(index + 1).padStart(2, "0")}</span>
+                      <span className="workspaceNavButtonMain">
+                        <span className="railSectionIcon workspaceNavIcon" aria-hidden="true">{tab.icon}</span>
+                        <span className="workspaceNavText">
+                          <span className="workspaceNavLabel">{tab.label}</span>
+                          <span className="tacNavCode">{tab.code}</span>
+                        </span>
                       </span>
-                    </span>
-                    <span className="tacNavMeta">{tab.meta}</span>
-                  </button>
-                ))}
+                      <span className="tacNavMeta">{tab.meta}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="navRailFooter"><span><i className={onlineCount ? "online" : ""} /> {onlineCount} NODES ONLINE</span><span>NAS BRIDGE / NB—01</span></div>
               </div>
-              <div className="navRailFooter"><span><i className={onlineCount ? "online" : ""} /> {onlineCount} NODES ONLINE</span><span>NAS BRIDGE / NB—01</span></div>
-            </div>
-          </aside>
+            </aside>
 
-          <main className="mainCanvas">
-            <TacticalStage key={activeTab.id} index={activeTabNumber} code={activeTab.code} label={activeTab.label} showMast={activeTab.id === "overview"}>
-              {renderActiveWorkspacePage()}
-            </TacticalStage>
-          </main>
+            <main className="mainCanvas">
+              <TacticalStage key={activeTab.id} index={activeTabNumber} code={activeTab.code} label={activeTab.label} showMast={activeTab.id === "overview"}>
+                {renderActiveWorkspacePage()}
+              </TacticalStage>
+            </main>
+          </div>
+
+          {renderDialogs()}
+
         </div>
-
-        {renderDialogs()}
-
+        <TacticalStatusBar onlineCount={onlineCount} nodeTotal={clients.length} wsState={diagnostics.wsState}
+          lastRefresh={lastRefreshAt ? formatRelativeTime(lastRefreshAt) : "--"} moduleCode={activeTab.code} />
       </div>
-      <TacticalStatusBar onlineCount={onlineCount} nodeTotal={clients.length} wsState={diagnostics.wsState}
-        lastRefresh={lastRefreshAt ? formatRelativeTime(lastRefreshAt) : "--"} moduleCode={activeTab.code} />
-    </div>
+    </GlobalMusicPlayer>
   );
 }

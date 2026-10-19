@@ -124,7 +124,12 @@ async function fetchJson(url, options = {}, timeoutMs = DEFAULT_HEALTH_TIMEOUT_M
       signal: controller.signal
     });
     if (!response.ok) {
-      throw new Error(`${response.status} ${response.statusText}`);
+      // The bridge explains failures in { error }; pass that on instead of "502 Bad Gateway".
+      const detail = String((await response.json().catch(() => null))?.error || "").trim();
+      if (/vip required/i.test(detail)) {
+        throw new Error("这首歌需要 QQ 音乐会员（绿钻/VIP）才能播放，换一个版本试试");
+      }
+      throw new Error(detail || `${response.status} ${response.statusText}`);
     }
     return response.json();
   } finally {

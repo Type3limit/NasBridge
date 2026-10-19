@@ -53,3 +53,23 @@ test('search rechecks a bridge that came up after the node started', async () =>
   const results = await p.searchCandidates({ keyword: 'song', source: 'qq' });
   assert.equal(results[0].title, 'Song');
 });
+
+test('skip needs half the listeners; the requester and admins skip at once', async () => {
+  const p = player([track('now', 'A', 0), track('next', 'B', 1)], 0);
+  for (const id of ['A', 'B', 'C', 'D']) p.listeners.set(id, Date.now());
+  await p.control('skip-vote', { actor: { id: 'C', name: 'Carol' } });
+  assert.equal(p.getCurrentTrack().id, 'now');
+  assert.deepEqual(p.snapshot().skip, { votes: 1, votedBy: ['C'], needed: 2, listeners: 4 });
+  await p.control('next', { actor: { id: 'D', name: 'Dan' } });
+  assert.equal(p.getCurrentTrack().id, 'next');
+  assert.equal(p.snapshot().lastSkip.reason, 'vote');
+  assert.equal(p.snapshot().skip.votes, 0);
+  await p.control('next', { actor: { id: 'B', name: 'Bob' } });
+  assert.equal(p.snapshot().lastSkip.reason, 'requester');
+});
+
+test('alone, one press skips', async () => {
+  const p = player([track('now', 'A', 0), track('next', 'B', 1)], 0);
+  await p.control('skip-vote', { actor: { id: 'C', name: 'Carol' } });
+  assert.equal(p.getCurrentTrack().id, 'next');
+});

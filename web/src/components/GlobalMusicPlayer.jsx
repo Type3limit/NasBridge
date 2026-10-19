@@ -259,6 +259,7 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
 
   const queueItems = Array.isArray(playerState?.queue) ? playerState.queue : [];
   // Who is requesting, liking or withdrawing; the storage node applies the queue rules per person.
+  const listenerId = user?.id ? String(user.id) : "";
   const musicActor = useMemo(() => (user?.id ? { id: String(user.id), name: user.displayName || user.email || "", role: user.role || "user" } : null), [user?.id, user?.displayName, user?.email, user?.role]);
   const currentQueueIndex = Number(playerState?.currentIndex ?? -1);
   const derivedCurrentTrack = currentQueueIndex >= 0 && currentQueueIndex < queueItems.length
@@ -599,7 +600,7 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
     let disposed = false;
     async function poll() {
       try {
-        const result = await p2p.getMusicPlayerState(hostClientId);
+        const result = await p2p.getMusicPlayerState(hostClientId, listenerId ? { id: listenerId } : null);
         if (!disposed) {
           applyIncomingPlayerState(result?.state || null);
         }
@@ -621,7 +622,7 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
         clearTimeout(pollTimerRef.current);
       }
     };
-  }, [hostClientId, p2p]);
+  }, [hostClientId, p2p, listenerId]);
 
   useEffect(() => {
     if (!p2p || !hostClientId || !currentTrackId || !currentTrack?.relativePath || currentTrack?.status !== "ready") {
@@ -1206,6 +1207,38 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
   const nodeOutdated = Boolean(playerState) && !nodeFeatures.includes("qq-login");
   const outdatedNotice = "当前存储节点版本较旧：请在该节点 git pull 并重启存储端后再用这个功能";
   const cooldownSeconds = Number(playerState?.rules?.cooldownSeconds || 30);
+  // Anyone may ask to skip; the node counts it as a vote unless it is your song,
+  // you are an admin, or you are the only one listening.
+  const skipState = playerState?.skip || null;
+  const skipsAtOnce = !nodeFeatures.includes("vote-skip") || isAdmin || Boolean(currentTrack?.submittedById && currentTrack.submittedById === myId) || Number(skipState?.listeners || 0) < 2;
+  const mySkipVoted = Boolean(skipState?.votedBy?.includes(myId));
+  const skipLabel = skipsAtOnce ? "下一首" : `投票切歌 ${skipState?.votes || 0}/${skipState?.needed || 1}`;
+
+  async function skipTrack() {
+    const before = currentTrackId;
+    const state = await sendControl("next");
+    if (state && !skipsAtOnce && state.currentTrack?.id === before) {
+      onToast?.(`已投票切歌 ${state.skip?.votes || 0}/${state.skip?.needed || 1}，过半就切`, "info");
+    }
+  }
+
+  // A short notice whenever the song changes, saying why if someone skipped it.
+  const lastTrackIdRef = useRef(currentTrackId);
+  useEffect(() => {
+    const previous = lastTrackIdRef.current;
+    lastTrackIdRef.current = currentTrackId;
+    if (!previous || !currentTrackId || previous === currentTrackId) {
+      return;
+    }
+    const skip = playerState?.lastSkip;
+    const now = `现在播放《${currentTrack?.title || ""}》${currentTrack?.submittedBy ? ` · ${currentTrack.submittedBy} 点的` : ""}`;
+    if (skip?.trackId !== previous) {
+      onToast?.(now, "info");
+      return;
+    }
+    const why = skip.reason === "vote" ? `${skip.votes} 人投票跳过了` : skip.reason === "admin" ? `管理员 ${skip.by} 跳过了` : `${skip.by} 跳过了自己点的`;
+    onToast?.(`${why}《${skip.title}》，${now}`, "info");
+  }, [currentTrackId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Admins sign the node into QQ Music from the panel; the cookie stays on the node.
   useEffect(() => {
@@ -1437,10 +1470,18 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
       currentTrack,
       isPlaying: Boolean(playerState?.isPlaying),
       togglePlay: handlePlayButtonClick,
-      nextTrack: () => sendControl("next"),
+      nextTrack: skipTrack,
       prevTrack: () => sendControl("previous"),
       openDeck,
-      upcomingCount: upcomingTracks.length
+      upcomingCount: upcomingTracks.length,
+      upcomingTracks,
+      loopTracks,
+      queueItems,
+      skipLabel,
+      skipsAtOnce,
+      mySkipVoted,
+      progressPercent,
+      hostName: hostClient?.name || ""
     }}>
       {/* Portaled to <body>: the top bar that mounts this has a backdrop filter, which would pin a fixed child to the bar. */}
       {createPortal(<div ref={shellRef} className={`musicShell${popupOpen ? " deckOpen" : ""}`}>
@@ -1461,8 +1502,8 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
             <button type="button" className="musicDockButton" onClick={() => handlePlayButtonClick()} disabled={!currentTrackId || audioLoading} aria-label={playerState?.isPlaying ? "暂停" : "播放"} title={playerState?.isPlaying ? "暂停" : "播放"}>
               {audioLoading ? <Spinner size="tiny" /> : playerState?.isPlaying ? <PauseRegular /> : <PlayRegular />}
             </button>
-            <button type="button" className="musicDockButton" onClick={() => sendControl("next")} disabled={!nextUpTrack} aria-label="下一首" title="下一首">
-              <ChevronRightRegular />
+            <button type="button" className={`musicDockButton${skipsAtOnce ? "" : " vote"}`} onClick={skipTrack} disabled={!nextUpTrack || mySkipVoted} aria-label={skipLabel} title={mySkipVoted ? "你已经投过票了" : skipLabel}>
+              {skipsAtOnce ? <ChevronRightRegular /> : <span>跳过 {skipState?.votes || 0}/{skipState?.needed || 1}</span>}
             </button>
           </div>
           <button type="button" className={`musicDockOpen${popupOpen ? " active" : ""}`} onClick={() => (popupOpen ? closePopup({ preserveKeyword: true }) : openDeck(upcomingTracks.length ? "queue" : "search"))}>

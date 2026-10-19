@@ -2951,7 +2951,7 @@ export default function ChatRoom({
     if (!raw) {
       return null;
     }
-    const mentionMatch = raw.match(/(?:^|\s)@(?<alias>[a-z0-9._-]+)(?=\s|$)/i);
+    const mentionMatch = raw.match(/(?:^|\s)@(?<alias>[\p{L}\p{N}._-]+)(?=\s|$)/iu);
     const alias = String(mentionMatch?.groups?.alias || "").trim().toLowerCase();
     if (!alias) {
       return null;

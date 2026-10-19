@@ -8,7 +8,7 @@ export default function MiniMusicBar() {
   // No player mounted: nothing to show.
   if (!ctx) return null;
 
-  const { currentTrack, isPlaying, togglePlay, nextTrack, openDeck, upcomingCount = 0 } = ctx;
+  const { currentTrack, isPlaying, togglePlay, nextTrack, openDeck, upcomingCount = 0, skipLabel = "下一首", mySkipVoted = false } = ctx;
 
   return (
     <div className={`mobileMinimusicBar${isPlaying ? " playing" : ""}`} role="region" aria-label="正在播放" onClick={() => openDeck?.(upcomingCount ? "queue" : "search")}>
@@ -45,7 +45,9 @@ export default function MiniMusicBar() {
               type="button"
               className="mobileMinimusicBtn"
               onClick={(e) => { e.stopPropagation(); nextTrack(); }}
-              aria-label="下一首"
+              aria-label={skipLabel}
+              title={skipLabel}
+              disabled={mySkipVoted}
             >
               <NextRegular />
             </button>

@@ -71,3 +71,29 @@ export function checkRequestAllowed({ upcoming = [], current = null, actor = nul
   }
   return "";
 }
+
+export const LISTENER_WINDOW_MS = 10_000;
+
+// Listeners are people whose page asked for the player state recently.
+export function countListeners(lastSeen = new Map(), now = Date.now()) {
+  let count = 0;
+  for (const [id, at] of lastSeen) {
+    if (now - at <= LISTENER_WINDOW_MS) {
+      count += 1;
+    } else {
+      lastSeen.delete(id);
+    }
+  }
+  return count;
+}
+
+// Half the listeners, rounded up. With fewer than two people there is nobody to
+// outvote, so one press skips.
+export function skipVotesNeeded(listeners = 0) {
+  return listeners < 2 ? 1 : Math.ceil(listeners / 2);
+}
+
+// Who may skip the playing song without a vote: its requester or an admin.
+export function skipsDirectly(actor = null, current = null) {
+  return Boolean(actor && (actor.isAdmin || (current && String(current.submittedById || "") === actor.id)));
+}

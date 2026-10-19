@@ -98,8 +98,18 @@ function parseMusicCommand(rawPrompt = "", supportedSources = []) {
   if (/^\/?(?:play|resume|继续|恢复)$/i.test(trimmed)) {
     return { type: "control", action: "play" };
   }
-  if (/^\/?(?:next|skip|下一首|下一曲|切歌)$/i.test(trimmed)) {
-    return { type: "control", action: "next" };
+  // Buttons on the jukebox cards carry ids so whoever clicks acts on that exact song.
+  const pickSearchMatch = trimmed.match(/^选\s+([a-z0-9]+)\s+(\d+)$/i);
+  if (pickSearchMatch) {
+    return { type: "pick-search", searchId: pickSearchMatch[1], index: Math.max(1, Number(pickSearchMatch[2])) };
+  }
+  const voteMatch = trimmed.match(/^(?:赞|like)\s+(\S+)$/i);
+  if (voteMatch) {
+    return { type: "vote", trackId: voteMatch[1] };
+  }
+  const skipMatch = trimmed.match(/^\/?(?:next|skip|下一首|下一曲|切歌|跳过)(?:\s+(\S+))?$/i);
+  if (skipMatch) {
+    return { type: "skip", trackId: String(skipMatch[1] || "") };
   }
   if (/^\/?(?:previous|prev|上一首|上一曲)$/i.test(trimmed)) {
     return { type: "control", action: "previous" };
@@ -144,7 +154,8 @@ function parseMusicCommand(rawPrompt = "", supportedSources = []) {
     };
   }
 
-  return { type: "enqueue", keyword: trimmed };
+  // A bare song name shows candidates to pick from (`@点歌 晴天`).
+  return { type: "search", keyword: trimmed };
 }
 
 function buildStatusBody(snapshot = null, sourceList = []) {
@@ -188,24 +199,6 @@ function buildQueueBody(snapshot = null) {
     .join("\n");
 }
 
-function buildSearchBody(keyword = "", candidates = [], sourceLabel = "") {
-  if (!candidates.length) {
-    return `没有找到“${keyword}”的可用结果。`;
-  }
-  const lines = [`已找到 ${candidates.length} 首候选${sourceLabel ? `，当前音源：${sourceLabel}` : ""}：`];
-  lines.push(...candidates.map((item, index) => {
-    const title = String(item?.title || "未命名曲目").trim();
-    const artist = String(item?.artist || "未知艺术家").trim();
-    const album = String(item?.album || item?.sourceLabel || item?.source || "").trim();
-    const duration = Number(item?.duration || 0) > 0 ? ` · ${formatDuration(item.duration)}` : "";
-    return `${index + 1}. ${title} - ${artist}${album ? ` · ${album}` : ""}${duration}`;
-  }));
-  lines.push("");
-  lines.push("可继续发送：@music 选第 2 首");
-  lines.push(`也可以直接点歌：@music 点歌 ${keyword}`);
-  return lines.join("\n");
-}
-
 function buildCard({ title, body, subtitle = "", imageUrl = "", status = "succeeded", actions = [] } = {}) {
   return {
     type: "music-player",
@@ -241,12 +234,88 @@ function buildCommonMusicActions(snapshot = null) {
   return actions;
 }
 
-function buildSearchActions(candidates = [], snapshot = null) {
-  const actions = [];
-  for (let index = 0; index < Math.min(3, candidates.length); index += 1) {
-    actions.push(buildInvokeBotAction(`选第 ${index + 1} 首`, `选第 ${index + 1} 首`));
+// Card buttons that rewrite their own card instead of posting a new message.
+function buildInPlaceAction(label = "", rawText = "") {
+  return {
+    ...buildInvokeBotAction(label, rawText),
+    parsedArgs: { prompt: String(rawText || "").trim(), __chatReplyMode: "replace-chat-message" }
+  };
+}
+
+function requesterActor(context = {}) {
+  const id = String(context?.requester?.userId || "").trim();
+  return id ? { id, name: String(context?.requester?.displayName || "").trim(), role: String(context?.requester?.role || "user") } : null;
+}
+
+function upcomingOf(snapshot = null) {
+  const queue = Array.isArray(snapshot?.queue) ? snapshot.queue : [];
+  return queue.slice(Number(snapshot?.currentIndex ?? -1) + 1);
+}
+
+function buildCandidateCard(keyword = "", searchId = "", candidates = []) {
+  const shown = candidates.slice(0, 5);
+  return buildCard({
+    title: `点歌：${keyword}`,
+    subtitle: shown.length ? `QQ 音乐 · ${shown.length} 首候选，点一下入队` : "QQ 音乐",
+    body: shown.length
+      ? shown.map((item, index) => `${index + 1}. ${item.title} - ${item.artist || "未知艺术家"}${item.duration ? ` · ${formatDuration(item.duration)}` : ""}`).join("\n")
+      : `没有找到“${keyword}”。`,
+    imageUrl: shown[0]?.coverUrl || "",
+    status: shown.length ? "info" : "failed",
+    actions: shown.map((item, index) => buildInPlaceAction(`${index + 1}. ${item.title}`.slice(0, 24), `选 ${searchId} ${index + 1}`))
+  });
+}
+
+// "XX 点了《…》，排第 N"; becomes "正在播放" / "已播放" once the song's turn comes.
+function buildRequestCard(trackId = "", snapshot = null) {
+  const queue = Array.isArray(snapshot?.queue) ? snapshot.queue : [];
+  const track = queue.find((item) => item.id === trackId);
+  if (!track) {
+    return buildCard({ title: "这首歌已经不在队列里了", body: "可能被撤回或移除了。", status: "info" });
   }
-  return [...actions, ...buildCommonMusicActions(snapshot)];
+  const upcoming = upcomingOf(snapshot);
+  const position = upcoming.findIndex((item) => item.id === trackId);
+  const playing = snapshot?.currentTrack?.id === trackId;
+  const who = track.submittedBy || "有人";
+  const state = playing ? "正在播放" : position >= 0 ? `排第 ${position + 1}` : "已播放，在循环列表里";
+  return buildCard({
+    title: `${who} 点了《${track.title}》`,
+    subtitle: `${track.artist} · ${state}${track.votes ? ` · ${track.votes} 赞` : ""}`,
+    body: `${who} 点了《${track.title}》，${state}。`,
+    imageUrl: track.coverUrl || "",
+    status: "succeeded",
+    actions: position >= 0
+      ? [buildInPlaceAction(`👍 点赞 ${track.votes || ""}`.trim(), `赞 ${trackId}`)]
+      : playing ? [buildInPlaceAction("投票切歌", `跳过 ${trackId}`)] : []
+  });
+}
+
+function buildSkipCard(snapshot = null, skippedTitle = "") {
+  const current = snapshot?.currentTrack || null;
+  if (skippedTitle) {
+    const reason = snapshot?.lastSkip?.reason;
+    const why = reason === "vote" ? `${snapshot.lastSkip.votes} 人投票` : reason === "admin" ? "管理员操作" : reason === "requester" ? "点歌人自己" : "";
+    return buildCard({
+      title: `已跳过《${skippedTitle}》`,
+      subtitle: current ? `现在播放：${current.title} - ${current.artist}` : "",
+      body: `${why ? `${why}跳过了` : "跳过了"}《${skippedTitle}》。`,
+      imageUrl: current?.coverUrl || "",
+      status: "succeeded"
+    });
+  }
+  const skip = snapshot?.skip || { votes: 0, needed: 1 };
+  return buildCard({
+    title: `投票切歌 ${skip.votes}/${skip.needed}`,
+    subtitle: current ? `${current.title} - ${current.artist}` : "",
+    body: `再有 ${Math.max(0, skip.needed - skip.votes)} 人投票就切掉《${current?.title || ""}》（在线 ${skip.listeners} 人的一半）。`,
+    imageUrl: current?.coverUrl || "",
+    status: "info",
+    actions: current ? [buildInPlaceAction("我也投", `跳过 ${current.id}`)] : []
+  });
+}
+
+function createSearchId() {
+  return `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
 function getSearchMemoryPath(appDataRoot = "") {
@@ -293,8 +362,8 @@ function pruneSearchMemoryEntries(memory = {}) {
   return Object.fromEntries(entries);
 }
 
-async function rememberSearchResult(appDataRoot = "", context = {}, payload = {}) {
-  const key = createSearchMemoryKey(context);
+async function rememberSearchResult(appDataRoot = "", context = {}, payload = {}, searchId = "") {
+  const key = searchId ? `search:${searchId}` : createSearchMemoryKey(context);
   if (!key) {
     return;
   }
@@ -308,8 +377,8 @@ async function rememberSearchResult(appDataRoot = "", context = {}, payload = {}
   await writeSearchMemory(appDataRoot, pruneSearchMemoryEntries(current));
 }
 
-async function readRememberedSearch(appDataRoot = "", context = {}) {
-  const key = createSearchMemoryKey(context);
+async function readRememberedSearch(appDataRoot = "", context = {}, searchId = "") {
+  const key = searchId ? `search:${searchId}` : createSearchMemoryKey(context);
   if (!key) {
     return null;
   }
@@ -333,7 +402,7 @@ export function createMusicControlPlugin() {
   return createBotPlugin({
     botId: "music.control",
     displayName: "音乐助手",
-    aliases: ["music", "song", "dj", "player"],
+    aliases: ["music", "song", "dj", "player", "点歌"],
     description: "控制网页上的共享音乐播放器，支持搜歌、点歌、切歌、暂停和查看队列。",
     capabilities: ["music.control", "music.search", "reply.chat"],
     permissions: {
@@ -424,29 +493,71 @@ export function createMusicControlPlugin() {
         if (!command.keyword) {
           throw new Error("请给出要搜索的歌名，例如 @music 搜歌 夜曲");
         }
-        const searchSource = command.source || String(initialSnapshot?.source || "") || "bilibili";
+        const searchSource = command.source || String(initialSnapshot?.source || "") || "qq";
         await api.emitProgress({ phase: "search", label: `搜索 ${command.keyword}`, percent: 46 });
         const candidates = await player.searchCandidates({ keyword: command.keyword, source: searchSource, limit: 6 });
-        await rememberSearchResult(api.appDataRoot, context, {
-          keyword: command.keyword,
-          source: searchSource,
-          candidates
-        });
-        const body = buildSearchBody(command.keyword, candidates, pickSourceLabel(searchSource, sourceList));
-        const snapshot = player.snapshot();
+        const remembered = { keyword: command.keyword, source: searchSource, candidates };
+        const searchId = createSearchId();
+        // Kept per person for typed "选第 2 首", and per search for the card's buttons.
+        await rememberSearchResult(api.appDataRoot, context, remembered);
+        await rememberSearchResult(api.appDataRoot, context, remembered, searchId);
         return {
           chatReply: await publishMusicReply(api, {
-            card: buildCard({
-              title: `搜歌：${command.keyword}`,
-              subtitle: `${pickSourceLabel(searchSource, sourceList)} · ${candidates.length} 条结果`,
-              body,
-              imageUrl: candidates[0]?.coverUrl || initialSnapshot?.currentTrack?.coverUrl || "",
-              status: candidates.length ? "succeeded" : "info",
-              actions: buildSearchActions(candidates, snapshot)
-            })
+            card: buildCandidateCard(command.keyword, searchId, candidates)
           }),
           importedFiles: [],
           artifacts: [{ type: "music-search", keyword: command.keyword, count: candidates.length, source: searchSource }]
+        };
+      }
+
+      if (command.type === "pick-search") {
+        const remembered = await readRememberedSearch(api.appDataRoot, context, command.searchId);
+        const candidate = remembered?.candidates?.[command.index - 1] || null;
+        if (!candidate) {
+          throw new Error("这组候选已经过期了，请重新 @点歌 歌名");
+        }
+        await api.emitProgress({ phase: "enqueue-pick", label: `点歌：${candidate.title}`, percent: 54 });
+        const track = await player.enqueueSelection({
+          source: candidate.source || remembered.source || "qq",
+          candidate,
+          submittedBy: context?.requester?.displayName || context?.requester?.userId || "bot",
+          requester: requesterActor(context)
+        });
+        return {
+          chatReply: await publishMusicReply(api, { card: buildRequestCard(String(track?.id || ""), player.snapshot()) }),
+          importedFiles: [],
+          artifacts: [{ type: "music-pick", selectedIndex: command.index, trackId: String(track?.id || "") }]
+        };
+      }
+
+      if (command.type === "vote") {
+        await player.control("vote-track", { trackId: command.trackId, actor: requesterActor(context) });
+        return {
+          chatReply: await publishMusicReply(api, { card: buildRequestCard(command.trackId, player.snapshot()) }),
+          importedFiles: [],
+          artifacts: [{ type: "music-vote", trackId: command.trackId }]
+        };
+      }
+
+      if (command.type === "skip") {
+        const before = player.snapshot().currentTrack;
+        if (!before) {
+          throw new Error("现在没有在放的歌");
+        }
+        if (command.trackId && command.trackId !== before.id) {
+          return {
+            chatReply: await publishMusicReply(api, { card: buildCard({ title: "这首已经放完了", body: `现在放的是《${before.title}》。`, imageUrl: before.coverUrl || "", status: "info" }) }),
+            importedFiles: [],
+            artifacts: [{ type: "music-skip", skipped: false }]
+          };
+        }
+        await player.control("skip-vote", { actor: requesterActor(context), currentTrackId: before.id });
+        const snapshot = player.snapshot();
+        const skipped = snapshot.currentTrack?.id !== before.id;
+        return {
+          chatReply: await publishMusicReply(api, { card: buildSkipCard(snapshot, skipped ? before.title : "") }),
+          importedFiles: [],
+          artifacts: [{ type: "music-skip", skipped }]
         };
       }
 
@@ -462,28 +573,13 @@ export function createMusicControlPlugin() {
         }
         await api.emitProgress({ phase: "enqueue-pick", label: `加入第 ${command.index} 首候选`, percent: 54 });
         const track = await player.enqueueSelection({
-          source: candidate.source || remembered.source || String(initialSnapshot?.source || "") || "bilibili",
+          source: candidate.source || remembered.source || String(initialSnapshot?.source || "") || "qq",
           candidate,
-          submittedBy: context?.requester?.displayName || context?.requester?.userId || "bot"
+          submittedBy: context?.requester?.displayName || context?.requester?.userId || "bot",
+          requester: requesterActor(context)
         });
-        const snapshot = player.snapshot();
-        const body = [
-          `已将最近搜索结果中的第 ${command.index} 首加入播放队列。`,
-          formatTrackLine(track, candidateIndex),
-          remembered.keyword ? `来源搜索：${remembered.keyword}` : "",
-          `当前队列：${Array.isArray(snapshot?.queue) ? snapshot.queue.length : 0} 首`
-        ].filter(Boolean).join("\n");
         return {
-          chatReply: await publishMusicReply(api, {
-            card: buildCard({
-              title: `已加入第 ${command.index} 首`,
-              subtitle: `${pickSourceLabel(track.source, normalizeSourceList(snapshot))} · 队列 ${Array.isArray(snapshot?.queue) ? snapshot.queue.length : 0}`,
-              body,
-              imageUrl: track?.coverUrl || snapshot?.currentTrack?.coverUrl || "",
-              status: "succeeded",
-              actions: buildCommonMusicActions(snapshot)
-            })
-          }),
+          chatReply: await publishMusicReply(api, { card: buildRequestCard(String(track?.id || ""), player.snapshot()) }),
           importedFiles: [],
           artifacts: [{ type: "music-pick", selectedIndex: command.index, trackId: String(track?.id || "") }]
         };
@@ -493,30 +589,16 @@ export function createMusicControlPlugin() {
         if (!command.keyword) {
           throw new Error("请给出要点播的歌名，例如 @music 点歌 晴天");
         }
-        const enqueueSource = command.source || String(initialSnapshot?.source || "") || "bilibili";
+        const enqueueSource = command.source || String(initialSnapshot?.source || "") || "qq";
         await api.emitProgress({ phase: "enqueue", label: `加入队列：${command.keyword}`, percent: 52 });
         const track = await player.enqueueTrack({
           keyword: command.keyword,
           source: enqueueSource,
-          submittedBy: context?.requester?.displayName || context?.requester?.userId || "bot"
+          submittedBy: context?.requester?.displayName || context?.requester?.userId || "bot",
+          requester: requesterActor(context)
         });
-        const snapshot = player.snapshot();
-        const body = [
-          `已加入全局播放队列。`,
-          formatTrackLine(track, -1, { current: false }),
-          `当前队列：${Array.isArray(snapshot?.queue) ? snapshot.queue.length : 0} 首`
-        ].join("\n");
         return {
-          chatReply: await publishMusicReply(api, {
-            card: buildCard({
-              title: "已加入播放队列",
-              subtitle: `${pickSourceLabel(track.source, sourceList)} · 队列 ${Array.isArray(snapshot?.queue) ? snapshot.queue.length : 0}`,
-              body,
-              imageUrl: track?.coverUrl || snapshot?.currentTrack?.coverUrl || "",
-              status: "succeeded",
-              actions: buildCommonMusicActions(snapshot)
-            })
-          }),
+          chatReply: await publishMusicReply(api, { card: buildRequestCard(String(track?.id || ""), player.snapshot()) }),
           importedFiles: [],
           artifacts: [{ type: "music-enqueue", trackId: String(track?.id || ""), source: track?.source || enqueueSource }]
         };

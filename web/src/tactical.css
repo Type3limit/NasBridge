@@ -693,3 +693,40 @@ ol.musicDeckList .musicDeckRow { grid-template-columns: auto 40px minmax(0, 1fr)
 .musicAccountQr p { margin: 0; font-size: 13px; color: var(--text-soft); text-align: center; }
 .musicAccountQr.status-success p { color: var(--success); font-weight: 700; }
 .musicAccountQr.status-error p, .musicAccountQr.status-expired p { color: var(--danger); }
+
+/* Command-center jukebox board and the dock's vote-skip state. */
+.musicDockButton.vote { padding: 0 10px; font: 700 12px var(--tac-font-mono); white-space: nowrap; }
+.tacMusicBoard { grid-column: 1 / -1; display: flex; flex-direction: column; padding: 22px 36px 24px; border: 1px solid var(--stroke); border-left: 4px solid var(--stroke-strong); background: var(--tac-panel); animation: tacTileIn .6s .6s cubic-bezier(.2, .8, .2, 1) both; }
+.tacMusicBoard.playing { border-left-color: var(--accent-solid); }
+.tacMusicBoard header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid var(--stroke-strong); }
+.tacMusicRequest { height: 32px; padding: 0 16px; border: 0; background: var(--accent-solid); color: #111; font: 800 13px var(--tac-font-display); letter-spacing: 1px; cursor: pointer; }
+.tacMusicBody { display: grid; grid-template-columns: minmax(0, 1.6fr) repeat(2, minmax(0, 1fr)); gap: 28px; padding-top: 18px; }
+.tacMusicNow { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 18px; align-items: center; }
+.tacMusicNow img, .tacMusicCover { width: 96px; height: 96px; object-fit: cover; border: 1px solid var(--stroke); }
+.tacMusicCover { display: grid; place-items: center; font-size: 32px; color: var(--text-faint); background: var(--surface-muted); }
+.tacMusicNowText { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.tacMusicNowText strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 700 22px/1.2 var(--tac-font-display); }
+.tacMusicNowText > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; color: var(--text-soft); }
+.tacMusicProgress { display: block; height: 3px; margin-top: 4px; background: linear-gradient(90deg, var(--accent-solid) var(--music-progress, 0%), var(--stroke) var(--music-progress, 0%)); }
+.tacMusicControls { display: flex; gap: 8px; margin-top: 6px; }
+.tacMusicControls button { display: grid; place-items: center; min-width: 36px; height: 32px; padding: 0 12px; border: 1px solid var(--stroke-strong); background: transparent; color: var(--text); font: 700 12px var(--tac-font-display); cursor: pointer; }
+.tacMusicControls button:hover:not(:disabled) { border-color: var(--accent); }
+.tacMusicControls button:disabled { opacity: .5; cursor: default; }
+.tacMusicList { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.tacMusicListTitle { font: 600 11px var(--tac-font-display); letter-spacing: 2px; color: var(--text-faint); }
+.tacMusicList ol { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; counter-reset: music; }
+.tacMusicList li { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; padding-bottom: 6px; border-bottom: 1px solid var(--stroke); counter-increment: music; }
+.tacMusicList li::before { content: counter(music, decimal-leading-zero); font: 700 11px var(--tac-font-mono); color: var(--accent); }
+.tacMusicList li strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 600 14px var(--tac-font-display); }
+.tacMusicList li span { overflow: hidden; max-width: 9em; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--text-faint); }
+.tacMusicList p { margin: 0; font-size: 13px; color: var(--text-faint); }
+@media (max-width: 1100px) {
+  .tacMusicBody { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tacMusicNow { grid-column: 1 / -1; }
+}
+@media (max-width: 760px) {
+  .tacMusicBoard { padding: 16px 18px; }
+  .tacMusicBody { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .tacMusicNow { grid-template-columns: 64px minmax(0, 1fr); }
+  .tacMusicNow img, .tacMusicCover { width: 64px; height: 64px; }
+}

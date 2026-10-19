@@ -1,4 +1,5 @@
 import { sceneClass, tacticalArt } from "./tacticalArt";
+import MusicCommandBoard from "../components/MusicCommandBoard";
 // Equipment slots are grayscale line art (black strokes on white). The theme
 // recolours them in CSS (.equipmentVisual / .tacTileArt), so a swap only needs
 // the import changed. Generated from refined-imagegen-prompts.json.
@@ -62,6 +63,7 @@ export function OperationsOverview({ onlineCount, clients, files, shares, upload
         {moduleIndex[tile.page] && <span className="tacTileIndex">{moduleIndex[tile.page]}</span>}
         <span className="tacTileBody"><small className="tacTileTag">{tile.code}</small><strong>{tile.label}</strong><span className="tacTileValue"><b>{pad(values[tile.page])}</b><small>{tile.unit}</small></span></span>
       </button>)}
+      <MusicCommandBoard />
       <div className="tacNodeBoard">
         <header><span className="industrialEyebrow">已连接节点</span><span className="tacNum">{pad(onlineCount)} / {pad(clients.length)}</span></header>
         {clients.length ? <ul className="tacNewsList">{clients.slice(0, 5).map(client => <li key={client.id}><button type="button" onClick={() => onNavigate("terminals")}>

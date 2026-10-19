@@ -4,7 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { createMusicLibBridgeClient } from "./musicBridge.js";
 import { createQqMusicLogin } from "./qqMusicLogin.js";
-import { MAX_PENDING_PER_USER, REQUEST_COOLDOWN_MS, checkRequestAllowed, normalizeActor, orderUpcoming, voteCount } from "./musicQueue.js";
+import { MAX_PENDING_PER_USER, REQUEST_COOLDOWN_MS, checkRequestAllowed, countListeners, normalizeActor, orderUpcoming, skipVotesNeeded, skipsDirectly, voteCount } from "./musicQueue.js";
 
 const MUSIC_PLAYER_DIR = "music-player";
 const MUSIC_PLAYER_STATE_FILE = "state.json";
@@ -514,6 +514,11 @@ export class GlobalMusicPlayer {
     this.cancelledTracks = new Set();
     // Last request time per user, for the request cooldown (memory only).
     this.lastRequestAt = new Map();
+    // Who polled the state lately (user id -> time), and the skip votes on the playing song.
+    this.listeners = new Map();
+    this.skipVotes = { trackId: "", voters: new Set() };
+    // How the last song ended early, so pages can say why it changed.
+    this.lastSkip = null;
     this.logger = typeof options.logger === "function" ? options.logger : () => {};
     this.onTrackReady = typeof options.onTrackReady === "function" ? options.onTrackReady : null;
     this.bridge = createMusicLibBridgeClient({
@@ -592,7 +597,9 @@ export class GlobalMusicPlayer {
       currentTrack: currentTrack ? buildPublicTrack(currentTrack, this.state.currentIndex) : null,
       rules: { maxPendingPerUser: MAX_PENDING_PER_USER, cooldownSeconds: REQUEST_COOLDOWN_MS / 1000 },
       // Lets the page tell an outdated node apart from one that is just slow.
-      features: ["fair-queue", "loop", "qq-login"],
+      features: ["fair-queue", "loop", "qq-login", "vote-skip"],
+      skip: this.skipSnapshot(currentTrack),
+      lastSkip: this.lastSkip,
       supportedSources: this.getSupportedSources().map((value) => ({
         value,
         label: getSourceLabel(value)
@@ -607,6 +614,10 @@ export class GlobalMusicPlayer {
 
   async handleControlMessage(message = {}) {
     if (message.type === "get-music-player-state") {
+      const listenerId = String(message.listener?.id || "").trim();
+      if (listenerId) {
+        this.listeners.set(listenerId, Date.now());
+      }
       return {
         type: "music-player-state-result",
         requestId: message.requestId || "",
@@ -679,6 +690,14 @@ export class GlobalMusicPlayer {
     const nowIso = getNowIso();
     const currentTrack = this.getCurrentTrack();
     const currentId = String(currentTrack?.id || "");
+    // A skip from a person counts as a vote unless they may skip outright; "next"
+    // without a person (older pages, internal calls) still skips at once.
+    if (action === "skip-vote" || (action === "next" && payload.actor)) {
+      if (!this.castSkipVote(payload)) {
+        return;
+      }
+      action = "next";
+    }
     const requestedTrackId = String(payload.currentTrackId || currentId || "");
     if (requestedTrackId && currentId && requestedTrackId !== currentId && !["set-source", "remove-track", "play-track", ...REQUEST_ACTIONS].includes(action)) {
       return;
@@ -775,6 +794,44 @@ export class GlobalMusicPlayer {
     this.state.lastError = "";
     await this.persist();
     this.ensurePreparation();
+  }
+
+  // Records a skip vote on the playing song; true when the song should be skipped now.
+  castSkipVote(payload = {}) {
+    const actor = normalizeActor(payload.actor);
+    if (!actor) {
+      throw new Error("缺少点歌人信息，请刷新页面后重试");
+    }
+    const current = this.getCurrentTrack();
+    const currentId = String(current?.id || "");
+    if (!current || (payload.currentTrackId && String(payload.currentTrackId) !== currentId)) {
+      return false;
+    }
+    this.listeners.set(actor.id, Date.now());
+    if (this.skipVotes.trackId !== currentId) {
+      this.skipVotes = { trackId: currentId, voters: new Set() };
+    }
+    const listeners = countListeners(this.listeners);
+    const skip = { trackId: currentId, title: String(current.title || ""), by: actor.name || actor.id, at: getNowIso() };
+    if (skipsDirectly(actor, current)) {
+      this.lastSkip = { ...skip, reason: actor.isAdmin && String(current.submittedById || "") !== actor.id ? "admin" : "requester" };
+      return true;
+    }
+    this.skipVotes.voters.add(actor.id);
+    const needed = skipVotesNeeded(listeners);
+    if (this.skipVotes.voters.size >= needed) {
+      this.lastSkip = { ...skip, reason: "vote", votes: this.skipVotes.voters.size, listeners };
+      return true;
+    }
+    this.state.updatedAt = getNowIso();
+    return false;
+  }
+
+  skipSnapshot(current = null) {
+    const currentId = String(current?.id || "");
+    const voters = this.skipVotes.trackId === currentId ? [...this.skipVotes.voters] : [];
+    const listeners = countListeners(this.listeners);
+    return { votes: voters.length, votedBy: voters, needed: skipVotesNeeded(listeners), listeners };
   }
 
   // Moves the oldest played song behind the current one and makes it current, so
