@@ -730,3 +730,12 @@ ol.musicDeckList .musicDeckRow { grid-template-columns: auto 40px minmax(0, 1fr)
   .tacMusicNow { grid-template-columns: 64px minmax(0, 1fr); }
   .tacMusicNow img, .tacMusicCover { width: 64px; height: 64px; }
 }
+
+/* The dock can be dragged anywhere (desktop); the panel opens below it in the top half. */
+.musicDock { cursor: grab; touch-action: none; user-select: none; }
+.musicDock:active { cursor: grabbing; }
+.musicShell.moved { right: auto; bottom: auto; }
+.musicShell.deckBelow .musicDeck { top: 72px; bottom: auto; }
+@media (max-width: 760px) {
+  .musicShell.moved { left: auto !important; top: auto !important; right: 0; bottom: 0; }
+}

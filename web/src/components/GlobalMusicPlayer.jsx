@@ -212,6 +212,85 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
   const hostClient = useMemo(() => chooseHostClient(clients), [clients]);
   const hostClientId = hostClient?.id || "";
   const shellRef = useRef(null);
+  // Where the dock was dragged to ({ left, top } in px); null keeps the bottom-right corner.
+  const [dockPos, setDockPos] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("musicDockPos") || "null");
+      return Number.isFinite(saved?.left) && Number.isFinite(saved?.top) ? saved : null;
+    } catch {
+      return null;
+    }
+  });
+  const dockDragRef = useRef(null);
+
+  function clampDockPos(pos) {
+    const rect = shellRef.current?.getBoundingClientRect();
+    const width = rect?.width || 560;
+    const height = rect?.height || 60;
+    return {
+      left: Math.round(Math.min(Math.max(8, pos.left), Math.max(8, window.innerWidth - width - 8))),
+      top: Math.round(Math.min(Math.max(8, pos.top), Math.max(8, window.innerHeight - height - 8)))
+    };
+  }
+
+  function saveDockPos(pos) {
+    setDockPos(pos);
+    try {
+      if (pos) {
+        localStorage.setItem("musicDockPos", JSON.stringify(pos));
+      } else {
+        localStorage.removeItem("musicDockPos");
+      }
+    } catch {
+      // Position just won't be remembered.
+    }
+  }
+
+  // Drag from anywhere on the dock except its buttons; a few pixels of slack keeps clicks working.
+  function handleDockPointerDown(event) {
+    if (event.button !== 0 || event.target.closest("button, input, a")) {
+      return;
+    }
+    const rect = shellRef.current?.getBoundingClientRect();
+    if (!rect) {
+      return;
+    }
+    dockDragRef.current = { startX: event.clientX, startY: event.clientY, left: rect.left, top: rect.top, moved: false };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function handleDockPointerMove(event) {
+    const drag = dockDragRef.current;
+    if (!drag) {
+      return;
+    }
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    if (!drag.moved && Math.hypot(dx, dy) < 4) {
+      return;
+    }
+    drag.moved = true;
+    setDockPos(clampDockPos({ left: drag.left + dx, top: drag.top + dy }));
+  }
+
+  function handleDockPointerUp() {
+    const drag = dockDragRef.current;
+    dockDragRef.current = null;
+    if (drag?.moved && shellRef.current) {
+      const rect = shellRef.current.getBoundingClientRect();
+      saveDockPos({ left: Math.round(rect.left), top: Math.round(rect.top) });
+    }
+  }
+
+  // Keep a dragged dock on screen when the window shrinks.
+  useEffect(() => {
+    if (!dockPos) {
+      return undefined;
+    }
+    const onResize = () => setDockPos((current) => (current ? clampDockPos(current) : current));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [Boolean(dockPos)]); // eslint-disable-line react-hooks/exhaustive-deps
   const floatingSurfaceRef = useRef(null);
   const audioRef = useRef(null);
   const hlsRef = useRef(null);
@@ -1484,9 +1563,23 @@ export default function GlobalMusicPlayer({ p2p, clients = [], user = null, onTo
       hostName: hostClient?.name || ""
     }}>
       {/* Portaled to <body>: the top bar that mounts this has a backdrop filter, which would pin a fixed child to the bar. */}
-      {createPortal(<div ref={shellRef} className={`musicShell${popupOpen ? " deckOpen" : ""}`}>
+      {createPortal(<div
+        ref={shellRef}
+        className={`musicShell${popupOpen ? " deckOpen" : ""}${dockPos ? " moved" : ""}${dockPos && dockPos.top < window.innerHeight / 2 ? " deckBelow" : ""}`}
+        style={dockPos ? { left: dockPos.left, top: dockPos.top } : undefined}
+      >
         {mediaElement}
-        <div className={`musicDock${currentTrack ? "" : " idle"}${playerState?.isPlaying ? " playing" : ""}`} role="region" aria-label="正在播放">
+        <div
+          className={`musicDock${currentTrack ? "" : " idle"}${playerState?.isPlaying ? " playing" : ""}`}
+          role="region"
+          aria-label="正在播放"
+          title="拖动可移动，双击回到右下角"
+          onPointerDown={handleDockPointerDown}
+          onPointerMove={handleDockPointerMove}
+          onPointerUp={handleDockPointerUp}
+          onPointerCancel={handleDockPointerUp}
+          onDoubleClick={(event) => { if (!event.target.closest("button, input, a")) saveDockPos(null); }}
+        >
           <span className="musicDockProgress" style={{ "--music-progress": `${progressPercent}%` }} aria-hidden="true" />
           {renderTrackCover(currentTrack, "musicDockCover")}
           <div className="musicDockInfo">
