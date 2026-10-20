@@ -91,17 +91,29 @@ async function findNewestDownloadedFile(dir) {
   }
 }
 
-function detectPrintedFilePath(lines, tempDir) {
-  for (const line of [...lines].reverse()) {
+// A multi-video post (e.g. an X post with three videos) prints one
+// after_move:filepath line per entry, so collect all of them in order.
+export function detectPrintedFilePaths(lines, tempDir, exists = fs.existsSync) {
+  const found = [];
+  for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     if (trimmed.startsWith(tempDir) || path.isAbsolute(trimmed)) {
       try {
-        if (fs.existsSync(trimmed)) return trimmed;
+        if (exists(trimmed) && !found.includes(trimmed)) found.push(trimmed);
       } catch { /* ignore */ }
     }
   }
-  return null;
+  return found;
+}
+
+export function isXPostUrl(url = "") {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^(www\.|mobile\.)/, "");
+    return ["x.com", "twitter.com"].includes(host);
+  } catch {
+    return false;
+  }
 }
 
 // ──────────────────────────────────────────────
@@ -153,7 +165,12 @@ async function fetchMetadata(url, tempDir) {
 
 async function downloadWithYtDlp(url, tempDir, api, { quality } = {}) {
   const outputTemplate = path.join(tempDir, "%(title).120B [%(id)s].%(ext)s");
-  const args = ["--newline", "--print", "after_move:filepath", "-o", outputTemplate, "--no-playlist"];
+  const args = ["--newline", "--print", "after_move:filepath", "-o", outputTemplate];
+  // Keep every video of an X post, even for .../status/<id>/video/1 links;
+  // other sites stay single-video so playlist URLs don't pull a whole playlist.
+  if (!isXPostUrl(url)) {
+    args.push("--no-playlist");
+  }
 
   if (api.dependencies?.ffmpegPath && /[\\/]/.test(String(api.dependencies.ffmpegPath))) {
     args.push("--ffmpeg-location", path.dirname(String(api.dependencies.ffmpegPath)));
@@ -187,12 +204,16 @@ async function downloadWithYtDlp(url, tempDir, api, { quality } = {}) {
   });
 
   const lines = `${result.stdout}\n${result.stderr}`.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const downloadedPath = detectPrintedFilePath(lines, tempDir) || await findNewestDownloadedFile(tempDir);
-  if (!downloadedPath) {
+  const printedPaths = detectPrintedFilePaths(lines, tempDir);
+  const fallbackPath = printedPaths.length ? null : await findNewestDownloadedFile(tempDir);
+  const downloadedPaths = printedPaths.length ? printedPaths : [fallbackPath].filter(Boolean);
+  if (!downloadedPaths.length) {
     throw new Error("yt-dlp completed but downloaded file path was not detected");
   }
-  await api.appendLog(`downloaded file: ${downloadedPath}`);
-  return path.resolve(downloadedPath);
+  for (const downloadedPath of downloadedPaths) {
+    await api.appendLog(`downloaded file: ${downloadedPath}`);
+  }
+  return downloadedPaths.map((p) => path.resolve(p));
 }
 
 // ──────────────────────────────────────────────
@@ -279,16 +300,20 @@ export function createYtDlpDownloaderPlugin() {
         }
 
         await api.emitProgress({ phase: "download-remote", label: "开始下载…", percent: 10 });
-        const downloadedPath = await downloadWithYtDlp(url, tempDir, api, { quality });
+        const downloadedPaths = await downloadWithYtDlp(url, tempDir, api, { quality });
 
         await api.emitProgress({ phase: "import", label: "入库中…", percent: 90 });
         const storageRoot = path.resolve(api.storageRoot || process.cwd());
-        const imported = await importFileIntoLibrary({
-          storageRoot,
-          sourcePath: downloadedPath,
-          targetFolder,
-          fileName: path.basename(downloadedPath)
-        });
+        const importedFiles = [];
+        for (const downloadedPath of downloadedPaths) {
+          importedFiles.push(await importFileIntoLibrary({
+            storageRoot,
+            sourcePath: downloadedPath,
+            targetFolder,
+            fileName: path.basename(downloadedPath)
+          }));
+        }
+        const imported = importedFiles[0];
 
         await triggerLibraryRescan({ syncFiles: api.dependencies?.syncFiles });
         await api.emitProgress({ phase: "done", label: "下载完成", percent: 100 });
@@ -296,13 +321,20 @@ export function createYtDlpDownloaderPlugin() {
         const title = String(metadata?.title || imported.fileName || "").slice(0, 80) || url;
         const uploader = String(metadata?.uploader || metadata?.channel || "").trim();
         const subtitle = [uploader, imported.relativePath].filter(Boolean).join(" · ");
-        const attachmentId = `bot-asset:${context.jobId}`;
+        // The first file keeps the original id so single-video replies are unchanged.
+        const attachmentIds = importedFiles.map((_, index) => (
+          index === 0 ? `bot-asset:${context.jobId}` : `bot-asset:${context.jobId}:${index + 1}`
+        ));
+        const attachmentId = attachmentIds[0];
+        const body = importedFiles.length > 1
+          ? `已入库 ${importedFiles.length} 个文件到 ${path.posix.dirname(imported.relativePath || imported.fileName)}`
+          : `已入库到 ${imported.relativePath || imported.fileName}`;
         const card = {
           type: "media-result",
           status: "succeeded",
           title,
           subtitle,
-          body: `已入库到 ${imported.relativePath || imported.fileName}`,
+          body,
           progress: null,
           imageUrl: String(metadata?.thumbnail || ""),
           imageAlt: "",
@@ -319,22 +351,22 @@ export function createYtDlpDownloaderPlugin() {
           id: createBotJobMessageId(context.jobId),
           createdAt: context.createdAt,
           text: "",
-          attachments: [{
-            id: attachmentId,
-            name: imported.fileName,
-            mimeType: imported.mimeType,
-            size: imported.size,
-            path: imported.relativePath,
-            contentHash: imported.contentHash || "",
+          attachments: importedFiles.map((file, index) => ({
+            id: attachmentIds[index],
+            name: file.fileName,
+            mimeType: file.mimeType,
+            size: file.size,
+            path: file.relativePath,
+            contentHash: file.contentHash || "",
             clientId: context?.chat?.hostClientId || "",
-            kind: String(imported.mimeType || "").startsWith("video/") ? "video" : "file"
-          }],
+            kind: String(file.mimeType || "").startsWith("video/") ? "video" : "file"
+          })),
           card
         });
 
         return {
           chatReply,
-          importedFiles: [imported],
+          importedFiles,
           artifacts: []
         };
       } finally {
