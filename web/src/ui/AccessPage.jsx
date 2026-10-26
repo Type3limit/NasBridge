@@ -19,7 +19,7 @@ export default function AccessPage({ mode, setMode, email, setEmail, password, s
           <div className="accessFormTitle"><span className="industrialEyebrow">{register ? "注册 / REGISTER" : "登录 / SIGN IN"}</span><h2>{register ? "创建你的连接" : "欢迎回到工作台"}</h2></div>
           <div className="accessModeSwitch" role="tablist" aria-label="账户操作"><button type="button" role="tab" aria-selected={!register} onClick={() => setMode("login")}>登录 <span>01</span></button><button type="button" role="tab" aria-selected={register} onClick={() => setMode("register")}>注册 <span>02</span></button></div>
           <form className="accessForm" onSubmit={event => { event.preventDefault(); onSubmit(); }}>
-            <Field label="邮箱地址"><Input type="email" value={email} placeholder="name@example.com" autoComplete="email" onChange={(_, data) => setEmail(data.value)}/></Field>
+            <Field label="邮箱 / 用户名"><Input type="text" value={email} placeholder="name@example.com" autoComplete="email" onChange={(_, data) => setEmail(data.value)}/></Field>
             <Field label="密码"><Input type="password" value={password} placeholder="输入登录密码" autoComplete={register ? "new-password" : "current-password"} onChange={(_, data) => setPassword(data.value)}/></Field>
             {register && <Field label="显示名称"><Input value={displayName} placeholder="例如：家用 NAS" autoComplete="nickname" onChange={(_, data) => setDisplayName(data.value)}/></Field>}
             <Button className="accessSubmit" appearance="primary" type="submit">{register ? "创建并进入" : "进入控制台"}<span aria-hidden="true">→</span></Button>
