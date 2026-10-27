@@ -466,6 +466,9 @@ function buildBotJobStatusText(job, botDisplayName) {
       ? `${botDisplayName}：${phaseText} (${percent}%)`
       : `${botDisplayName}：${phaseText}`;
   }
+  if (job?.status === "succeeded" && job?.phase === "awaiting-input") {
+    return `${botDisplayName}：${phaseText || "等待操作"}`;
+  }
   if (job?.status === "succeeded") {
     return `${botDisplayName}：已完成`;
   }
@@ -631,6 +634,16 @@ function buildBotJobCard(job, botDisplayName) {
         { type: "open-bot-log", label: "查看日志" },
         { type: "retry-bot-job", label: "重新生成" }
       ]
+    };
+  }
+  if (job?.status === "succeeded" && job?.phase === "awaiting-input") {
+    return {
+      type: "bot-status",
+      status: "info",
+      title: botDisplayName,
+      body: `${String(job?.progress?.label || "等待操作").trim()}，尚未开始下载`,
+      progress: null,
+      actions: [{ type: "open-bot-log", label: "查看日志" }]
     };
   }
   if (job?.status === "succeeded") {

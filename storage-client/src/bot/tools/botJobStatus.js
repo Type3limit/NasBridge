@@ -199,6 +199,8 @@ function summarizeJobResult(result = null) {
     replyMessageId: String(result.replyMessageId || result.chatReply?.id || "").trim(),
     importedFileCount: Array.isArray(result.importedFiles) ? result.importedFiles.length : 0,
     importedFiles,
+    // Set when the bot only replied with a card (quality/page pick, login) — nothing was downloaded yet.
+    awaitingInput: result.awaitingInput && typeof result.awaitingInput === "object" ? result.awaitingInput : null,
     artifactTypes: [...new Set(artifacts.map((item) => String(item?.type || "").trim()).filter(Boolean))],
     artifactCount: artifacts.length,
     hasTags: Array.isArray(result.tags) && result.tags.length > 0,

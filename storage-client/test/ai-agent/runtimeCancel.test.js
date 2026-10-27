@@ -252,3 +252,95 @@ test("runtime writes structured lifecycle entries into job logs", async () => {
     assert.doesNotMatch(log, /sk-should-not-leak/);
   });
 });
+
+function createSingleBotRuntime(root, plugin) {
+  const registry = {
+    resolve: (botId) => (botId === plugin.botId ? plugin : null),
+    toPublicCatalog: () => [{
+      botId: plugin.botId,
+      displayName: plugin.displayName,
+      description: plugin.description,
+      inputSchema: plugin.inputSchema,
+      capabilities: []
+    }]
+  };
+  return createBotRuntime({
+    clientId: "client",
+    storageRoot: root,
+    appDataRoot: path.join(root, ".nas-bot"),
+    registry,
+    concurrency: 1
+  }).init();
+}
+
+const testChat = { hostClientId: "client", dayKey: "2026-07-03", historyPath: ".nas-chat-room/history/2026-07-03.jsonl" };
+const testRequester = { userId: "user", displayName: "User", role: "user" };
+
+test("a cancelled job stays cancelled when the plugin finishes anyway", async () => {
+  await withTempDir(async (root) => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const runtime = await createSingleBotRuntime(root, {
+      botId: "stubborn",
+      displayName: "Stubborn",
+      description: "Ignores the abort signal",
+      inputSchema: { type: "object", properties: {} },
+      permissions: {},
+      execute: async () => {
+        await gate;
+        return { importedFiles: [{ relativePath: "late.mp4" }], artifacts: [] };
+      }
+    });
+
+    const job = await runtime.invoke({ botId: "stubborn", chat: testChat, requester: testRequester });
+    await waitForJob(runtime, (item) => item.jobId === job.jobId && item.status === "running");
+    await runtime.cancelJob(job.jobId);
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const after = await runtime.getJob(job.jobId);
+    assert.equal(after.status, "cancelled");
+    assert.equal(after.phase, "cancelled");
+    assert.deepEqual(after.result.importedFiles.map((file) => file.relativePath), ["late.mp4"]);
+  });
+});
+
+test("a job that only asks the user to choose ends in the awaiting-input phase", async () => {
+  await withTempDir(async (root) => {
+    const runtime = await createSingleBotRuntime(root, {
+      botId: "picker",
+      displayName: "Picker",
+      description: "Replies with a selection card",
+      inputSchema: { type: "object", properties: {} },
+      permissions: {},
+      execute: async () => ({ importedFiles: [], artifacts: [], awaitingInput: { reason: "selection", label: "等待选择画质" } })
+    });
+
+    const job = await runtime.invoke({ botId: "picker", chat: testChat, requester: testRequester });
+    const done = await waitForJob(runtime, (item) => item.jobId === job.jobId && item.status === "succeeded");
+
+    assert.equal(done.phase, "awaiting-input");
+    assert.equal(done.progress.label, "等待选择画质");
+    assert.deepEqual(done.result.awaitingInput, { reason: "selection", label: "等待选择画质" });
+  });
+});
+
+test("a normal job still ends in the completed phase", async () => {
+  await withTempDir(async (root) => {
+    const runtime = await createSingleBotRuntime(root, {
+      botId: "plain",
+      displayName: "Plain",
+      description: "Finishes normally",
+      inputSchema: { type: "object", properties: {} },
+      permissions: {},
+      execute: async () => ({ importedFiles: [{ relativePath: "a.mp4" }], artifacts: [] })
+    });
+
+    const job = await runtime.invoke({ botId: "plain", chat: testChat, requester: testRequester });
+    const done = await waitForJob(runtime, (item) => item.jobId === job.jobId && item.status === "succeeded");
+
+    assert.equal(done.phase, "completed");
+    assert.equal(done.progress.label, "Completed");
+    assert.equal(done.result.awaitingInput, undefined);
+  });
+});

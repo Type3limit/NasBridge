@@ -1173,6 +1173,7 @@ async function downloadOneBilibiliSource(source, context, api, opts = {}) {
       return { metadata, imported: reusable, reusable: true, error: null };
     }
     const downloadedPath = await downloadMedia(source, tempDir, api, metadata, mergedOpts);
+    api.throwIfCancelled?.();
     const imported = await importFileIntoLibrary({ sourcePath: downloadedPath, storageRoot: api.storageRoot, targetFolder, fileName: path.basename(downloadedPath) });
     await api.appendLog(`[batch] imported: ${imported.relativePath}`);
     await rememberImportedResult({ appDataRoot: api.appDataRoot, source, metadata, imported, downloadOptions: mergedOpts });
@@ -1243,12 +1244,19 @@ function detectYtDlpPhase(text = "") {
   return null;
 }
 
-async function runYtDlp(args, { cwd, onOutput } = {}) {
+async function runYtDlp(args, { cwd, onOutput, signal } = {}) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(Object.assign(new Error("job cancelled"), { name: "AbortError" }));
+      return;
+    }
     const proc = spawn(ytDlpPath, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"]
     });
+    const onAbort = () => proc.kill();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    proc.on("close", () => signal?.removeEventListener("abort", onAbort));
     let stdout = "";
     let stderr = "";
     proc.stdout.on("data", (chunk) => {
@@ -1265,6 +1273,10 @@ async function runYtDlp(args, { cwd, onOutput } = {}) {
       reject(new Error(`failed to start yt-dlp (${ytDlpPath}): ${error.message || error}`));
     });
     proc.on("close", (code) => {
+      if (signal?.aborted) {
+        reject(Object.assign(new Error("job cancelled"), { name: "AbortError" }));
+        return;
+      }
       if (code !== 0) {
         reject(new Error(`yt-dlp exited with code ${code}: ${(stderr || stdout).trim() || "unknown error"}`));
         return;
@@ -1443,7 +1455,7 @@ function chooseBestDashAudio(audios = []) {
 }
 
 async function downloadUrlToFile(url, targetPath, options = {}) {
-  const response = await fetch(url, { method: "GET", headers: options.headers || {}, redirect: "follow" });
+  const response = await fetch(url, { method: "GET", headers: options.headers || {}, redirect: "follow", signal: options.signal || undefined });
   if (!response.ok || !response.body) {
     throw new Error(`download failed: ${response.status} ${response.statusText}`.trim());
   }
@@ -1492,13 +1504,25 @@ async function mergeStreamsWithFfmpeg(videoPath, audioPath, outputPath, api) {
   const ffmpegBin = String(api.dependencies?.ffmpegPath || "ffmpeg").trim() || "ffmpeg";
   await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
   return new Promise((resolve, reject) => {
+    const signal = api?.signal;
+    if (signal?.aborted) {
+      reject(Object.assign(new Error("job cancelled"), { name: "AbortError" }));
+      return;
+    }
     const proc = spawn(ffmpegBin, ["-y", "-i", videoPath, "-i", audioPath, "-c", "copy", outputPath], { stdio: ["ignore", "ignore", "pipe"] });
+    const onAbort = () => proc.kill();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    proc.on("close", () => signal?.removeEventListener("abort", onAbort));
     let stderr = "";
     proc.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
     });
     proc.on("error", (error) => reject(new Error(`failed to start ffmpeg (${ffmpegBin}): ${error.message || error}`)));
     proc.on("close", (code) => {
+      if (signal?.aborted) {
+        reject(Object.assign(new Error("job cancelled"), { name: "AbortError" }));
+        return;
+      }
       if (code !== 0) {
         reject(new Error(`ffmpeg exited with code ${code}: ${stderr.trim() || "unknown error"}`));
         return;
@@ -1661,7 +1685,7 @@ async function downloadMediaWithPlaywright(source, tempDir, api, metadata = {}, 
     }
     const targetPath = path.join(tempDir, `${baseStem}${guessFileExtension(progressiveUrl, ".mp4")}`);
     const reportProgress = buildWeightedProgressReporter(api, [{ key: "progressive", min: 12, max: 88, label: "下载视频中", phase: "download-remote" }]);
-    await downloadUrlToFile(progressiveUrl, targetPath, { headers: mediaHeaders, onProgress: (payload) => reportProgress("progressive", payload) });
+    await downloadUrlToFile(progressiveUrl, targetPath, { headers: mediaHeaders, signal: api?.signal, onProgress: (payload) => reportProgress("progressive", payload) });
     await api.appendLog(`playwright downloaded progressive media: ${targetPath}`);
     return path.resolve(targetPath);
   }
@@ -1682,9 +1706,9 @@ async function downloadMediaWithPlaywright(source, tempDir, api, metadata = {}, 
     { key: "audio", min: 64, max: 84, label: "下载音频中", phase: "download-remote" }
   ]);
 
-  await downloadUrlToFile(videoUrl, videoPath, { headers: mediaHeaders, onProgress: (payload) => reportProgress("video", payload) });
+  await downloadUrlToFile(videoUrl, videoPath, { headers: mediaHeaders, signal: api?.signal, onProgress: (payload) => reportProgress("video", payload) });
   if (audioUrl && audioPath) {
-    await downloadUrlToFile(audioUrl, audioPath, { headers: mediaHeaders, onProgress: (payload) => reportProgress("audio", payload) });
+    await downloadUrlToFile(audioUrl, audioPath, { headers: mediaHeaders, signal: api?.signal, onProgress: (payload) => reportProgress("audio", payload) });
     await api.emitProgress({ phase: "postprocess", label: "合并中", percent: 90 });
     await mergeStreamsWithFfmpeg(videoPath, audioPath, outputPath, api);
     await api.appendLog(`playwright merged media: ${outputPath}`);
@@ -1737,6 +1761,7 @@ async function downloadMediaWithYtDlp(source, tempDir, api, metadata = {}, downl
   let currentPhasePercent = 10;
   const result = await runYtDlp(args, {
     cwd: tempDir,
+    signal: api.signal,
     onOutput: async (text) => {
       const nextPercent = readYtDlpProgress(text);
       if (nextPercent !== null && nextPercent !== currentPercent) {
@@ -1766,6 +1791,9 @@ async function downloadMedia(source, tempDir, api, metadata = {}, downloadOption
       await api.emitProgress({ phase: "download-remote", label: "解析中", percent: 10 });
       return await downloadMediaWithPlaywright(source, tempDir, api, metadata, downloadOptions);
     } catch (error) {
+      if (api.signal?.aborted) {
+        throw error;
+      }
       await api.appendLog(`playwright download failed: ${error.message || error}`);
       if (bilibiliDownloadBackend === "playwright-only") {
         throw error;
@@ -1863,7 +1891,7 @@ export function createBilibiliDownloaderPlugin() {
             attachments: [],
             card
           });
-          return { chatReply, importedFiles: [], artifacts: [] };
+          return { chatReply, importedFiles: [], artifacts: [], awaitingInput: { reason: "selection", label: "等待确认批量下载" } };
         }
 
         // Confirmed: run all downloads sequentially.
@@ -1909,180 +1937,185 @@ export function createBilibiliDownloaderPlugin() {
 
       const tempDir = path.join(api.appDataRoot, "temp", context.jobId);
       await fs.promises.mkdir(tempDir, { recursive: true });
-      const downloadOptions = inferredDownloadOptions || resolveDownloadOptions(context);
-      const viewOptions = resolveSelectionViewOptions(context);
-      await api.appendLog(`bilibili source: ${source}`);
-      if (downloadOptions.hasExplicitPage || downloadOptions.hasExplicitQuality) {
-        await api.appendLog(`download options: ${JSON.stringify({ page: downloadOptions.page || undefined, quality: downloadOptions.quality || undefined })}`);
-      }
-      await api.emitProgress({ phase: "parse-input", label: "解析中", percent: 5 });
-
-      let metadata = {};
       try {
-        metadata = await readMetadata(source, tempDir, api, downloadOptions);
-        await api.appendLog(`metadata title: ${metadata?.title || "unknown"}`);
-      } catch (error) {
-        await api.appendLog(`metadata probe failed: ${error.message || error}`);
-      }
+        const downloadOptions = inferredDownloadOptions || resolveDownloadOptions(context);
+        const viewOptions = resolveSelectionViewOptions(context);
+        await api.appendLog(`bilibili source: ${source}`);
+        if (downloadOptions.hasExplicitPage || downloadOptions.hasExplicitQuality) {
+          await api.appendLog(`download options: ${JSON.stringify({ page: downloadOptions.page || undefined, quality: downloadOptions.quality || undefined })}`);
+        }
+        await api.emitProgress({ phase: "parse-input", label: "解析中", percent: 5 });
 
-      const targetFolder = sanitizeImportFolder(context?.trigger?.parsedArgs?.targetFolder || downloadOptions.targetFolder || bilibiliImportDir);
-      const availableQualities = listAvailableQualities(metadata);
-      const user = downloadOptions.hasExplicitQuality ? await resolveBilibiliUserProfile(api) : null;
-      const normalizedRequestedQuality = downloadOptions.hasExplicitQuality
-        ? normalizeBilibiliQuality(downloadOptions.quality, metadata?.selectedQuality?.qn || 127)
-        : null;
-      const maxAvailableQuality = availableQualities.reduce((best, item) => {
-        if (!item?.qn) {
+        let metadata = {};
+        try {
+          metadata = await readMetadata(source, tempDir, api, downloadOptions);
+          await api.appendLog(`metadata title: ${metadata?.title || "unknown"}`);
+        } catch (error) {
+          await api.appendLog(`metadata probe failed: ${error.message || error}`);
+        }
+
+        const targetFolder = sanitizeImportFolder(context?.trigger?.parsedArgs?.targetFolder || downloadOptions.targetFolder || bilibiliImportDir);
+        const availableQualities = listAvailableQualities(metadata);
+        const user = downloadOptions.hasExplicitQuality ? await resolveBilibiliUserProfile(api) : null;
+        const normalizedRequestedQuality = downloadOptions.hasExplicitQuality
+          ? normalizeBilibiliQuality(downloadOptions.quality, metadata?.selectedQuality?.qn || 127)
+          : null;
+        const maxAvailableQuality = availableQualities.reduce((best, item) => {
+          if (!item?.qn) {
+            return best;
+          }
+          if (!best || item.qn > best.qn) {
+            return item;
+          }
           return best;
-        }
-        if (!best || item.qn > best.qn) {
-          return item;
-        }
-        return best;
-      }, null);
-      const actualSelectedQuality = metadata?.selectedQuality && typeof metadata.selectedQuality === "object"
-        ? metadata.selectedQuality
-        : null;
-      // qn=64 is 720p — the typical ceiling for anonymous/expired sessions.
-      // Even if the API returns 4K in the quality list, actual streams above 720p require login.
-      const LOGIN_REQUIRED_QN_THRESHOLD = 64;
-      const shouldPromptLoginForQuality = !user
-        && downloadOptions.hasExplicitQuality
-        && normalizedRequestedQuality?.explicit === true
-        && (
-          (actualSelectedQuality?.downgraded === true
-            && Number(actualSelectedQuality?.requestedQn || 0) > Number(actualSelectedQuality?.qn || 0))
-          || (maxAvailableQuality?.qn && normalizedRequestedQuality.qn > maxAvailableQuality.qn)
-          || normalizedRequestedQuality.qn > LOGIN_REQUIRED_QN_THRESHOLD
-        );
-      const requiresPageSelection = downloadOptions.hasExplicitPage !== true && Array.isArray(metadata?.pages) && metadata.pages.length > 1;
-      const requiresQualitySelection = downloadOptions.hasExplicitQuality !== true && availableQualities.length > 1;
+        }, null);
+        const actualSelectedQuality = metadata?.selectedQuality && typeof metadata.selectedQuality === "object"
+          ? metadata.selectedQuality
+          : null;
+        // qn=64 is 720p — the typical ceiling for anonymous/expired sessions.
+        // Even if the API returns 4K in the quality list, actual streams above 720p require login.
+        const LOGIN_REQUIRED_QN_THRESHOLD = 64;
+        const shouldPromptLoginForQuality = !user
+          && downloadOptions.hasExplicitQuality
+          && normalizedRequestedQuality?.explicit === true
+          && (
+            (actualSelectedQuality?.downgraded === true
+              && Number(actualSelectedQuality?.requestedQn || 0) > Number(actualSelectedQuality?.qn || 0))
+            || (maxAvailableQuality?.qn && normalizedRequestedQuality.qn > maxAvailableQuality.qn)
+            || normalizedRequestedQuality.qn > LOGIN_REQUIRED_QN_THRESHOLD
+          );
+        const requiresPageSelection = downloadOptions.hasExplicitPage !== true && Array.isArray(metadata?.pages) && metadata.pages.length > 1;
+        const requiresQualitySelection = downloadOptions.hasExplicitQuality !== true && availableQualities.length > 1;
 
-      // allPages: download every page of a multi-page video sequentially.
-      if (downloadOptions.allPages && Array.isArray(metadata?.pages) && metadata.pages.length > 0) {
-        const pages = metadata.pages;
-        await api.appendLog(`all-pages mode: ${pages.length} pages, source: ${source}`);
-        const results = [];
-        for (let i = 0; i < pages.length; i++) {
-          api.throwIfCancelled?.();
-          const pageNum = pages[i]?.page || (i + 1);
-          const percent = Math.round(5 + (i / pages.length) * 88);
-          await api.emitProgress({ phase: "batch-download", label: `下载 P${pageNum}（${i + 1}/${pages.length}）`, percent });
-          const result = await downloadOneBilibiliSource(source, context, api, {
-            targetFolder,
-            downloadOptions: { ...downloadOptions, page: pageNum, hasExplicitPage: true, allPages: false }
+        // allPages: download every page of a multi-page video sequentially.
+        if (downloadOptions.allPages && Array.isArray(metadata?.pages) && metadata.pages.length > 0) {
+          const pages = metadata.pages;
+          await api.appendLog(`all-pages mode: ${pages.length} pages, source: ${source}`);
+          const results = [];
+          for (let i = 0; i < pages.length; i++) {
+            api.throwIfCancelled?.();
+            const pageNum = pages[i]?.page || (i + 1);
+            const percent = Math.round(5 + (i / pages.length) * 88);
+            await api.emitProgress({ phase: "batch-download", label: `下载 P${pageNum}（${i + 1}/${pages.length}）`, percent });
+            const result = await downloadOneBilibiliSource(source, context, api, {
+              targetFolder,
+              downloadOptions: { ...downloadOptions, page: pageNum, hasExplicitPage: true, allPages: false }
+            });
+            results.push({ pageNum, ...result });
+          }
+          await triggerLibraryRescan({ syncFiles: api.dependencies?.syncFiles });
+          await api.emitProgress({ phase: "done", label: "全部分P下载完成", percent: 100 });
+          const succeeded = results.filter((r) => !r.error);
+          const failed = results.filter((r) => r.error);
+          const lines = [`## 全部分P下载完成（共 ${pages.length} 个分P）\n`];
+          lines.push(`✅ 成功 ${succeeded.length} 个，❌ 失败 ${failed.length} 个\n`);
+          for (const r of succeeded) {
+            const title = String(r.metadata?.title || r.imported?.fileName || `P${r.pageNum}`).slice(0, 60);
+            lines.push(`- ✅ P${r.pageNum} ${title}${r.reusable ? " (已复用)" : ""}`);
+          }
+          for (const r of failed) {
+            lines.push(`- ❌ P${r.pageNum}: ${r.error?.message || "未知错误"}`);
+          }
+          const chatReply = await api.publishChatReply({
+            id: getBilibiliReplyMessageId(context),
+            createdAt: context.createdAt,
+            text: lines.join("\n"),
+            attachments: [],
+            card: null
           });
-          results.push({ pageNum, ...result });
+          return { chatReply, importedFiles: succeeded.map((r) => r.imported).filter(Boolean), artifacts: [] };
         }
+
+        if (shouldPromptLoginForQuality) {
+          if (downloadOptions.nonInteractive) {
+            // Proceed without login; yt-dlp/playwright will use the best quality available anonymously.
+            await api.appendLog(`non-interactive: login would be needed for requested quality — proceeding without login`);
+          } else {
+            const card = buildBilibiliLoginGuideCard({
+              source,
+              metadata,
+              targetFolder,
+              downloadOptions,
+              maxAvailableQuality
+            });
+            const chatReply = await api.publishChatReply({
+              id: getBilibiliReplyMessageId(context),
+              createdAt: context.createdAt,
+              text: "",
+              attachments: [],
+              card
+            });
+            return { chatReply, importedFiles: [], artifacts: [], awaitingInput: { reason: "login", label: "需要登录" } };
+          }
+        }
+
+        if (requiresPageSelection || requiresQualitySelection) {
+          if (downloadOptions.nonInteractive) {
+            // Auto-select defaults: page 1 for multi-page, default quality for quality selection.
+            if (requiresPageSelection) {
+              downloadOptions = { ...downloadOptions, page: 1, hasExplicitPage: true };
+              await api.appendLog(`non-interactive: auto-selecting page 1 for multi-page video`);
+            }
+            if (requiresQualitySelection) {
+              await api.appendLog(`non-interactive: proceeding with default quality (no explicit selection)`);
+            }
+          } else {
+            const card = buildBilibiliSelectionCard({
+              stage: requiresPageSelection ? "page" : "quality",
+              source,
+              metadata,
+              targetFolder,
+              downloadOptions,
+              viewOptions
+            });
+            const chatReply = await api.publishChatReply({
+              id: getBilibiliReplyMessageId(context),
+              createdAt: context.createdAt,
+              text: "",
+              attachments: [],
+              card
+            });
+            return { chatReply, importedFiles: [], artifacts: [], awaitingInput: { reason: "selection", label: requiresPageSelection ? "等待选择分P" : "等待选择画质" } };
+          }
+        }
+
+        const reusable = await findReusableImport({ appDataRoot: api.appDataRoot, storageRoot: api.storageRoot, targetFolder, source, metadata, downloadOptions });
+        if (reusable) {
+          await api.appendLog(`reuse imported file: ${reusable.relativePath}`);
+          await api.emitProgress({ phase: "reuse-existing", label: "已复用已入库资源", percent: 100 });
+          const attachmentId = `bot-asset:${context.jobId}`;
+          const chatReply = await api.publishChatReply({
+            id: getBilibiliReplyMessageId(context),
+            createdAt: context.createdAt,
+            text: "",
+            attachments: [{ id: attachmentId, name: reusable.fileName, mimeType: reusable.mimeType, size: reusable.size, path: reusable.relativePath, clientId: context.chat.hostClientId, kind: String(reusable.mimeType || "").startsWith("video/") ? "video" : "file" }],
+            card: buildBilibiliCard({ metadata, imported: reusable, source, attachmentId, reusable: true })
+          });
+          return { chatReply, importedFiles: [reusable], artifacts: [] };
+        }
+
+        const downloadedPath = await downloadMedia(source, tempDir, api, metadata, downloadOptions);
+        api.throwIfCancelled?.();
+        await api.emitProgress({ phase: "import-library", label: "入库中", percent: 88 });
+        const imported = await importFileIntoLibrary({ sourcePath: downloadedPath, storageRoot: api.storageRoot, targetFolder, fileName: path.basename(downloadedPath) });
+        await api.appendLog(`imported file: ${imported.relativePath}`);
+        await rememberImportedResult({ appDataRoot: api.appDataRoot, source, metadata, imported, downloadOptions });
         await triggerLibraryRescan({ syncFiles: api.dependencies?.syncFiles });
-        await api.emitProgress({ phase: "done", label: "全部分P下载完成", percent: 100 });
-        const succeeded = results.filter((r) => !r.error);
-        const failed = results.filter((r) => r.error);
-        const lines = [`## 全部分P下载完成（共 ${pages.length} 个分P）\n`];
-        lines.push(`✅ 成功 ${succeeded.length} 个，❌ 失败 ${failed.length} 个\n`);
-        for (const r of succeeded) {
-          const title = String(r.metadata?.title || r.imported?.fileName || `P${r.pageNum}`).slice(0, 60);
-          lines.push(`- ✅ P${r.pageNum} ${title}${r.reusable ? " (已复用)" : ""}`);
-        }
-        for (const r of failed) {
-          lines.push(`- ❌ P${r.pageNum}: ${r.error?.message || "未知错误"}`);
-        }
-        const chatReply = await api.publishChatReply({
-          id: getBilibiliReplyMessageId(context),
-          createdAt: context.createdAt,
-          text: lines.join("\n"),
-          attachments: [],
-          card: null
-        });
-        return { chatReply, importedFiles: succeeded.map((r) => r.imported).filter(Boolean), artifacts: [] };
-      }
+        await api.emitProgress({ phase: "append-chat-reply", label: "生成结果卡片", percent: 95 });
 
-      if (shouldPromptLoginForQuality) {
-        if (downloadOptions.nonInteractive) {
-          // Proceed without login; yt-dlp/playwright will use the best quality available anonymously.
-          await api.appendLog(`non-interactive: login would be needed for requested quality — proceeding without login`);
-        } else {
-          const card = buildBilibiliLoginGuideCard({
-            source,
-            metadata,
-            targetFolder,
-            downloadOptions,
-            maxAvailableQuality
-          });
-          const chatReply = await api.publishChatReply({
-            id: getBilibiliReplyMessageId(context),
-            createdAt: context.createdAt,
-            text: "",
-            attachments: [],
-            card
-          });
-          return { chatReply, importedFiles: [], artifacts: [] };
-        }
-      }
-
-      if (requiresPageSelection || requiresQualitySelection) {
-        if (downloadOptions.nonInteractive) {
-          // Auto-select defaults: page 1 for multi-page, default quality for quality selection.
-          if (requiresPageSelection) {
-            downloadOptions = { ...downloadOptions, page: 1, hasExplicitPage: true };
-            await api.appendLog(`non-interactive: auto-selecting page 1 for multi-page video`);
-          }
-          if (requiresQualitySelection) {
-            await api.appendLog(`non-interactive: proceeding with default quality (no explicit selection)`);
-          }
-        } else {
-          const card = buildBilibiliSelectionCard({
-            stage: requiresPageSelection ? "page" : "quality",
-            source,
-            metadata,
-            targetFolder,
-            downloadOptions,
-            viewOptions
-          });
-          const chatReply = await api.publishChatReply({
-            id: getBilibiliReplyMessageId(context),
-            createdAt: context.createdAt,
-            text: "",
-            attachments: [],
-            card
-          });
-          return { chatReply, importedFiles: [], artifacts: [] };
-        }
-      }
-
-      const reusable = await findReusableImport({ appDataRoot: api.appDataRoot, storageRoot: api.storageRoot, targetFolder, source, metadata, downloadOptions });
-      if (reusable) {
-        await api.appendLog(`reuse imported file: ${reusable.relativePath}`);
-        await api.emitProgress({ phase: "reuse-existing", label: "已复用已入库资源", percent: 100 });
         const attachmentId = `bot-asset:${context.jobId}`;
         const chatReply = await api.publishChatReply({
           id: getBilibiliReplyMessageId(context),
           createdAt: context.createdAt,
           text: "",
-          attachments: [{ id: attachmentId, name: reusable.fileName, mimeType: reusable.mimeType, size: reusable.size, path: reusable.relativePath, clientId: context.chat.hostClientId, kind: String(reusable.mimeType || "").startsWith("video/") ? "video" : "file" }],
-          card: buildBilibiliCard({ metadata, imported: reusable, source, attachmentId, reusable: true })
+          attachments: [{ id: attachmentId, name: imported.fileName, mimeType: imported.mimeType, size: imported.size, path: imported.relativePath, contentHash: imported.contentHash || "", clientId: context.chat.hostClientId, kind: String(imported.mimeType || "").startsWith("video/") ? "video" : "file" }],
+          card: buildBilibiliCard({ metadata, imported, source, attachmentId })
         });
-        return { chatReply, importedFiles: [reusable], artifacts: [] };
+
+        return { chatReply, importedFiles: [imported], artifacts: [] };
+      } finally {
+        fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
       }
-
-      const downloadedPath = await downloadMedia(source, tempDir, api, metadata, downloadOptions);
-      await api.emitProgress({ phase: "import-library", label: "入库中", percent: 88 });
-      const imported = await importFileIntoLibrary({ sourcePath: downloadedPath, storageRoot: api.storageRoot, targetFolder, fileName: path.basename(downloadedPath) });
-      await api.appendLog(`imported file: ${imported.relativePath}`);
-      await rememberImportedResult({ appDataRoot: api.appDataRoot, source, metadata, imported, downloadOptions });
-      await triggerLibraryRescan({ syncFiles: api.dependencies?.syncFiles });
-      await api.emitProgress({ phase: "append-chat-reply", label: "生成结果卡片", percent: 95 });
-
-      const attachmentId = `bot-asset:${context.jobId}`;
-      const chatReply = await api.publishChatReply({
-        id: getBilibiliReplyMessageId(context),
-        createdAt: context.createdAt,
-        text: "",
-        attachments: [{ id: attachmentId, name: imported.fileName, mimeType: imported.mimeType, size: imported.size, path: imported.relativePath, contentHash: imported.contentHash || "", clientId: context.chat.hostClientId, kind: String(imported.mimeType || "").startsWith("video/") ? "video" : "file" }],
-        card: buildBilibiliCard({ metadata, imported, source, attachmentId })
-      });
-
-      return { chatReply, importedFiles: [imported], artifacts: [] };
     }
   });
 }

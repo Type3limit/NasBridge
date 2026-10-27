@@ -370,21 +370,40 @@ export class BotRuntime {
     try {
       const result = await plugin.execute(context, api);
       const latestBeforeComplete = this.activeJobs.get(current.jobId) || await this.store.get(current.jobId) || current;
+      const jobResult = {
+        replyMessageId: result?.chatReply?.id || "",
+        importedFiles: Array.isArray(result?.importedFiles) ? result.importedFiles : [],
+        artifacts: Array.isArray(result?.artifacts) ? result.artifacts : []
+      };
+      // A plugin that ignored the abort must not flip a cancelled job back to succeeded.
+      if (latestBeforeComplete.status === "cancelled") {
+        current = await this.store.save({ ...latestBeforeComplete, result: jobResult });
+        this.activeJobs.set(current.jobId, current);
+        this.events.emit("job", current);
+        if (result?.chatReply) {
+          this.events.emit("room-message", result.chatReply);
+        }
+        return current;
+      }
+      // The plugin replied with a card the user still has to act on (pick quality, log in…):
+      // the job is over, but nothing was downloaded, so it must not read as "completed".
+      const awaitingInput = result?.awaitingInput && typeof result.awaitingInput === "object"
+        ? { reason: String(result.awaitingInput.reason || "input"), label: String(result.awaitingInput.label || "等待操作") }
+        : null;
+      if (awaitingInput) {
+        jobResult.awaitingInput = awaitingInput;
+      }
       current = await this.store.save({
         ...latestBeforeComplete,
         status: "succeeded",
-        phase: "completed",
+        phase: awaitingInput ? "awaiting-input" : "completed",
         progress: {
-          label: "Completed",
+          label: awaitingInput ? awaitingInput.label : "Completed",
           percent: 100,
           details: null
         },
         finishedAt: new Date().toISOString(),
-        result: {
-          replyMessageId: result?.chatReply?.id || "",
-          importedFiles: Array.isArray(result?.importedFiles) ? result.importedFiles : [],
-          artifacts: Array.isArray(result?.artifacts) ? result.artifacts : []
-        }
+        result: jobResult
       });
       this.activeJobs.set(current.jobId, current);
       this.events.emit("job", current);

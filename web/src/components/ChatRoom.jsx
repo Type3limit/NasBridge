@@ -638,10 +638,11 @@ function safeStringifyCompact(value, maxLength = 360) {
   }
 }
 
-function formatBotStatusText(status = "") {
+function formatBotStatusText(status = "", phase = "") {
   const normalized = String(status || "").trim();
   if (normalized === "queued") return "排队中";
   if (normalized === "running") return "运行中";
+  if (normalized === "succeeded" && phase === "awaiting-input") return "等待操作";
   if (normalized === "succeeded") return "已完成";
   if (normalized === "failed") return "失败";
   if (normalized === "cancelled") return "已取消";
@@ -655,7 +656,7 @@ function formatBotJobSummary(job = null, childJobs = []) {
   const lines = [
     `botId: ${String(job.botId || "unknown")}`,
     `jobId: ${String(job.jobId || "")}`,
-    `status: ${formatBotStatusText(job.status)}${job.phase ? ` · ${job.phase}` : ""}`
+    `status: ${formatBotStatusText(job.status, job.phase)}${job.phase ? ` · ${job.phase}` : ""}`
   ];
   if (job.progress?.label) {
     lines.push(`progress: ${job.progress.label}${Number.isFinite(job.progress.percent) ? ` (${Math.round(job.progress.percent)}%)` : ""}`);
@@ -2081,7 +2082,7 @@ export default function ChatRoom({
     }
     botLogCacheRef.current.delete(`${clientId}:${jobId}`);
     const result = await p2p.getBotJob(clientId, jobId);
-    const status = formatBotStatusText(result?.job?.status || "");
+    const status = formatBotStatusText(result?.job?.status || "", result?.job?.phase || "");
     setMessage?.(`任务 ${jobId.slice(0, 12)} 当前状态：${status}`, "info");
     await openBotLogDialog(buildBotJobActionMessage(message, action, result?.job || null));
   }
@@ -3959,7 +3960,7 @@ export default function ChatRoom({
                               <div key={job.jobId} className={`chatBotChildJob status-${status}`}>
                                 <div className="chatBotChildJobMain">
                                   <Text>{job.botId || "bot"}</Text>
-                                  <Caption1>{String(job.jobId || "").slice(0, 12)} · {formatBotStatusText(job.status)}{job.phase ? ` · ${job.phase}` : ""}</Caption1>
+                                  <Caption1>{String(job.jobId || "").slice(0, 12)} · {formatBotStatusText(job.status, job.phase)}{job.phase ? ` · ${job.phase}` : ""}</Caption1>
                                 </div>
                                 {job.error?.message ? <Caption1 className="chatBotChildJobError">{job.error.message}</Caption1> : null}
                                 <div className="chatBotChildJobActions">
